@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2003 Paul Barton-Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2003 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <iostream>
@@ -25,6 +25,7 @@
 #include "gtkmm2ext/utils.h"
 
 #include "widgets/tearoff.h"
+#include "widgets/ui_config.h"
 
 #include "pbd/i18n.h"
 
@@ -70,7 +71,16 @@ TearOff::TearOff (Widget& c, bool allow_resize)
 
 	own_window.add_events (KEY_PRESS_MASK|KEY_RELEASE_MASK|BUTTON_PRESS_MASK|BUTTON_RELEASE_MASK|POINTER_MOTION_MASK|POINTER_MOTION_HINT_MASK);
 	own_window.set_resizable (allow_resize);
-	own_window.set_type_hint (WINDOW_TYPE_HINT_UTILITY);
+
+#ifdef __APPLE__
+	own_window.set_type_hint (Gdk::WINDOW_TYPE_HINT_DIALOG);
+#else
+	if (UIConfigurationBase::instance().get_all_floating_windows_are_dialogs ()) {
+		own_window.set_type_hint (WINDOW_TYPE_HINT_DIALOG);
+	} else {
+		own_window.set_type_hint (WINDOW_TYPE_HINT_UTILITY);
+	}
+#endif
 
 	own_window.add (window_box);
 
@@ -297,7 +307,7 @@ TearOff::set_state (const XMLNode& node)
 	node.get_property (X_("xpos"), own_window_xpos);
 	node.get_property (X_("ypos"), own_window_ypos);
 
-	if (own_window.is_realized ()) {
+	if (own_window.get_realized ()) {
 		own_window.set_default_size (own_window_width, own_window_height);
 		own_window.move (own_window_xpos, own_window_ypos);
 	}

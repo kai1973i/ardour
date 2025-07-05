@@ -2,15 +2,12 @@
 
 # script for pulling together a Linux app bundle.
 #
-# This will create a bundle for a single architecture.
-# Execute this scirpt on both x86 and x86_64 and then use
-# package to merge the 2 bundles into a final package with the
-# installer. See "noderun" for a complete build script.
+# This will create a bundle for a x86_64 architecture.
+# Execute this script and then use `package; to build
+# the installer.
 
 # where the GTK stack is installed
 GTKSTACK_ROOT=$HOME/gtk/inst
-# where the Ardour dependencies are installed
-ARDOURSTACK_ROOT=$HOME/a3/inst
 # the waf build tree to use when copying built/generated files
 BUILD_ROOT=../../build
 
@@ -23,22 +20,25 @@ fi
 
 MIXBUS=
 WITH_HARRISON_LV2=
-WITH_X42_LV2=
+WITH_HARRISON_VBM=
+WITH_COMMERCIAL_X42_LV2=
+WITH_GRATIS_X42_LV2=
+WITH_GMSYNYTH=
 WITH_HARVID=
+WITH_XJADEO=
 STRIP=all
 PRINT_SYSDEPS=
 WITH_NLS=
 EXTERNAL_JACK=
 VENDOR=Ardour ;
 EXENAME=ardour
-GCC5ABI=false
-USEWINE=false
 BUILDTYPE=""
 NOSTRIP="libsuil|libserd|libsord|liblilv|libsratom|liblrdf|libardour|libpbd|libevoral"
+X42PLUGINS="x42-autotune x42-midifilter x42-stereoroute setBfree x42-avldrums x42-limiter x42-tuner"
 
 : ${HARRISONCHANNELSTRIP=harrison_channelstrip}
 : ${HARRISONLV2=harrison_lv2s-n}
-: ${HARRISONDSPURL=http://www.harrisonconsoles.com/plugins/releases/public}
+: ${HARRISONDSPURL=https://builder.harrisonconsoles.com/pub/dsp}
 
 if [ $# -eq 0 ] ; then
 	echo ""
@@ -60,26 +60,43 @@ while [ $# -gt 0 ] ; do
 	--mixbus)
 		MIXBUS=1;
 		WITH_HARRISON_LV2=1 ;
-		WITH_X42_LV2=1 ;
+		WITH_COMMERCIAL_X42_LV2=1
+		WITH_GRATIS_X42_LV2=1
+		WITH_GMSYNYTH=1
+		WITH_HARVID=1
+		WITH_XJADEO=1
 		WITH_NLS=1 ;
 		STRIP=all
 		APPNAME=Mixbus ;
 		VENDOR=Harrison ;
 		EXENAME=mixbus ;
 		shift ;;
-	--mixbus32c)
-		MIXBUS=1;
+	--livetrax)
+		LIVETRAX=1 ;
+		STRIP=all ;
+		WITH_NLS=1 ;
+		APPNAME=LiveTrax ;
+		EXENAME=LiveTrax ;
+		shift ;;
+	--vbm)
+		VBM=1
 		WITH_HARRISON_LV2=1 ;
-		WITH_X42_LV2=1 ;
+		WITH_HARRISON_VBM=1 ;
+		WITH_COMMERCIAL_X42_LV2=1
+		WITH_GRATIS_X42_LV2=1
 		WITH_NLS=1 ;
 		STRIP=all
-		APPNAME=Mixbus32C ;
+		APPNAME=MixbusVBM ;
 		VENDOR=Harrison ;
-		EXENAME=mixbus32c ;
+		EXENAME=mixbusvbm ;
 		major_version=""
+		X42PLUGINS="$X42PLUGINS x42-testsignal x42-nodelay"
 		shift ;;
 	--public)
 		WITH_HARRISON_LV2=1 ;
+		WITH_GMSYNYTH=1
+		WITH_HARVID=1
+		WITH_XJADEO=1
 		WITH_NLS=1 ;
 		STRIP=all ;
 		APPNAME=Ardour ;
@@ -98,8 +115,8 @@ while [ $# -gt 0 ] ; do
 	--strip) STRIP=$2 ; shift ; shift ;;
 	--sysdeps) PRINT_SYSDEPS=1; shift ;;
 	--nls) WITH_NLS=1 ; shift ;;
-	--harvid) WITH_HARVID=1 ; shift ;;
-	--gcc5abi) GCC5ABI=true ; shift ;;
+	--harvid) shift ;;
+	--gcc5abi) shift ;;
 	--chanstrip) HARRISONCHANNELSTRIP=$2 ; shift; shift ;;
 
 	*)
@@ -131,14 +148,6 @@ echo "Info string is $info_string"
 
 # Figure out our CPU type
 case `uname -m` in
-	i[3456789]86|x86|i86pc)
-		echo "Architecture is x86"
-		ARCH='x86'
-		WARCH='i386'
-		HARCH='linux32'
-		ARCH_BITS='32-bit'
-		MULTIARCH='i386-linux-gnu'
-		;;
 	x86_64|amd64|AMD64)
 		echo "Architecture is x86_64"
 		ARCH='x86_64'
@@ -155,8 +164,17 @@ case `uname -m` in
 		;;
 esac
 
+if [ "$DEBUG" = "T" ]; then
+  BUILDTYPE="dbg"
+fi
+if [ "$FREEBI" = "T" ]; then
+  BUILDTYPE="demo"
+fi
+if [ "$DEBUG$FREEBI" = "TT" ]; then
+  BUILDTYPE="demo-dbg"
+fi
+
 if [ x$DEBUG = xT ]; then
-    BUILDTYPE="dbg"
     if [ x$STRIP = xall ] ; then
         echo "A debug build with --strip all makes no sense - STRIP reset to \"some\""
         STRIP=some
@@ -186,12 +204,16 @@ Backends=$APPLIB/backends
 
 Themes=$Shared/themes
 Templates=$Shared/templates
+LRDFPresets=$Shared/rdf
 PluginMetadata=$Shared/plugin_metadata
+MixerSettings=$Shared/mixer_settings
 ExportFormats=$Shared/export
 Locale=$Shared/locale
 MidiMaps=$Shared/midi_maps
 PatchFiles=$Shared/patchfiles
 LuaScripts=$Shared/scripts
+MediaClips=$Shared/media
+WebSurfaces=$Shared/web_surfaces
 MackieControl=$Shared/mcp
 OSC=$Shared/osc
 
@@ -255,16 +277,7 @@ fi
 
 echo export 'PATH="/usr/local/bin:/opt/bin:$PATH"' >> $ENVIRONMENT
 
-# create startup helper script
-if test -d $BUILD_ROOT/vst; then
-	WINEEXE=wine
-	USEWINE=true
-	echo export INSTALL_DIR >> $ENVIRONMENT
-else
-	WINEEXE=
-fi
-
-sed -e "/^%ENV%/r $ENVIRONMENT" -e '/^%ENV%/d' -e 's/%VER%/'"${release_version}"'/;s/%EXENAME%/'"${EXENAME}"'/;s/%WINE%/'"$WINEEXE"'/' < ardour.sh.in > $APPBIN/${EXENAME}${major_version}
+sed -e "/^%ENV%/r $ENVIRONMENT" -e '/^%ENV%/d' -e 's/%VER%/'"${release_version}"'/;s/%EXENAME%/'"${EXENAME}"'/' < ardour.sh.in > $APPBIN/${EXENAME}${major_version}
 rm $ENVIRONMENT && chmod 775 $APPBIN/${EXENAME}${major_version}
 
 echo "Copying ardour executable ...."
@@ -287,8 +300,8 @@ if test x$WITH_NLS != x ; then
 	echo "I hope you remembered to run scons msgupdate!"
 	LINGUAS=
 
-        for pkg in gtk2_ardour libs/ardour libs/gtkmm2ext ; do
-	    files=`find ../../$pkg -name "*.mo"`
+        for pkg in gtk2_ardour libs/ardour libs/gtkmm2ext libs/tk/ytk ; do
+	    files=`find ../../$pkg -not -path "*/appdata/*" -name "*.mo"`
 
             #
             # the package name is appended with a number so that
@@ -341,12 +354,6 @@ else
 	echo "Skipping NLS support"
 fi
 
-#
-# Copy stuff that may be dynamically loaded
-#
-
-cp -R $GTKSTACK_ROOT/etc/* $Etc
-
 # We rely on clearlooks, so include a version from our own build tree
 # this one is special - we will set GTK_PATH to $Libraries/gtkengines
 
@@ -357,28 +364,25 @@ echo "Copying GTK engines ..."
 cp $BUILD_ROOT/libs/clearlooks-newer/libclearlooks.so $Libraries
 (cd $GTK_ENGINE_DIR && ln -s ../../libclearlooks.so . )
 
-cp $GTKSTACK_ROOT/lib/gtk-2.0/2.10.0/engines/libpixmap.so $Libraries
-(cd $GTK_ENGINE_DIR && ln -s ../../libpixmap.so . )
-
 # Control Surfaces
 cp $BUILD_ROOT/libs/surfaces/*/libardour_*.so* $Surfaces
-cp $BUILD_ROOT/libs/surfaces/control_protocol/libardourcp.so* $Libraries
+cp $BUILD_ROOT/libs/ctrl-interface/*/libardour_*.so* $Libraries
 
 # MidiMaps
 # got to be careful with names here
-for x in $BUILD_ROOT/../midi_maps/*.map ; do
+for x in $BUILD_ROOT/../share/midi_maps/*.map ; do
     cp "$x" $MidiMaps
 done
 
 # MIDNAM Patch Files
 # got to be careful with names here
-for x in $BUILD_ROOT/../patchfiles/*.midnam ; do
+for x in $BUILD_ROOT/../share/patchfiles/*.midnam ; do
     cp "$x" $PatchFiles
 done
 
 # Lua Scripts Files
 # got to be careful with names here
-for x in $BUILD_ROOT/../scripts/*.lua ; do
+for x in $BUILD_ROOT/../share/scripts/*.lua ; do
 		BN=$(basename $x)
 	  if test "${BN:0:1}" = "_"; then
 			continue;
@@ -386,27 +390,44 @@ for x in $BUILD_ROOT/../scripts/*.lua ; do
     cp "$x" $LuaScripts
 done
 
+# recursively copy web-surface html/js
+cp -a $BUILD_ROOT/../share/web_surfaces $WebSurfaces
+rm $WebSurfaces/wscript
+
+# recursively copy clips/media
+cp -a $BUILD_ROOT/../share/media $MediaClips
+rm $MediaClips/wscript
+
 # MackieControl data
 # got to be careful with names here
-for x in $BUILD_ROOT/../mcp/*.device $BUILD_ROOT/../mcp/*.profile ; do
+for x in $BUILD_ROOT/../share/mcp/*.device $BUILD_ROOT/../share/mcp/*.profile ; do
     cp "$x" $MackieControl
 done
 
 # OSC data
 # got to be careful with names here
-for x in $BUILD_ROOT/../osc/*.preset ; do
+for x in $BUILD_ROOT/../share/osc/*.preset ; do
     cp "$x" $OSC
 done
 
+# Mixbus MixerSettings (if any)
+for x in $BUILD_ROOT/../share/mixer_settings/*.lua ; do
+    mkdir -p $MixerSettings  # create on demand
+    cp "$x" $MixerSettings
+done
+
 #Session templates
-cp -av $BUILD_ROOT/../templates $Templates
+cp -av $BUILD_ROOT/../share/templates $Templates
+
+#LADSPA Presets
+cp -av $BUILD_ROOT/../share/rdf $LRDFPresets
 
 # PluginMetadata
-cp -av $BUILD_ROOT/../plugin_metadata $PluginMetadata
+cp -av $BUILD_ROOT/../share/plugin_metadata $PluginMetadata
 
 # ExportFormats
 # got to be careful with names here
-for x in $BUILD_ROOT/../export/*.preset $BUILD_ROOT/../export/*.format ; do
+for x in $BUILD_ROOT/../share/export/*.preset $BUILD_ROOT/../share/export/*.format ; do
     cp "$x" $ExportFormats
 done
 
@@ -414,21 +435,19 @@ done
 cp $BUILD_ROOT/libs/panners/*/lib*.so* $Panners
 
 # Backends
-for backend in jack alsa dummy wavesaudio ; do
+for backend in jack alsa dummy wavesaudio pulseaudio; do
     cp $BUILD_ROOT/libs/backends/$backend/lib*.so* $Backends
 done
 
 # VAMP plugins that we use
-cp $BUILD_ROOT/libs/vamp-plugins/libardourvampplugins.so* $Libraries
+cp $BUILD_ROOT/libs/vamp-plugins/libardourvampplugins.so $Libraries
+cp $BUILD_ROOT/libs/vamp-pyin/libardourvamppyin.so $Libraries
 
 # Suil modules (new dir 'build-stack')
-if test -d $GTKSTACK_ROOT/lib/suil-0/ ; then
-    cp $GTKSTACK_ROOT/lib/suil-0/lib* $Libraries
-fi
-
-# Suil modules (old dir 'build-ardour-stack')
-if test -d $ARDOURSTACK_ROOT/lib/suil-0/ ; then
-    cp $ARDOURSTACK_ROOT/lib/suil-0/lib* $Libraries
+if test -d $BUILD_ROOT/libs/tk/suil/ ; then
+	cp $BUILD_ROOT/libs/tk/suil/libsuil_*_in_gtk2.so $Libraries
+elif test -d $GTKSTACK_ROOT/lib/suil-0/ ; then
+	cp $GTKSTACK_ROOT/lib/suil-0/lib* $Libraries
 fi
 
 # VST scanner app (both LXVST as well as WIN-VST, 2in1)
@@ -437,8 +456,10 @@ fi
 #  neither binary nor script exists)
 if test -d $BUILD_ROOT/libs/fst ; then
     cp $BUILD_ROOT/libs/fst/ardour-vst-scanner* $APPLIB || true
+    cp $BUILD_ROOT/libs/fst/ardour-vst3-scanner* $APPLIB || true
     if test x$STRIP = xall ; then
         strip -s $APPLIB/ardour-vst-scanner*
+        strip -s $APPLIB/ardour-vst3-scanner*
     fi
 fi
 
@@ -470,6 +491,16 @@ for file in $BUILD_ROOT/session_utils/${lower_case_appname}${major_version}-*; d
 	HAVE_SESSION_UTILS=true
 done
 
+if test -x $BUILD_ROOT/luasession/luasession; then
+	BN=${lower_case_appname}${major_version}-lua
+	cp -v $BUILD_ROOT/luasession/luasession $APPLIB/$BN
+	if test x$STRIP = xall ; then
+		strip -s $APPLIB/${BN}
+	fi
+	ln -s ../lib/ardour-util.sh $APPBIN/${BN}
+	HAVE_SESSION_UTILS=true
+fi
+
 if test "$HAVE_SESSION_UTILS" = true ; then
 	cat >> $APPLIB/ardour-util.sh << EOF
 #!/bin/sh
@@ -490,8 +521,11 @@ EOF
 	chmod +x $APPLIB/ardour-util.sh
 fi
 
+cp $BUILD_ROOT/libs/ardour-avahi $APPLIB/ardour-avahi
+chmod +x $APPLIB/ardour-avahi
+
 OURLIBDIR=$BUILD_ROOT/libs
-OURLIBS=$OURLIBDIR/surfaces/control_protocol:$OURLIBDIR/ardour:$OURLIBDIR/midi++2:$OURLIBDIR/pbd:$OURLIBDIR/gtkmm2ext:$OURLIBDIR/glibmm2:$OURLIBDIR/canvas:$OURLIBDIR/widgets:$OURLIBDIR/waveview:$OURLIBDIR/evoral:$OURLIBDIR/evoral/src/libsmf:$OURLIBDIR/audiographer:$OURLIBDIR/temporal:$OURLIBDIR/libltc:$OURLIBDIR/qm-dsp:$OURLIBDIR/ardouralsautil:$OURLIBDIR/ptformat:$BUILD_ROOT/gtk2_ardour
+OURLIBS=$OURLIBDIR/tk/ydk-pixbuf:$OURLIBDIR/tk/ztk:$OURLIBDIR/tk/ydk:$OURLIBDIR/tk/ytk:$OURLIBDIR/tk/suil:$OURLIBDIR/tk/ztkmm:$OURLIBDIR/tk/ydkmm:$OURLIBDIR/tk/ytkmm:$OURLIBDIR/ctrl-interface/midi_surface:$OURLIBDIR/ctrl-interface/control_protocol:$OURLIBDIR/ardour:$OURLIBDIR/midi++2:$OURLIBDIR/pbd:$OURLIBDIR/gtkmm2ext:$OURLIBDIR/glibmm2:$OURLIBDIR/canvas:$OURLIBDIR/widgets:$OURLIBDIR/waveview:$OURLIBDIR/evoral:$OURLIBDIR/evoral/src/libsmf:$OURLIBDIR/audiographer:$OURLIBDIR/temporal:$OURLIBDIR/libltc:$OURLIBDIR/qm-dsp:$OURLIBDIR/ardouralsautil:$OURLIBDIR/ptformat:$OURLIBDIR/aaf:$BUILD_ROOT/gtk2_ardour
 
 echo $OURLIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
@@ -535,7 +569,7 @@ while [ true ] ; do
 		for dep in $deps ; do
 			if test "not" = ${dep}; then
 				echo ""
-				echo "!!! ERROR !!! - Missing dependant library for $file."
+				echo "!!! ERROR !!! - Missing dependent library for $file."
 				echo "Searched: " $OURLIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 				echo ""
 				(LD_LIBRARY_PATH=$OURLIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} ldd $file)
@@ -546,12 +580,15 @@ while [ true ] ; do
 
 			# don't use anything mapped at a specific address
 			if echo $dep | grep -qs '0x' ; then continue; fi
-			# don't include /lib
+			# don't include any distro libraries
 			if echo $dep | grep -qs "^/lib/" ; then continue; fi
-			# don't include jack
+			if echo $dep | grep -qs "^/usr/lib/" ; then continue; fi
+			if echo $dep | grep -qs "^/usr/local/lib/" ; then continue; fi
+			## the following are likely redundant ##
+			# skip jack, ALSA & pulse
 			if echo $dep | grep -qs libjack ; then continue; fi
-			# don't include ALSA
 			if echo $dep | grep -qs libasound ; then continue; fi
+			if echo $dep | grep -qs libpulse ; then continue; fi
 			# don't include any X Window libraries
 			if echo $dep | grep -qs libX\. ; then continue; fi
 			if echo $dep | grep -qs libxcb ; then continue; fi
@@ -570,12 +607,13 @@ while [ true ] ; do
 			if ! test -f $Libraries/$base; then
 				parent=$(basename ${file})
 				if echo $dep | grep -sq '^libs' ; then
-					echo "Copying dependant lib $BUILD_ROOT/$dep    (required by ${parent})"
+					echo "Copying dependent lib $BUILD_ROOT/$dep    (required by ${parent})"
 					cp $BUILD_ROOT/$dep $Libraries
 				else
-					echo "Copying dependant lib $dep    (required by ${parent})"
+					echo "Copying dependent lib $dep    (required by ${parent})"
 					cp $dep $Libraries
 				fi
+				chmod 755 $Libraries/`basename $dep`
                                 #
                                 # reset RPATH so that the runtime linker never looks
                                 # in places we don't want it to
@@ -615,6 +653,17 @@ elif test x$STRIP = xsome ; then
 fi
 find $APPLIB/ -name "*.so*" -print0 | xargs -0 chmod a+rx
 
+# Remove ABI suffix, symlink *.so.
+# This fixes plugins that dynamically open libs.
+# e.g. JUCE option to lazily loading libcurl.so
+(
+cd $APPLIB/
+for lib in *.so.[0-9]*; do
+	link=$(echo $lib | sed 's/\.[0-9]*$//')
+  ln -s $lib $link;
+done
+)
+
 echo "Copying other stuff to $APPDIR  ..."
 
 # these are all generated by waf
@@ -622,6 +671,10 @@ cp $BUILD_ROOT/gtk2_ardour/ardour.keys  $Etc
 cp $BUILD_ROOT/gtk2_ardour/ardour.menus $Etc
 cp $BUILD_ROOT/gtk2_ardour/clearlooks.rc $Etc
 cp $BUILD_ROOT/gtk2_ardour/default_ui_config $Etc
+
+if test -n "$LIVETRAX"; then
+	cp $BUILD_ROOT/gtk2_ardour/livetrax.keys $Resources
+fi
 
 # Copied directly from source tree
 
@@ -631,6 +684,7 @@ cp ../../system_config $Etc/system_config
 cp ../../gtk2_ardour/icons/*.png ${Shared}/icons
 cp -r ../../gtk2_ardour/icons/cursor_* ${Shared}/icons/
 cp ../../gtk2_ardour/ArdourMono.ttf $Shared
+cp ../../gtk2_ardour/ArdourSans.ttf $Shared
 cp ../../gtk2_ardour/resources/${APPNAME}-* ${Shared}/resources/
 
 # Themes: only install those named for this app
@@ -645,16 +699,14 @@ if [ -d specialSauce ] ; then
 fi
 
 # install bundled LV2s to <app>/lib/LV2/
-cp -R $BUILD_ROOT/libs/LV2 $APPLIB/
+cp -R $BUILD_ROOT/libs/LV2 $APPLIB/ || true
 
-# lv2 core, classifications etc - TODO check if we need the complete LV2 ontology
-if test -d $ARDOURSTACK_ROOT/lib/lv2/lv2core.lv2 ; then
-	mkdir -p $APPLIB/LV2/lv2core.lv2
-	cp -R $ARDOURSTACK_ROOT/lib/lv2/lv2core.lv2/*.ttl $APPLIB/LV2/lv2core.lv2/
-elif test -d $GTKSTACK_ROOT/lib/lv2/lv2core.lv2 ; then
-	mkdir -p $APPLIB/LV2/lv2core.lv2
-	cp -R $GTKSTACK_ROOT/lib/lv2/lv2core.lv2/*.ttl $APPLIB/LV2/lv2core.lv2/
-fi
+# lv2 core, classifications
+for file in $GTKSTACK_ROOT/lib/lv2/*.lv2; do
+	BN=$(basename $file)
+	mkdir -p $APPLIB/LV2/$BN
+	cp $GTKSTACK_ROOT/lib/lv2/${BN}/*.ttl $APPLIB/LV2/${BN}/
+done
 
 # go through and recursively remove any .svn dirs in the bundle
 for svndir in `find $APPDIR -name .svn -type d`; do
@@ -675,6 +727,17 @@ if test x$WITH_HARRISON_LV2 != x ; then
 	unzip -q -d "$APPLIB/LV2/" "${CACHEDIR}/${HARRISONLV2}.${HARCH}.zip"
 fi
 
+if test x$WITH_HARRISON_VBM != x ; then
+	echo "Including Harrison VBM Channelstrip LV2"
+	mkdir -p $APPLIB/LV2
+
+	curl -s -S --fail -# \
+		-z "${CACHEDIR}/harrison_vbm.${HARCH}.zip" \
+		-o "${CACHEDIR}/harrison_vbm.${HARCH}.zip" \
+		"${HARRISONDSPURL}/harrison_vbm.${HARCH}.zip"
+	unzip -q -d "$APPLIB/LV2/" "${CACHEDIR}/harrison_vbm.${HARCH}.zip"
+fi
+
 if test -n "$MIXBUS"; then
 	echo "Adding Mixbus Channelstrip"
 
@@ -690,11 +753,7 @@ if test -n "$MIXBUS"; then
 
 	echo "Adding Harrison Vamp Plugins"
 
-	if test "$GCC5ABI" = "true"; then
-		VAMPARCH="${HARCH}gcc5"
-	else
-		VAMPARCH="${HARCH}"
-	fi
+	VAMPARCH="${HARCH}gcc5"
 	curl -s -S --fail -# \
 		-z "${CACHEDIR}/harrison_vamp.${VAMPARCH}.so" \
 		-o "${CACHEDIR}/harrison_vamp.${VAMPARCH}.so" \
@@ -703,9 +762,37 @@ if test -n "$MIXBUS"; then
 	cp "${CACHEDIR}/harrison_vamp.${VAMPARCH}.so" \
 		$APPLIB/harrison_vamp.so
 	chmod +x $APPLIB/harrison_vamp.so
+
+	# Mixbus Bundled Media Content
+	curl -s -S --fail -#  \
+		-z "${CACHEDIR}/MixbusBundledMedia.zip" \
+		-o "${CACHEDIR}/MixbusBundledMedia.zip" \
+		"https://builder.harrisonconsoles.com/pub/share/MixbusBundledMedia.zip"
+
+	if test -f "${CACHEDIR}/MixbusBundledMedia.zip"; then
+		echo "Adding Mixbus Bundled Content"
+		rm -f "${MediaClips}/"*.*
+		unzip -q -o -d "${MediaClips}" "${CACHEDIR}/MixbusBundledMedia.zip"
+	fi
+elif test -z "$LIVETRAX" -a -z "$VBM"; then
+    echo "Fetching Ardour bundled content"
+
+    curl -s -S --fail -#  \
+	 -z "${CACHEDIR}/ArdourBundledMedia.zip" \
+	 -o "${CACHEDIR}/ArdourBundledMedia.zip" \
+	 "http://stuff.ardour.org/loops/ArdourBundledMedia.zip"
+    if test -f "${CACHEDIR}/ArdourBundledMedia.zip"; then
+	echo "Adding Ardour Bundled Content"
+	rm -f "${MediaClips}/"*.*
+	unzip -q -o -d "${MediaClips}" "${CACHEDIR}/ArdourBundledMedia.zip"
+    fi
 fi
 
-if true ; then
+echo "Setting Bundled Media dir/file permissions"
+find "${MediaClips}" -type d -exec chmod 755 "{}" \;
+find "${MediaClips}" -type f -exec chmod 644 "{}" \;
+
+if test x$WITH_GMSYNYTH != x ; then
 	mkdir -p $APPLIB/LV2
 
 	echo "Adding General MIDI Synth LV2"
@@ -720,12 +807,36 @@ if true ; then
 fi
 
 
-if test x$WITH_X42_LV2 != x ; then
+if test x$WITH_COMMERCIAL_X42_LV2 != x ; then
 	mkdir -p $APPLIB/LV2
 
-	echo "Adding x42 Plugins"
+	echo "Adding commercial x42 Plugins"
 
-	for proj in x42-meters x42-midifilter x42-midimap x42-stereoroute x42-eq setBfree x42-avldrums; do
+	for proj in x42-meters x42-eq x42-whirl; do
+		X42_VERSION=$(curl -s -S http://x42-plugins.com/x42/linux/${proj}.latest.txt)
+		rsync -a -q --partial \
+			rsync://x42-plugins.com/x42/linux/${proj}-lv2-linux-${WARCH}-${X42_VERSION}.zip \
+			"${CACHEDIR}/${proj}-lv2-linux-${WARCH}-${X42_VERSION}.zip"
+		unzip -q -d "$APPLIB/LV2/" "${CACHEDIR}/${proj}-lv2-linux-${WARCH}-${X42_VERSION}.zip"
+	done
+fi
+
+if test x$WITH_GRATIS_X42_LV2 != x ; then
+	mkdir -p $APPLIB/LV2
+
+	echo "Adding gratis x42 Plugins"
+
+	for proj in $X42PLUGINS; do
+
+		if test -n "$VBM"; then
+			if test "$proj" = "setBfree"; then
+				continue
+			fi
+			if test "$proj" = "x42-avldrums"; then
+				continue
+			fi
+		fi
+
 		X42_VERSION=$(curl -s -S http://x42-plugins.com/x42/linux/${proj}.latest.txt)
 		rsync -a -q --partial \
 			rsync://x42-plugins.com/x42/linux/${proj}-lv2-linux-${WARCH}-${X42_VERSION}.zip \
@@ -739,19 +850,24 @@ fi
 if test x$WITH_HARVID != x ; then
 	cd $APPBIN
 	HARVID_VERSION=$(curl -s -S http://ardour.org/files/video-tools/harvid_version.txt)
-	XJADEO_VERSION=$(curl -s -S http://ardour.org/files/video-tools/xjadeo_version.txt)
 
 	rsync -Pa \
 		rsync://ardour.org/video-tools/harvid-${MULTIARCH}-${HARVID_VERSION}.tgz \
 		"$CACHEDIR/harvid-${MULTIARCH}-${HARVID_VERSION}.tgz"
 
-	rsync -Pa \
-		rsync://ardour.org/video-tools/xjadeo-${MULTIARCH}-${XJADEO_VERSION}.tgz \
-		"$CACHEDIR/xjadeo-${MULTIARCH}-${XJADEO_VERSION}.tgz"
-
 	tar -x -z \
 		--exclude=README --exclude=harvid.1 --strip-components=1 \
 		-f "$CACHEDIR/harvid-${MULTIARCH}-${HARVID_VERSION}.tgz" || exit 1
+	cd -
+fi
+
+if test x$WITH_XJADEO != x ; then
+	cd $APPBIN
+	XJADEO_VERSION=$(curl -s -S http://ardour.org/files/video-tools/xjadeo_version.txt)
+
+	rsync -Pa \
+		rsync://ardour.org/video-tools/xjadeo-${MULTIARCH}-${XJADEO_VERSION}.tgz \
+		"$CACHEDIR/xjadeo-${MULTIARCH}-${XJADEO_VERSION}.tgz"
 
 	tar -x -z \
 		--exclude=README --exclude=xjadeo.1 --strip-components=1 \
@@ -781,9 +897,8 @@ chmod a+x $APPBIN/${APP_VER_NAME}.uninstall.sh
 #
 # Add the stage2.run script
 #
-sed -e "s/%REPLACE_MAJOR_VERSION%/${major_version}/;s/%REPLACE_PGM%/${APPNAME}/;s/%REPLACE_VENDOR%/${VENDOR}/;s/%REPLACE_EXE%/${EXENAME}/;s/%REPLACE_GCC5%/${GCC5ABI}/;s/%REPLACE_WINE%/${USEWINE}/" < stage2.run.in > stage2.run
+sed -e "s/%REPLACE_MAJOR_VERSION%/${major_version}/;s/%REPLACE_PGM%/${APPNAME}/;s/%REPLACE_VENDOR%/${VENDOR}/;s/%REPLACE_EXE%/${EXENAME}/" < stage2.run.in > stage2.run
 chmod a+x stage2.run
-
 
 #Sanity Check file
 if [ -e $BUILD_ROOT/tools/sanity_check/sanityCheck ]; then

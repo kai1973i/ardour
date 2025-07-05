@@ -1,27 +1,29 @@
 /*
-    Copyright (C) 2008 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2014 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2012-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <string>
 
 #include "pbd/failed_constructor.h"
 #include "pbd/file_utils.h"
-#include "pbd/stacktrace.h"
 
 #include "ardour/ardour.h"
 #include "ardour/filesystem_paths.h"
@@ -33,7 +35,9 @@
 #endif
 
 #include "gui_thread.h"
+#include "opts.h"
 #include "splash.h"
+#include "ui_config.h"
 
 #include "pbd/i18n.h"
 
@@ -44,6 +48,28 @@ using namespace std;
 using namespace ARDOUR;
 
 Splash* Splash::the_splash = 0;
+
+Splash*
+Splash::instance()
+{
+	if (!the_splash) {
+		the_splash = new Splash;
+	}
+	return the_splash;
+}
+
+bool
+Splash::exists ()
+{
+	return the_splash;
+}
+
+void
+Splash::drop ()
+{
+	delete the_splash;
+	the_splash = 0;
+}
 
 Splash::Splash ()
 {
@@ -95,7 +121,10 @@ Splash::Splash ()
 	expose_done = false;
 	expose_is_the_one = false;
 
-	ARDOUR::BootMessage.connect (msg_connection, invalidator (*this), boost::bind (&Splash::boot_message, this, _1), gui_context());
+	if (!ARDOUR_COMMAND_LINE::no_splash) {
+		ARDOUR::BootMessage.connect (msg_connection, invalidator (*this), std::bind (&Splash::boot_message, this, _1), gui_context());
+		present ();
+	}
 }
 
 Splash::~Splash ()
@@ -109,6 +138,7 @@ Splash::~Splash ()
 void
 Splash::pop_back_for (Gtk::Window& win)
 {
+	set_keep_above (false);
 #if defined  __APPLE__ || defined PLATFORM_WINDOWS
 	/* April 2013: window layering on OS X is a bit different to X Window. at present,
 	 * the "restack()" functionality in GDK will only operate on windows in the same
@@ -125,20 +155,54 @@ Splash::pop_back_for (Gtk::Window& win)
 	(void) win;
 	hide();
 #else
-	set_keep_above (false);
-	get_window()->restack (win.get_window(), false);
+	if (UIConfiguration::instance().get_hide_splash_screen ()) {
+		hide ();
+	} else if (get_mapped ()) {
+		get_window()->restack (win.get_window(), false);
+		if (0 == win.get_transient_for ()) {
+			win.set_transient_for (*this);
+		}
+	}
 #endif
+	_window_stack.insert (&win);
+}
+
+void
+Splash::pop_front_for (Gtk::Window& win)
+{
+#ifndef NDEBUG
+	assert (1 == _window_stack.erase (&win));
+#else
+	_window_stack.erase (&win);
+#endif
+	if (_window_stack.empty ()) {
+		display ();
+	}
 }
 
 void
 Splash::pop_front ()
 {
+	if (!_window_stack.empty ()) {
+		return;
+	}
+
+	if (ARDOUR_COMMAND_LINE::no_splash) {
+		return;
+	}
+
 	if (get_window()) {
 #if defined  __APPLE__ || defined PLATFORM_WINDOWS
 		show ();
 #else
-		gdk_window_restack(get_window()->gobj(), NULL, true);
+		if (UIConfiguration::instance().get_hide_splash_screen ()) {
+			show ();
+		} else {
+			unset_transient_for ();
+			gdk_window_restack (get_window()->gobj(), NULL, true);
+		}
 #endif
+		set_keep_above (true);
 	}
 }
 
@@ -174,6 +238,10 @@ Splash::expose (GdkEventExpose* ev)
 {
 	RefPtr<Gdk::Window> window = darea.get_window();
 
+	/* clear background (for transparent splash images */
+	Glib::RefPtr<Gdk::GC> bg = get_style()->get_bg_gc (STATE_NORMAL);
+	window->draw_rectangle(bg, true, ev->area.x, ev->area.y, ev->area.width, ev->area.height);
+
 	/* note: height & width need to be constrained to the pixbuf size
 	   in case a WM provides us with a screwy allocation
 	*/
@@ -205,6 +273,9 @@ Splash::expose (GdkEventExpose* ev)
 void
 Splash::boot_message (std::string msg)
 {
+	if (!get_visible() && _window_stack.empty ()) {
+		display ();
+	}
 	message (msg);
 }
 
@@ -218,7 +289,11 @@ Splash::idle_after_expose ()
 void
 Splash::display ()
 {
-	bool was_mapped = is_mapped ();
+	bool was_mapped = get_mapped ();
+
+	if (ARDOUR_COMMAND_LINE::no_splash) {
+		return;
+	}
 
 	if (!was_mapped) {
 		expose_done = false;
@@ -229,7 +304,9 @@ Splash::display ()
 	present ();
 
 	if (!was_mapped) {
-		while (!expose_done && gtk_events_pending()) {
+		int timeout = 50;
+		darea.queue_draw ();
+		while (!expose_done && --timeout) {
 			gtk_main_iteration ();
 		}
 		gdk_display_flush (gdk_display_get_default());
@@ -242,8 +319,6 @@ Splash::message (const string& msg)
 	string str ("<b>");
 	str += Gtkmm2ext::markup_escape_text (msg);
 	str += "</b>";
-
-	show ();
 
 	layout->set_markup (str);
 	Glib::RefPtr<Gdk::Window> win = darea.get_window();

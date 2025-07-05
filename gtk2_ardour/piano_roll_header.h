@@ -1,40 +1,31 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Audan Holland ??
+ * Copyright (C) 2008-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2010-2012 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+#include <ytkmm/drawingarea.h>
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+#include "prh_base.h"
 
-#ifndef __ardour_piano_roll_header_h__
-#define __ardour_piano_roll_header_h__
-
-#include "ardour/types.h"
-
-#include <gtkmm/drawingarea.h>
-
-namespace ARDOUR {
-	class MidiTrack;
-}
-
-class MidiTimeAxisView;
-class MidiStreamView;
-class PublicEditor;
-
-class PianoRollHeader : public Gtk::DrawingArea {
-public:
-	PianoRollHeader(MidiStreamView&);
+class PianoRollHeader : public Gtk::DrawingArea, public PianoRollHeaderBase {
+  public:
+	PianoRollHeader(MidiViewBackground&);
 
 	bool on_expose_event (GdkEventExpose*);
 	bool on_motion_notify_event (GdkEventMotion*);
@@ -45,73 +36,22 @@ public:
 	bool on_leave_notify_event (GdkEventCrossing*);
 
 	void on_size_request(Gtk::Requisition*);
-	void on_size_allocate(Gtk::Allocation& a);
+	void redraw ();
+	void redraw (double x, double y, double w, double h);
+	double height() const;
+	double width() const;
+	double event_y_to_y (double evy) const { return evy; }
+	void draw_transform (double& x, double& y) const {}
+	void event_transform (double& x, double& y) const {}
+	void _queue_resize () { queue_resize(); }
+	void do_grab() { add_modal_grab(); }
+	void do_ungrab() { remove_modal_grab(); }
+	Glib::RefPtr<Gdk::Window> cursor_window();
+	std::shared_ptr<ARDOUR::MidiTrack> midi_track();
 
-	void note_range_changed();
-	void set_note_highlight (uint8_t note);
+	void instrument_info_change ();
 
-	struct Color {
-		Color();
-		Color(double _r, double _g, double _b);
-		inline void set(const Color& c);
-
-		double r;
-		double g;
-		double b;
-	};
-
-	sigc::signal<void,uint8_t> SetNoteSelection;
-	sigc::signal<void,uint8_t> AddNoteSelection;
-	sigc::signal<void,uint8_t> ToggleNoteSelection;
-	sigc::signal<void,uint8_t> ExtendNoteSelection;
-
-private:
-	static Color white;
-	static Color white_highlight;
-	static Color white_shade_light;
-	static Color white_shade_dark;
-	static Color black;
-	static Color black_highlight;
-	static Color black_shade_light;
-	static Color black_shade_dark;
-
-	PianoRollHeader(const PianoRollHeader&);
-
-	enum ItemType {
-		BLACK_SEPARATOR,
-		BLACK_MIDDLE_SEPARATOR,
-		BLACK,
-		WHITE_SEPARATOR,
-		WHITE_RECT,
-		WHITE_CF,
-		WHITE_EB,
-		WHITE_DGA
-	};
-
-	void invalidate_note_range(int lowest, int highest);
-
-	void get_path(ItemType, int note, double x[], double y[]);
-
-	void send_note_on(uint8_t note);
-	void send_note_off(uint8_t note);
-
-	void reset_clicked_note(uint8_t, bool invalidate = true);
-
-	MidiStreamView& _view;
-
-	uint8_t _event[3];
-
-	Cairo::RefPtr<Cairo::Context> cc;
-	bool _active_notes[128];
-	uint8_t _highlighted_note;
-	uint8_t _clicked_note;
-	double _grab_y;
-	bool _dragging;
-
-	double _note_height;
-	double _black_note_width;
-
-	PublicEditor& editor() const;
+ private:
+	MidiStreamView* stream_view;
 };
 
-#endif /* __ardour_piano_roll_header_h__ */

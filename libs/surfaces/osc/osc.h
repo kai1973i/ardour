@@ -1,5 +1,11 @@
 /*
- * Copyright (C) 2006-2009 Paul Davis
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Johannes Mueller <github@johannes-mueller.org>
+ * Copyright (C) 2016-2018 Len Ovens <len@ovenwerks.net>
+ * Copyright (C) 2016 Ben Loftis <ben@harrisonconsoles.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,23 +17,22 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
- *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef ardour_osc_h
 #define ardour_osc_h
 
+#include <bitset>
+#include <memory>
 #include <string>
 #include <vector>
-#include <bitset>
 
 #include <sys/time.h>
 #include <pthread.h>
 
-#include <boost/shared_ptr.hpp>
 
 #include <lo/lo.h>
 
@@ -43,6 +48,7 @@
 
 #include "pbd/i18n.h"
 
+
 class OSCControllable;
 class OSCRouteObserver;
 class OSCGlobalObserver;
@@ -52,10 +58,11 @@ class OSCCueObserver;
 namespace ARDOUR {
 class Session;
 class Route;
+class ZeroConf;
 }
 
 /* this is mostly a placeholder because I suspect that at some
-   point we will want to add more members to accomodate
+   point we will want to add more members to accommodate
    certain types of requests to the OSC UI
 */
 
@@ -75,7 +82,7 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 
 	static OSC* instance() { return _instance; }
 
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
 	void stripable_selection_changed () {}
@@ -88,7 +95,7 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	bool get_active () const;
 
 	// generic osc send
-
+	Glib::Threads::Mutex _lo_lock;
 	int float_message (std::string, float value, lo_address addr);
 	int int_message (std::string, int value, lo_address addr);
 	int text_message (std::string path, std::string val, lo_address addr);
@@ -101,28 +108,22 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int start ();
 	int stop ();
 
-	static void* request_factory (uint32_t);
-
 	enum OSCDebugMode {
 		Off,
 		Unhandled,
 		All
 	};
 
-	enum OSCCustomMode {
-		CusOff = 0,
-		CusRawOrder = 1,
-		CusSort =2,
-		CusFilterRaw = 5,
-		CusFilter = 6,
-		GroupOnly = 7,
-		VCAOnly = 8,
-		BusOnly = 9
+	enum OSCTempMode {
+		TempOff = 0,
+		GroupOnly = 1,
+		VCAOnly = 2,
+		BusOnly = 3
 	};
 
-	typedef std::vector<boost::shared_ptr<ARDOUR::Stripable> > Sorted;
+	typedef std::vector<std::shared_ptr<ARDOUR::Stripable> > Sorted;
 	Sorted get_sorted_stripables(std::bitset<32> types, bool cue, uint32_t custom, Sorted my_list);
-	typedef std::map<boost::shared_ptr<ARDOUR::AutomationControl>, uint32_t> FakeTouchMap;
+	typedef std::map<std::shared_ptr<ARDOUR::AutomationControl>, uint32_t> FakeTouchMap;
 	FakeTouchMap _touch_timeout;
 
 // keep a surface's global setup by remote server url
@@ -138,8 +139,10 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 		int gainmode;				// what kind of faders do we have Gain db or position 0 to 1?
 		PBD::Controllable::GroupControlDisposition usegroup;	// current group disposition
 		Sorted custom_strips;		// a sorted list of user selected strips
-		OSCCustomMode custom_mode;	// use custom strip list
+		uint32_t custom_mode;		// use custom strip list
+		OSCTempMode temp_mode;		// use temp strip list
 		Sorted temp_strips;			// temp strip list for grouponly, vcaonly, auxonly
+		std::shared_ptr<ARDOUR::Stripable> temp_master; // stripable this surface uses as temp master
 		Sorted strips;				// list of stripables for this surface
 		// strips
 		uint32_t bank;				// current bank
@@ -150,7 +153,8 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 		OSCSelectObserver* sel_obs;	// So we can sync select feedback with selected channel
 		uint32_t expand;			// Used by /select/select
 		bool expand_enable;			// use expand instead of select
-		boost::shared_ptr<ARDOUR::Stripable> select; // stripable this surface uses (maybe expand strip)		
+		std::shared_ptr<ARDOUR::Stripable> expand_strip; // stripable this surface uses for expand
+		std::shared_ptr<ARDOUR::Stripable> select; // stripable this surface uses as selected
 		int plug_page;				// current plugin page
 		uint32_t plug_page_size;	// plugin page size (number of controls)
 		int plugin_id;			// id of current plugin
@@ -185,8 +189,23 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 		 * [12]	- Send Playhead position like primary/secondary GUI clocks
 		 * [13] - Send well known feedback (for /select/command
 		 * [14] - use OSC 1.0 only (#reply -> /reply)
+		 * [15] - report 8x8 trigger grid status
+		 * [16] - report mixer scene status
+		 *
+		 * Strip_type bits:
+		 * [0] - Audio Tracks
+		 * [1] - Midi Tracks
+		 * [2] - Audio Bus
+		 * [3] - Midi Bus
+		 * [4] - VCAs
+		 * [5] - master
+		 * [6] - Monitor
+		 * [7] - Listen Bus
+		 * [8] - Selected
+		 * [9] - Hidden
+		 * [10] - Use Groups
+		 * [11] - Global Expand
 		 */
-
 
 // storage for  each surface's settings
 	mutable Glib::Threads::Mutex surfaces_lock;
@@ -202,8 +221,10 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 		bool autobank;					// banksize is derived from total
 		uint32_t not_ready;				// number of 1st device, 0 = ready
 		Sorted custom_strips;			// a sorted list of user selected strips
-		OSCCustomMode custom_mode;	// use custom strip list
-		Sorted temp_strips;			// temp strip list for grouponly, vcaonly, auxonly
+		uint32_t custom_mode;			// use custom strip list
+		OSCTempMode temp_mode;			// use custom strip list
+		Sorted temp_strips;				// temp strip list for grouponly, vcaonly, auxonly
+		std::shared_ptr<ARDOUR::Stripable> temp_master; // temp master stripable
 		std::bitset<32> strip_types;	// strip_types for this linkset
 		Sorted strips;					// list of valid strips in order for this set
 	};
@@ -243,6 +264,13 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	std::string get_remote_port () { return remote_port; }
 	void set_remote_port (std::string pt) { remote_port = pt; }
 
+	CONTROL_PROTOCOL_THREADS_NEED_TEMPO_MAP_DECL();
+
+	int trigger_bank_state (lo_address addr);
+	int trigger_grid_state (lo_address addr, bool zero_it = false);
+
+	int mixer_scene_state (lo_address addr, bool zero_it = false);
+
   protected:
         void thread_init ();
 	void do_request (OSCUIRequest*);
@@ -276,7 +304,9 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	double scrub_place;		// place of play head at latest jog/scrub wheel tick
 	int64_t scrub_time;		// when did the wheel move last?
 	bool global_init;
-	boost::shared_ptr<ARDOUR::Stripable> _select;	// which stripable out of /surface/stripables is gui selected
+	std::shared_ptr<ARDOUR::Stripable> _select;	// which stripable out of /surface/stripables is gui selected
+
+	ARDOUR::ZeroConf* _zeroconf;
 
 	void register_callbacks ();
 
@@ -293,8 +323,8 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	std::string get_port (std::string host);
 	OSCSurface * get_surface (lo_address addr, bool quiet = false);
 	int check_surface (lo_message msg);
-	uint32_t get_sid (boost::shared_ptr<ARDOUR::Stripable> strip, lo_address addr);
-	boost::shared_ptr<ARDOUR::Stripable> get_strip (uint32_t ssid, lo_address addr);
+	uint32_t get_sid (std::shared_ptr<ARDOUR::Stripable> strip, lo_address addr);
+	std::shared_ptr<ARDOUR::Stripable> get_strip (uint32_t ssid, lo_address addr);
 	void global_feedback (OSCSurface* sur);
 	void strip_feedback (OSCSurface* sur, bool new_bank_size);
 	void surface_destroy (OSCSurface* sur);
@@ -304,14 +334,16 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	void send_current_value (const char* path, lo_arg** argv, int argc, lo_message msg);
 	void current_value_query (const char* path, size_t len, lo_arg **argv, int argc, lo_message msg);
 
-	int current_value (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data);
+	int current_value (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data);
 
-	int catchall (const char *path, const char *types, lo_arg **argv, int argc, void *data);
-	static int _catchall (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data);
+	int catchall (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg);
+	static int _catchall (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data);
 
 	int set_automation (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
 	int touch_detect (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
-	int fake_touch (boost::shared_ptr<ARDOUR::AutomationControl> ctrl);
+	int fake_touch (std::shared_ptr<ARDOUR::AutomationControl> ctrl);
+
+	int spill (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
 
 	int route_get_sends (lo_message msg);
 	int route_get_receives(lo_message msg);
@@ -322,11 +354,18 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	void transport_speed (lo_message msg);
 	void record_enabled (lo_message msg);
 
+	void add_marker_name(const std::string &markername) {
+		add_marker(markername);
+	}
+
 	// cue
-	Sorted cue_get_sorted_stripables(boost::shared_ptr<ARDOUR::Stripable> aux, uint32_t id, lo_message msg);
+	Sorted cue_get_sorted_stripables(std::shared_ptr<ARDOUR::Stripable> aux, uint32_t id, lo_address);
 	int cue_parse (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
 	int cue_set (uint32_t aux, lo_message msg);
 	int _cue_set (uint32_t aux, lo_address addr);
+	int cue_new_aux (std::string name, std::string dest_1, std::string dest_2, uint32_t count, lo_message msg);
+	int cue_new_send (std::string rt_name, lo_message msg);
+	int cue_connect_aux (std::string dest, lo_message msg);
 	int cue_next (lo_message msg);
 	int cue_previous (lo_message msg);
 	int cue_send_fader (uint32_t id, float position, lo_message msg);
@@ -334,7 +373,7 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int cue_aux_fader (float position, lo_message msg);
 	int cue_aux_mute (float state, lo_message msg);
 	void cue_set_aux (uint32_t aux, lo_message msg);
-	boost::shared_ptr<ARDOUR::Send> cue_get_send (uint32_t id, lo_address addr);
+	std::shared_ptr<ARDOUR::Send> cue_get_send (uint32_t id, lo_address addr);
 	// end cue
 
 	// link
@@ -351,13 +390,13 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	}
 
 #define PATH_CALLBACK_MSG(name) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
 		if (argc > 0 && !strcmp (types, "f") && argv[0]->f != 1.0) { return 0; } \
-		name (data); \
+		name (msg); \
 		return 0; \
 	}
 
@@ -365,7 +404,8 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK_MSG(route_get_receives);
 	PATH_CALLBACK_MSG(routes_list);
 	PATH_CALLBACK_MSG(group_list);
-	PATH_CALLBACK_MSG(sel_bus_only);
+	PATH_CALLBACK_MSG(sel_previous);
+	PATH_CALLBACK_MSG(sel_next);
 	PATH_CALLBACK_MSG(surface_list);
 	PATH_CALLBACK_MSG(transport_sample);
 	PATH_CALLBACK_MSG(transport_speed);
@@ -373,16 +413,15 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK_MSG(refresh_surface);
 	PATH_CALLBACK_MSG(bank_up);
 	PATH_CALLBACK_MSG(bank_down);
-	PATH_CALLBACK_MSG(master_select);
 	PATH_CALLBACK_MSG(custom_clear);
 
 #define PATH_CALLBACK(name) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg ** argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg ** argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
-		check_surface (data); \
+		check_surface (msg); \
 		if (argc > 0 && !strcmp (types, "f") && argv[0]->f != 1.0) { return 0; } \
 		name (); \
 		return 0; \
@@ -413,7 +452,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK(mark_out);
 	PATH_CALLBACK(toggle_click);
 	PATH_CALLBACK(midi_panic);
-	PATH_CALLBACK(toggle_roll);
 	PATH_CALLBACK(stop_forget);
 	PATH_CALLBACK(set_punch_range);
 	PATH_CALLBACK(set_loop_range);
@@ -445,62 +483,58 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK(scroll_dn_1_page);
 
 #define PATH_CALLBACK1(name,type,optional) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
-		check_surface (data); \
+		check_surface (msg); \
 		if (argc > 0) { \
 			name (optional argv[0]->type); \
 		} \
 		return 0; \
 	}
 
+	PATH_CALLBACK1(trigger_cue_row,i,);
+	PATH_CALLBACK1(trigger_stop_all,i,);  //0 = "stop at end of bar"  1 = "stop now"
+
+	PATH_CALLBACK1(store_mixer_scene,i,);
+	PATH_CALLBACK1(apply_mixer_scene,i,);
+
 	PATH_CALLBACK1(set_transport_speed,f,);
+	PATH_CALLBACK1(add_marker_name,s,&);
 	PATH_CALLBACK1(access_action,s,&);
 
 	PATH_CALLBACK1(jump_by_bars,f,);
 	PATH_CALLBACK1(jump_by_seconds,f,);
-	PATH_CALLBACK1(master_set_gain,f,);
-	PATH_CALLBACK1(master_set_fader,f,);
-	PATH_CALLBACK1(master_delta_gain,f,);
-	PATH_CALLBACK1(master_set_trim,f,);
-	PATH_CALLBACK1(master_set_mute,i,);
-	PATH_CALLBACK1(monitor_set_gain,f,);
-	PATH_CALLBACK1(monitor_set_fader,f,);
-	PATH_CALLBACK1(monitor_delta_gain,f,);
-	PATH_CALLBACK1(monitor_set_mute,i,);
-	PATH_CALLBACK1(monitor_set_dim,i,);
-	PATH_CALLBACK1(monitor_set_mono,i,);
 	PATH_CALLBACK1(click_level,f,);
 
 #define PATH_CALLBACK1_MSG(name,arg1type) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
 		if (argc > 0) { \
-			name (argv[0]->arg1type, data); \
+			name (argv[0]->arg1type, msg); \
 		} \
 		return 0; \
 	}
 
 #define PATH_CALLBACK1_MSG_s(name,arg1type) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
 		if (argc > 0) { \
-			name (&argv[0]->arg1type, data); \
+			name (&argv[0]->arg1type, msg); \
 		} \
 		return 0; \
 	}
 
-	// pan position needs message info to send feedback
-	PATH_CALLBACK1_MSG(master_set_pan_stereo_position,f);
+	PATH_CALLBACK1_MSG(osc_tbank_step_routes,i);
+	PATH_CALLBACK1_MSG(osc_tbank_step_rows,i);
 
 	PATH_CALLBACK1_MSG(scrub,f);
 	PATH_CALLBACK1_MSG(jog,f);
@@ -508,25 +542,8 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK1_MSG(bank_delta,f);
 	PATH_CALLBACK1_MSG(use_group,f);
 	PATH_CALLBACK1_MSG_s(name_session,s);
-	PATH_CALLBACK1_MSG_s(sel_rename,s);
-	PATH_CALLBACK1_MSG_s(sel_comment,s);
-	PATH_CALLBACK1_MSG(sel_recenable,i);
-	PATH_CALLBACK1_MSG(sel_recsafe,i);
-	PATH_CALLBACK1_MSG(sel_mute,i);
+	PATH_CALLBACK1_MSG_s(sel_new_personal_send,s);
 	PATH_CALLBACK1_MSG(sel_master_send_enable,i);
-	PATH_CALLBACK1_MSG(sel_solo,i);
-	PATH_CALLBACK1_MSG(sel_solo_iso,i);
-	PATH_CALLBACK1_MSG(sel_solo_safe,i);
-	PATH_CALLBACK1_MSG(sel_monitor_input,i);
-	PATH_CALLBACK1_MSG(sel_monitor_disk,i);
-	PATH_CALLBACK1_MSG(sel_phase,i);
-	PATH_CALLBACK1_MSG(sel_gain,f);
-	PATH_CALLBACK1_MSG(sel_fader,f);
-	PATH_CALLBACK1_MSG(sel_dB_delta,f);
-	PATH_CALLBACK1_MSG(sel_trim,f);
-	PATH_CALLBACK1_MSG(sel_hide,i);
-	PATH_CALLBACK1_MSG(sel_pan_position,f);
-	PATH_CALLBACK1_MSG(sel_pan_width,f);
 	PATH_CALLBACK1_MSG(sel_pan_elevation,f);
 	PATH_CALLBACK1_MSG(sel_pan_frontback,f);
 	PATH_CALLBACK1_MSG(sel_pan_lfe,f);
@@ -536,7 +553,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK1_MSG(sel_plugin_activate,f);
 	PATH_CALLBACK1_MSG(sel_comp_enable,f);
 	PATH_CALLBACK1_MSG(sel_comp_threshold,f);
-	PATH_CALLBACK1_MSG(sel_comp_speed,f);
 	PATH_CALLBACK1_MSG(sel_comp_mode,f);
 	PATH_CALLBACK1_MSG(sel_comp_makeup,f);
 	PATH_CALLBACK1_MSG(sel_eq_enable,f);
@@ -550,12 +566,12 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK1_MSG(custom_mode,f);
 
 #define PATH_CALLBACK2(name,arg1type,arg2type) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
-		check_surface (data); \
+		check_surface (msg); \
 		if (argc > 1) { \
 			name (argv[0]->arg1type, argv[1]->arg2type); \
 		} \
@@ -563,49 +579,49 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	}
 
 #define PATH_CALLBACK2_MSG(name,arg1type,arg2type) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
 		if (argc > 1) {	\
-			name (argv[0]->arg1type, argv[1]->arg2type, data); \
+			name (argv[0]->arg1type, argv[1]->arg2type, msg); \
 		} \
 		return 0; \
 	}
 
 #define PATH_CALLBACK2_MSG_s(name,arg1type,arg2type) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
 		if (argc > 1) {	\
-			name (argv[0]->arg1type, &argv[1]->arg2type, data); \
+			name (argv[0]->arg1type, &argv[1]->arg2type, msg); \
 		} \
 		return 0; \
 	}
 
 #define PATH_CALLBACK3(name,arg1type,arg2type,arg3type) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
 		if (argc > 1) { \
-			name (argv[0]->arg1type, argv[1]->arg2type,argv[2]->arg3type, data); \
+			name (argv[0]->arg1type, argv[1]->arg2type,argv[2]->arg3type, msg); \
 		} \
 		return 0; \
 	}
 
 #define PATH_CALLBACK4(name,arg1type,arg2type,arg3type,arg4type) \
-	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data, void *user_data) { \
-		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, data); \
+	static int _ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg, void *user_data) { \
+		return static_cast<OSC*>(user_data)->cb_ ## name (path, types, argv, argc, msg); \
 	} \
-	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, void *data) { \
+	int cb_ ## name (const char *path, const char *types, lo_arg **argv, int argc, lo_message msg) { \
 		OSC_DEBUG; \
 		if (argc > 1) { \
-			name (argv[0]->arg1type, argv[1]->arg2type,argv[2]->arg3type,argv[3]->arg4type, data); \
+			name (argv[0]->arg1type, argv[1]->arg2type,argv[2]->arg3type,argv[3]->arg4type, msg); \
 		} \
 		return 0; \
 	}
@@ -620,26 +636,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 
 	PATH_CALLBACK2(locate,i,i);
 	PATH_CALLBACK2(loop_location,i,i);
-	PATH_CALLBACK2_MSG_s(route_rename,i,s);
-	PATH_CALLBACK2_MSG_s(strip_group,i,s);
-	PATH_CALLBACK2_MSG(route_mute,i,i);
-	PATH_CALLBACK2_MSG(route_solo,i,i);
-	PATH_CALLBACK2_MSG(route_solo_iso,i,i);
-	PATH_CALLBACK2_MSG(route_solo_safe,i,i);
-	PATH_CALLBACK2_MSG(route_recenable,i,i);
-	PATH_CALLBACK2_MSG(route_recsafe,i,i);
-	PATH_CALLBACK2_MSG(route_monitor_input,i,i);
-	PATH_CALLBACK2_MSG(route_monitor_disk,i,i);
-	PATH_CALLBACK2_MSG(strip_phase,i,i);
-	PATH_CALLBACK2_MSG(strip_expand,i,i);
-	PATH_CALLBACK2_MSG(strip_hide,i,i);
-	PATH_CALLBACK2_MSG(strip_gui_select,i,i);
-	PATH_CALLBACK2_MSG(route_set_gain_dB,i,f);
-	PATH_CALLBACK2_MSG(route_set_gain_fader,i,f);
-	PATH_CALLBACK2_MSG(strip_db_delta,i,f);
-	PATH_CALLBACK2_MSG(route_set_trim_dB,i,f);
-	PATH_CALLBACK2_MSG(route_set_pan_stereo_position,i,f);
-	PATH_CALLBACK2_MSG(route_set_pan_stereo_width,i,f);
 	PATH_CALLBACK3(route_set_send_gain_dB,i,i,f);
 	PATH_CALLBACK3(route_set_send_fader,i,i,f);
 	PATH_CALLBACK3(route_set_send_enable,i,i,f);
@@ -651,29 +647,23 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	PATH_CALLBACK2_MSG(route_plugin_descriptor,i,i);
 	PATH_CALLBACK2_MSG(route_plugin_reset,i,i);
 
-	int route_rename (int rid, char *s, lo_message msg);
-	int strip_group (int ssid, char *g, lo_message msg);
-	int strip_select_group (boost::shared_ptr<ARDOUR::Stripable> s, char *g);
-	int route_mute (int rid, int yn, lo_message msg);
-	int route_solo (int rid, int yn, lo_message msg);
-	int route_solo_iso (int rid, int yn, lo_message msg);
-	int route_solo_safe (int rid, int yn, lo_message msg);
-	int route_recenable (int rid, int yn, lo_message msg);
-	int route_recsafe (int ssid, int yn, lo_message msg);
-	int route_monitor_input (int rid, int yn, lo_message msg);
-	int route_monitor_disk (int rid, int yn, lo_message msg);
-	int strip_phase (int rid, int yn, lo_message msg);
-	int strip_expand (int rid, int yn, lo_message msg);
-	int strip_hide (int ssid, int yn, lo_message msg);
-	int _strip_select (boost::shared_ptr<ARDOUR::Stripable> s, lo_address addr);
-	int strip_gui_select (int rid, int yn, lo_message msg);
-	int route_set_gain_dB (int rid, float dB, lo_message msg);
-	int route_set_gain_fader (int rid, float pos, lo_message msg);
-	int strip_db_delta (int ssid, float delta, lo_message msg);
-	int route_set_trim_abs (int rid, float level, lo_message msg);
-	int route_set_trim_dB (int rid, float dB, lo_message msg);
-	int route_set_pan_stereo_position (int rid, float left_right_fraction, lo_message msg);
-	int route_set_pan_stereo_width (int rid, float percent, lo_message msg);
+	PATH_CALLBACK2(tbank_set_size,i,i);
+
+	PATH_CALLBACK2_MSG(trigger_bang,i,i);
+	PATH_CALLBACK2_MSG(trigger_unbang,i,i);
+	PATH_CALLBACK2_MSG(trigger_stop,i,i);  /* second arg is 'stop now' */
+
+	int strip_parse (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
+	int master_parse (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
+	int monitor_parse (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
+	int _strip_parse (const char *path, const char *sub_path, const char* types, lo_arg **argv, int argc, std::shared_ptr<ARDOUR::Stripable> s, int param_1, bool strp, lo_message msg);
+	int strip_state (const char *path, std::shared_ptr<ARDOUR::Stripable> s, int ssid, lo_message msg);
+	int strip_list (lo_message msg);
+	int _strip_select (std::shared_ptr<ARDOUR::Stripable> s, lo_address addr);
+	int _strip_select2 (std::shared_ptr<ARDOUR::Stripable> s, OSCSurface *sur, lo_address addr);
+
+	void loop_location (int start, int end);
+
 	int route_set_send_gain_dB (int rid, int sid, float val, lo_message msg);
 	int route_set_send_fader (int rid, int sid, float val, lo_message msg);
 	int route_set_send_enable (int rid, int sid, float val, lo_message msg);
@@ -684,6 +674,10 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int route_plugin_list(int ssid, lo_message msg);
 	int route_plugin_descriptor(int ssid, int piid, lo_message msg);
 	int route_plugin_reset(int ssid, int piid, lo_message msg);
+
+	int trigger_bang(int rid, int stop_now, lo_message msg);
+	int trigger_unbang(int rid, int stop_now, lo_message msg);
+	int trigger_stop(int rid, int row_id, lo_message msg);
 
 	//banking functions
 	int set_bank (uint32_t bank_start, lo_message msg);
@@ -703,9 +697,10 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int refresh_surface (lo_message msg);
 	int custom_clear (lo_message msg);
 	int custom_mode (float state, lo_message msg);
-	int _custom_mode (OSCCustomMode state, lo_address addr);
+	int _custom_mode (uint32_t state, lo_address addr);
 	int name_session (char *n, lo_message msg);
 	// select
+	int select_parse (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
 	int sel_send_pagesize (uint32_t size, lo_message msg);
 	int sel_send_page (int page, lo_message msg);
 	int sel_plug_pagesize (uint32_t size, lo_message msg);
@@ -721,40 +716,10 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int jog_mode (float mode, lo_message msg);
 	int set_marker (const char* types, lo_arg **argv, int argc, lo_message msg);
 	int click_level (float position);
-	int master_set_gain (float dB);
-	int master_set_fader (float position);
-	int master_delta_gain (float delta);
-	int master_set_trim (float dB);
-	int master_set_pan_stereo_position (float position, lo_message msg);
-	int master_set_mute (uint32_t state);
-	int master_select (lo_message msg);
-	int monitor_set_gain (float dB);
-	int monitor_set_fader (float position);
-	int monitor_delta_gain (float delta);
-	int monitor_set_mute (uint32_t state);
-	int monitor_set_dim (uint32_t state);
-	int monitor_set_mono (uint32_t state);
-	int sel_group (char *g, lo_message msg);
-	int sel_rename (char *n, lo_message msg);
-	int sel_comment (char *c, lo_message msg);
-	int sel_recenable (uint32_t state, lo_message msg);
-	int sel_recsafe (uint32_t state, lo_message msg);
-	int sel_mute (uint32_t state, lo_message msg);
-	int sel_solo (uint32_t state, lo_message msg);
-	int sel_solo_iso (uint32_t state, lo_message msg);
-	int sel_solo_safe (uint32_t state, lo_message msg);
-	int sel_monitor_input (uint32_t state, lo_message msg);
-	int sel_monitor_disk (uint32_t state, lo_message msg);
-	int sel_phase (uint32_t state, lo_message msg);
-	int sel_gain (float state, lo_message msg);
-	int sel_fader (float state, lo_message msg);
-	int sel_dB_delta (float delta, lo_message msg);
-	int sel_trim (float val, lo_message msg);
-	int sel_hide (uint32_t state, lo_message msg);
-	int sel_bus_only (lo_message msg);
-	boost::shared_ptr<ARDOUR::Send> get_send (boost::shared_ptr<ARDOUR::Stripable> st, lo_address addr);
-	int sel_pan_position (float val, lo_message msg);
-	int sel_pan_width (float val, lo_message msg);
+	int sel_previous (lo_message msg);
+	int sel_next (lo_message msg);
+	int sel_delta (int delta, lo_message msg);
+	std::shared_ptr<ARDOUR::Send> get_send (std::shared_ptr<ARDOUR::Stripable> st, lo_address addr);
 	int sel_sendgain (int id, float dB, lo_message msg);
 	int sel_sendfader (int id, float pos, lo_message msg);
 	int sel_sendenable (int id, float pos, lo_message msg);
@@ -765,7 +730,6 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int sel_pan_lfe (float val, lo_message msg);
 	int sel_comp_enable (float val, lo_message msg);
 	int sel_comp_threshold (float val, lo_message msg);
-	int sel_comp_speed (float val, lo_message msg);
 	int sel_comp_mode (float val, lo_message msg);
 	int sel_comp_makeup (float val, lo_message msg);
 	int sel_eq_enable (float val, lo_message msg);
@@ -779,19 +743,24 @@ class OSC : public ARDOUR::ControlProtocol, public AbstractUI<OSCUIRequest>
 	int sel_eq_freq (int id, float val, lo_message msg);
 	int sel_eq_q (int id, float val, lo_message msg);
 	int sel_eq_shape (int id, float val, lo_message msg);
+	int sel_new_personal_send (char *n, lo_message msg);
+	int set_temp_mode (lo_address addr);
 	int parse_sel_group (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
-	int parse_sel_vca (const char *path, const char* types, lo_arg **argv, int argc, lo_message msg);
-	boost::shared_ptr<ARDOUR::VCA> get_vca_by_name (std::string vname);
+	std::shared_ptr<ARDOUR::VCA> get_vca_by_name (std::string vname);
 
-	void listen_to_route (boost::shared_ptr<ARDOUR::Stripable>, lo_address);
+	void listen_to_route (std::shared_ptr<ARDOUR::Stripable>, lo_address);
 
-	void route_name_changed (const PBD::PropertyChange&, boost::weak_ptr<ARDOUR::Route> r, lo_address addr);
+	void route_name_changed (const PBD::PropertyChange&, std::weak_ptr<ARDOUR::Route> r, lo_address addr);
 	void recalcbanks ();
 	void _recalcbanks ();
 	void notify_routes_added (ARDOUR::RouteList &);
 	void notify_vca_added (ARDOUR::VCAList &);
 
+	int osc_tbank_step_routes (int step, lo_message msg);
+	int osc_tbank_step_rows (int step, lo_message msg);
+
 	int cancel_all_solos ();
+	int osc_toggle_roll (bool ret2strt);
 	bool periodic (void);
 	sigc::connection periodic_connection;
 	PBD::ScopedConnectionList session_connections;

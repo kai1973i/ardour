@@ -1,31 +1,29 @@
 /*
-    Copyright (C) 2016 Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-#ifndef __ardour_luawindow_h__
-#define __ardour_luawindow_h__
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+#pragma once
 
 #include <glibmm/thread.h>
 
-#include <gtkmm/box.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/label.h>
-#include <gtkmm/textview.h>
-#include <gtkmm/window.h>
+#include <ytkmm/box.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/label.h>
+#include <ytkmm/textview.h>
+#include <ytkmm/window.h>
 
 #include "pbd/signals.h"
 #include "pbd/stateful.h"
@@ -42,18 +40,16 @@
 #include "widgets/ardour_button.h"
 #include "widgets/ardour_dropdown.h"
 
+#include "ardour_window.h"
+
 class LuaWindow :
-	public Gtk::Window,
-	public PBD::ScopedConnectionList,
-	public ARDOUR::SessionHandlePtr,
-	public Gtkmm2ext::VisibilityTracker
+	public ArdourWindow,
+	public PBD::ScopedConnectionList
 {
 public:
 	static LuaWindow* instance();
 	~LuaWindow();
 
-	void show_window ();
-	bool hide_window (GdkEventAny *ev);
 	void edit_script (const std::string&, const std::string&);
 
 	void set_session (ARDOUR::Session* s);
@@ -89,7 +85,6 @@ private:
 	static LuaWindow* _instance;
 
 	LuaState *lua;
-	bool _visible;
 
 	Gtk::Menu* _menu_scratch;
 	Gtk::Menu* _menu_snippet;
@@ -110,7 +105,7 @@ private:
 
 	ArdourWidgets::ArdourDropdown script_select;
 
-	typedef boost::shared_ptr<ScriptBuffer> ScriptBufferPtr;
+	typedef std::shared_ptr<ScriptBuffer> ScriptBufferPtr;
 	typedef std::vector<ScriptBufferPtr> ScriptBufferList;
 
 	ScriptBufferList script_buffers;
@@ -143,4 +138,3 @@ private:
 };
 
 
-#endif

@@ -1,34 +1,34 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef _WIDGETS_PANE_H_
 #define _WIDGETS_PANE_H_
 
+#include <cstdint>
+#include <memory>
 #include <vector>
 #include <algorithm>
-#include <boost/shared_ptr.hpp>
 
-#include <stdint.h>
 
-#include <gdkmm/cursor.h>
-#include <gtkmm/container.h>
-#include <gtkmm/eventbox.h>
+#include <ydkmm/cursor.h>
+#include <ytkmm/container.h>
+#include <ytkmm/eventbox.h>
 
 #include "widgets/visibility.h"
 
@@ -41,7 +41,7 @@ namespace ArdourWidgets {
 class LIBWIDGETS_API Pane : public Gtk::Container
 {
 private:
-	class Divider;
+	struct Divider;
 
 public:
 	struct Child
@@ -55,13 +55,13 @@ public:
 		Child (Pane* p, Gtk::Widget* widget, uint32_t ms) : pane (p), w (widget), minsize (ms) {}
 	};
 
-	typedef std::vector<boost::shared_ptr<Child> > Children;
+	typedef std::vector<std::shared_ptr<Child> > Children;
 
 	Pane (bool horizontal);
 	~Pane();
 
 	void set_divider (std::vector<float>::size_type divider, float fract);
-	float get_divider (std::vector<float>::size_type divider = 0);
+	float get_divider (std::vector<float>::size_type divider = 0) const;
 	void set_child_minsize (Gtk::Widget const &, int32_t);
 
 	GType child_type_vfunc() const;

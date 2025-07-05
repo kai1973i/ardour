@@ -1,41 +1,41 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2009 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __session_import_dialog_h__
-#define __session_import_dialog_h__
+#pragma once
 
 #include <string>
 #include <list>
+#include <memory>
 #include <utility>
 
-#include <boost/shared_ptr.hpp>
 
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/filechooserdialog.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treestore.h>
-#include <gtkmm/treeview.h>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/filechooserdialog.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treestore.h>
+#include <ytkmm/treeview.h>
 
 #include "pbd/xml++.h"
 
@@ -49,10 +49,10 @@ namespace ARDOUR {
 class SessionImportDialog : public ArdourDialog
 {
 private:
-	typedef boost::shared_ptr<ARDOUR::ElementImportHandler> HandlerPtr;
+	typedef std::shared_ptr<ARDOUR::ElementImportHandler> HandlerPtr;
 	typedef std::list<HandlerPtr> HandlerList;
 
-	typedef boost::shared_ptr<ARDOUR::ElementImporter> ElementPtr;
+	typedef std::shared_ptr<ARDOUR::ElementImporter> ElementPtr;
 	typedef std::list<ElementPtr> ElementList;
 
 public:
@@ -105,4 +105,3 @@ private:
 	PBD::ScopedConnectionList connections;
 };
 
-#endif

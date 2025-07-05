@@ -1,27 +1,27 @@
 /*
-    Copyright (C) 2017 Tim Mayberry
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2017 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef _WAVEVIEW_WAVE_VIEW_PRIVATE_H_
 #define _WAVEVIEW_WAVE_VIEW_PRIVATE_H_
 
 #include <deque>
 
+#include "pbd/pthread_utils.h"
 #include "waveview/wave_view.h"
 
 namespace ARDOUR {
@@ -33,7 +33,7 @@ namespace ArdourWaveView {
 struct WaveViewProperties
 {
 public: // ctors
-	WaveViewProperties (boost::shared_ptr<ARDOUR::AudioRegion> region);
+	WaveViewProperties (std::shared_ptr<ARDOUR::AudioRegion> region);
 
 	// WaveViewProperties (WaveViewProperties const& other) = default;
 
@@ -140,7 +140,7 @@ public: // methods
 		return sample_end - sample_start;
 	}
 
-	samplepos_t get_center_sample ()
+	samplepos_t get_center_sample () const
 	{
 		return sample_start + (get_length_samples() / 2);
 	}
@@ -166,13 +166,13 @@ public: // methods
 
 struct WaveViewImage {
 public: // ctors
-	WaveViewImage (boost::shared_ptr<const ARDOUR::AudioRegion> const& region_ptr,
+	WaveViewImage (std::shared_ptr<const ARDOUR::AudioRegion> const& region_ptr,
 	               WaveViewProperties const& properties);
 
 	~WaveViewImage ();
 
 public: // member variables
-	boost::weak_ptr<const ARDOUR::AudioRegion> region;
+	std::weak_ptr<const ARDOUR::AudioRegion> region;
 	WaveViewProperties props;
 	Cairo::RefPtr<Cairo::ImageSurface> cairo_image;
 	uint64_t timestamp;
@@ -203,18 +203,18 @@ public:
 	WaveViewDrawRequest ();
 	~WaveViewDrawRequest ();
 
-	bool stopped() const { return (bool) g_atomic_int_get (const_cast<gint*>(&stop)); }
-	void cancel() { g_atomic_int_set (&stop, 1); }
+	bool stopped() const { return (bool) _stop.load (); }
+	void cancel() { _stop.store (1); }
 	bool finished() { return image->finished(); }
 
-	boost::shared_ptr<WaveViewImage> image;
+	std::shared_ptr<WaveViewImage> image;
 
 	bool is_valid () {
 		return (image && image->is_valid());
 	}
 
 private:
-	gint stop; /* intended for atomic access */
+	std::atomic<int> _stop; /* intended for atomic access */
 };
 
 class WaveViewCache;
@@ -229,9 +229,9 @@ public:
 public:
 
 	// @return image with matching properties or null
-	boost::shared_ptr<WaveViewImage> lookup_image (WaveViewProperties const&);
+	std::shared_ptr<WaveViewImage> lookup_image (WaveViewProperties const&);
 
-	void add_image (boost::shared_ptr<WaveViewImage>);
+	void add_image (std::shared_ptr<WaveViewImage>);
 
 	bool full () const { return _cached_images.size() > max_size(); }
 
@@ -248,7 +248,7 @@ private:
 	 */
 	WaveViewCache& _parent_cache;
 
-	typedef std::list<boost::shared_ptr<WaveViewImage> > ImageCache;
+	typedef std::list<std::shared_ptr<WaveViewImage> > ImageCache;
 	ImageCache _cached_images;
 };
 
@@ -262,16 +262,16 @@ public:
 
 	void clear_cache ();
 
-	boost::shared_ptr<WaveViewCacheGroup> get_cache_group (boost::shared_ptr<ARDOUR::AudioSource>);
+	std::shared_ptr<WaveViewCacheGroup> get_cache_group (std::shared_ptr<ARDOUR::AudioSource>);
 
-	void reset_cache_group (boost::shared_ptr<WaveViewCacheGroup>&);
+	void reset_cache_group (std::shared_ptr<WaveViewCacheGroup>&);
 
 private:
 	WaveViewCache();
 	~WaveViewCache();
 
 private:
-	typedef std::map<boost::shared_ptr<ARDOUR::AudioSource>, boost::shared_ptr<WaveViewCacheGroup> >
+	typedef std::map<std::shared_ptr<ARDOUR::AudioSource>, std::shared_ptr<WaveViewCacheGroup> >
 	    CacheGroups;
 
 	CacheGroups cache_group_map;
@@ -288,26 +288,6 @@ private:
 	bool full () { return image_cache_size > _image_cache_threshold; }
 };
 
-class WaveViewDrawRequestQueue
-{
-public:
-
-	void enqueue (boost::shared_ptr<WaveViewDrawRequest>&);
-
-	// @return valid request or null if non-blocking or no request is available
-	boost::shared_ptr<WaveViewDrawRequest> dequeue (bool block);
-
-	void wake_up ();
-
-private:
-
-	mutable Glib::Threads::Mutex _queue_mutex;
-	Glib::Threads::Cond _cond;
-
-	typedef std::deque<boost::shared_ptr<WaveViewDrawRequest> > DrawRequestQueueType;
-	DrawRequestQueueType _queue;
-};
-
 class WaveViewDrawingThread
 {
 public:
@@ -316,12 +296,10 @@ public:
 
 private:
 	void start ();
-	void quit ();
 	void run ();
 
 private:
-	Glib::Threads::Thread* _thread;
-	gint _quit;
+	PBD::Thread* _thread;
 };
 
 class WaveViewThreads {
@@ -335,15 +313,18 @@ public:
 
 	static bool enabled () { return (instance); }
 
-	static void enqueue_draw_request (boost::shared_ptr<WaveViewDrawRequest>&);
+	static void enqueue_draw_request (std::shared_ptr<WaveViewDrawRequest>&);
 
 private:
 	friend class WaveViewDrawingThread;
 
-	static void wake_up ();
-
 	// will block until a request is available
-	static boost::shared_ptr<WaveViewDrawRequest> dequeue_draw_request ();
+	static std::shared_ptr<WaveViewDrawRequest> dequeue_draw_request ();
+	static void thread_proc ();
+
+	std::shared_ptr<WaveViewDrawRequest> _dequeue_draw_request ();
+	void _enqueue_draw_request (std::shared_ptr<WaveViewDrawRequest>&);
+	void _thread_proc ();
 
 	void start_threads ();
 	void stop_threads ();
@@ -353,10 +334,17 @@ private:
 	static WaveViewThreads* instance;
 
 	// TODO use std::unique_ptr when possible
-	typedef std::vector<boost::shared_ptr<WaveViewDrawingThread> > WaveViewThreadList;
+	typedef std::vector<std::shared_ptr<WaveViewDrawingThread> > WaveViewThreadList;
 
+	bool _quit;
 	WaveViewThreadList _threads;
-	WaveViewDrawRequestQueue _request_queue;
+
+
+	mutable Glib::Threads::Mutex _queue_mutex;
+	Glib::Threads::Cond _cond;
+
+	typedef std::deque<std::shared_ptr<WaveViewDrawRequest> > DrawRequestQueueType;
+	DrawRequestQueueType _queue;
 };
 
 

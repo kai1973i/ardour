@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2017 Paul Davis <paul@linuxaudiosystems.com>
  * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -11,9 +12,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 
@@ -44,7 +45,6 @@ AlsaAudioSlave::AlsaAudioSlave (
 	, _samples_since_dll_reset (0)
 	, _ratio (1.0)
 	, _slave_speed (1.0)
-	, _draining (1)
 	, _rb_capture (4 * /* AlsaAudioBackend::_max_buffer_size */ 8192 * _pcmi.ncapt ())
 	, _rb_playback (4 * /* AlsaAudioBackend::_max_buffer_size */ 8192 * _pcmi.nplay ())
 	, _samples_per_period (master_samples_per_period)
@@ -52,6 +52,8 @@ AlsaAudioSlave::AlsaAudioSlave (
 	, _play_buff (0)
 	, _src_buff (0)
 {
+	_draining.store (1);
+
 	if (0 != _pcmi.state()) {
 		return;
 	}
@@ -60,20 +62,28 @@ AlsaAudioSlave::AlsaAudioSlave (
 	_ratio = (double) master_rate / (double) _pcmi.fsamp();
 
 #ifndef NDEBUG
-	fprintf (stdout, " --[[ ALSA Slave %s/%s ratio: %.4f\n", play_name, capt_name, _ratio);
+	fprintf (stdout, " --[[ ALSA Slave %s/%s ratio: %.4f\n",
+			capt_name ? capt_name : "-",
+			play_name ? play_name : "-",
+			_ratio);
 	_pcmi.printinfo ();
 	fprintf (stdout, " --]]\n");
 #endif
 
-	_src_capt.setup (_ratio, _pcmi.ncapt (), /*quality*/ 32); // save capture to master
-	_src_play.setup (1.0 / _ratio, _pcmi.nplay (), /*quality*/ 32); // master to slave play
+	if (_pcmi.ncapt () > 0) {
+		_src_capt.setup (_ratio, _pcmi.ncapt (), /*quality*/ 32); // save capture to master
+		_src_capt.set_rrfilt (100);
+		_capt_buff = (float*) malloc (sizeof(float) * _pcmi.ncapt () * _samples_per_period);
+	}
+	if (_pcmi.nplay () > 0) {
+		_src_play.setup (1.0 / _ratio, _pcmi.nplay (), /*quality*/ 32); // master to slave play
+		_src_play.set_rrfilt (100);
+		_play_buff = (float*) malloc (sizeof(float) * _pcmi.nplay () * _samples_per_period);
+	}
 
-	_src_capt.set_rrfilt (100);
-	_src_play.set_rrfilt (100);
-
-	_capt_buff = (float*) malloc (sizeof(float) * _pcmi.ncapt () * _samples_per_period);
-	_play_buff = (float*) malloc (sizeof(float) * _pcmi.nplay () * _samples_per_period);
-	_src_buff  = (float*) malloc (sizeof(float) * std::max (_pcmi.nplay (), _pcmi.ncapt ()));
+	if (_pcmi.nplay () > 0 || _pcmi.ncapt () > 0) {
+		_src_buff  = (float*) malloc (sizeof(float) * std::max (_pcmi.nplay (), _pcmi.ncapt ()));
+	}
 }
 
 AlsaAudioSlave::~AlsaAudioSlave ()
@@ -101,10 +111,10 @@ AlsaAudioSlave::start ()
 	}
 
 	_run = true;
-	if (pbd_realtime_pthread_create (PBD_SCHED_FIFO, -20, 100000,
+	if (pbd_realtime_pthread_create ("ALSA Slave", PBD_SCHED_FIFO, PBD_RT_PRI_MAIN, PBD_RT_STACKSIZE_HELP,
 				&_thread, _process_thread, this))
 	{
-		if (pthread_create (&_thread, NULL, _process_thread, this)) {
+		if (pbd_pthread_create (PBD_RT_STACKSIZE_HELP, &_thread, _process_thread, this)) {
 			_run = false;
 			PBD::error << _("AlsaAudioBackend: failed to create slave process thread.") << endmsg;
 			return false;
@@ -142,6 +152,7 @@ void*
 AlsaAudioSlave::_process_thread (void* arg)
 {
 	AlsaAudioSlave* aas = static_cast<AlsaAudioSlave*> (arg);
+	pthread_set_name ("AlsaAudioSlave");
 	return aas->process_thread ();
 }
 
@@ -197,19 +208,19 @@ AlsaAudioSlave::process_thread ()
 		}
 
 		if (no_proc_errors > bailout) {
-			PBD::error << _("AlsaAudioBackend: Slave terminated due to continuous x-runs.") << endmsg;
+			PBD::error << _("AlsaAudioBackend: Slave terminated due to continuous xruns.") << endmsg;
 			break;
 		}
 
 		const size_t spp = _pcmi.fsize ();
-		const bool drain = g_atomic_int_get (&_draining);
+		const bool drain = _draining.load ();
 		last_n_periods = 0;
 
 		while (nr >= (long)spp) {
 			no_proc_errors = 0;
 
 			_pcmi.capt_init (spp);
-			if (drain) {
+			if (drain || _pcmi.ncapt () == 0) {
 				/* do nothing */
 			} else if (_rb_capture.write_space () >= _pcmi.ncapt () * spp) {
 #if 0 // failsafe: write interleave sample by sample
@@ -256,7 +267,7 @@ AlsaAudioSlave::process_thread ()
 				_rb_capture.increment_write_idx (spp * nchn);
 #endif
 			} else {
-				g_atomic_int_set(&_draining, 1);
+				_draining.store (1);
 			}
 			_pcmi.capt_done (spp);
 
@@ -266,7 +277,10 @@ AlsaAudioSlave::process_thread ()
 			}
 
 			_pcmi.play_init (spp);
-			if (_rb_playback.read_space () >= _pcmi.nplay () * spp) {
+			if (_pcmi.nplay () == 0) {
+				/* relax */
+			}
+			else if (_rb_playback.read_space () >= _pcmi.nplay () * spp) {
 #if 0 // failsafe: read sample by sample de-interleave
 				for (uint32_t s = 0; s < spp; ++s) {
 					for (uint32_t c = 0; c < _pcmi.nplay (); ++c) {
@@ -308,7 +322,9 @@ AlsaAudioSlave::process_thread ()
 #endif
 			} else {
 				if (!drain) {
-					printf ("Slave Process: Playback Buffer Underflow, have %u want %lu\n", _rb_playback.read_space (), _pcmi.nplay () * spp); // XXX DEBUG 
+#ifndef NDEBUG
+					printf ("Slave Process: Playback Buffer Underflow, have %zu want %lu\n", _rb_playback.read_space (), _pcmi.nplay () * spp); // XXX DEBUG
+#endif
 					_play_latency += spp * _ratio;
 					update_latencies (_play_latency, _capt_latency);
 				}
@@ -326,7 +342,7 @@ AlsaAudioSlave::process_thread ()
 		if (xrun && (_pcmi.capt_xrun() > 0 || _pcmi.play_xrun() > 0)) {
 			reset_dll = true;
 			_samples_since_dll_reset = 0;
-			g_atomic_int_set(&_draining, 1);
+			_draining.store (1);
 		}
 	}
 
@@ -352,14 +368,16 @@ AlsaAudioSlave::cycle_start (double tme, double mst_speed, bool drain)
 	_src_capt.set_rratio (mst_speed / slave_speed);
 	_src_play.set_rratio (slave_speed / mst_speed);
 
-	memset (_capt_buff, 0, sizeof(float) * _pcmi.ncapt () * _samples_per_period);
+	if (_capt_buff) {
+		memset (_capt_buff, 0, sizeof(float) * _pcmi.ncapt () * _samples_per_period);
+	}
 
 	if (drain) {
-		g_atomic_int_set(&_draining, 1);
+		_draining.store (1);
 		return;
 	}
 
-	if (g_atomic_int_get (&_draining)) {
+	if (_draining.load ()) {
 		_rb_capture.increment_read_idx (_rb_capture.read_space());
 		return;
 	}
@@ -372,14 +390,16 @@ AlsaAudioSlave::cycle_start (double tme, double mst_speed, bool drain)
 	/* estimate required samples */
 	const double rratio = _ratio * mst_speed / slave_speed;
 	if (_rb_capture.read_space() < ceil (nchn * _samples_per_period / rratio)) {
-		printf ("--- UNDERFLOW ---  have %u  want %.1f\n", _rb_capture.read_space(), ceil (nchn * _samples_per_period / rratio)); // XXX DEBUG
+#ifndef NDEBUG
+		printf ("--- UNDERFLOW ---  have %zu  want %.1f\n", _rb_capture.read_space(), ceil (nchn * _samples_per_period / rratio)); // XXX DEBUG
+#endif
 		_capt_latency += _samples_per_period;
 		update_latencies (_play_latency, _capt_latency);
 		return;
 	}
 
 	bool underflow = false;
-	while (_src_capt.out_count && _active) {
+	while (_src_capt.out_count && _active && nchn > 0) {
 		if (_rb_capture.read_space() < nchn) {
 			underflow = true;
 			break;
@@ -402,15 +422,19 @@ AlsaAudioSlave::cycle_start (double tme, double mst_speed, bool drain)
 	}
 
 	if (underflow) {
-		std::cerr << "ALSA Slave: Capture Ringbuffer Underflow\n"; // XXX
-		g_atomic_int_set(&_draining, 1);
+#ifndef NDEBUG
+		std::cerr << "ALSA Slave: Capture Ringbuffer Underflow\n"; // XXX DEBUG
+#endif
+		_draining.store (1);
 	}
 
-	if (!_active || underflow) {
+	if ((!_active || underflow) && _capt_buff) {
 		memset (_capt_buff, 0, sizeof(float) * _pcmi.ncapt () * _samples_per_period);
 	}
 
-	memset (_play_buff, 0, sizeof(float) * _pcmi.nplay () * _samples_per_period);
+	if (_play_buff) {
+		memset (_play_buff, 0, sizeof(float) * _pcmi.nplay () * _samples_per_period);
+	}
 }
 
 void
@@ -419,7 +443,7 @@ AlsaAudioSlave::cycle_end ()
 	bool drain_done = false;
 	bool overflow = false;
 
-	if (g_atomic_int_get (&_draining)) {
+	if (_draining.load ()) {
 		if (_rb_capture.read_space() == 0 && _rb_playback.read_space() == 0 && _samples_since_dll_reset > _pcmi.fsamp ()) {
 			reset_resampler (_src_capt);
 			reset_resampler (_src_play);
@@ -447,7 +471,7 @@ AlsaAudioSlave::cycle_end ()
 	_src_play.inp_count = _samples_per_period;
 	_src_play.inp_data  = _play_buff;
 
-	while (_src_play.inp_count && _active) {
+	while (_src_play.inp_count && _active && nchn > 0) {
 		unsigned int n;
 		PBD::RingBuffer<float>::rw_vector vec;
 		_rb_playback.get_write_vector (&vec);
@@ -475,12 +499,14 @@ AlsaAudioSlave::cycle_end ()
 	}
 
 	if (overflow) {
-		std::cerr << "ALSA Slave: Playback Ringbuffer Overflow\n"; // XXX
-		g_atomic_int_set(&_draining, 1);
+#ifndef NDEBUG
+		std::cerr << "ALSA Slave: Playback Ringbuffer Overflow\n"; // XXX DEBUG
+#endif
+		_draining.store (1);
 		return;
 	}
 	if (drain_done) {
-		g_atomic_int_set(&_draining, 0);
+		_draining.store (0);
 	}
 }
 
@@ -488,7 +514,7 @@ void
 AlsaAudioSlave::freewheel (bool onoff)
 {
 	if (onoff) {
-		g_atomic_int_set(&_draining, 1);
+		_draining.store (1);
 	}
 }
 

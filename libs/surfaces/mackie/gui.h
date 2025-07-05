@@ -1,31 +1,36 @@
 /*
-  Copyright (C) 2010-2012 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2012-2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <vector>
 
-#include <gtkmm/combobox.h>
-#include <gtkmm/box.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/scrolledwindow.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/box.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/image.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/radiobutton.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/treestore.h>
 
 namespace Gtk {
 	class CellRendererCombo;
@@ -35,13 +40,14 @@ namespace Gtk {
 
 #include "pbd/i18n.h"
 
-namespace ArdourSurface {
+namespace ActionManager {
+        class ActionModel;
+}
+
+namespace ArdourSurface { namespace MACKIE_NAMESPACE {
 
 class MackieControlProtocol;
-
-namespace Mackie {
-	class Surface;
-}
+class Surface;
 
 class MackieControlProtocolGUI : public Gtk::Notebook
 {
@@ -67,15 +73,6 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 		Gtk::TreeModelColumn<std::string> full_name;
 	};
 
-	struct AvailableActionColumns : public Gtk::TreeModel::ColumnRecord {
-		AvailableActionColumns() {
-			add (name);
-			add (path);
-		}
-		Gtk::TreeModelColumn<std::string> name;
-		Gtk::TreeModelColumn<std::string> path;
-	};
-
 	struct FunctionKeyColumns : public Gtk::TreeModel::ColumnRecord {
 		FunctionKeyColumns() {
 			add (name);
@@ -88,7 +85,7 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 			add (shiftcontrol);
 		};
 		Gtk::TreeModelColumn<std::string> name;
-		Gtk::TreeModelColumn<Mackie::Button::ID>  id;
+		Gtk::TreeModelColumn<int>         id; // enum Button::ID
 		Gtk::TreeModelColumn<std::string> plain;
 		Gtk::TreeModelColumn<std::string> shift;
 		Gtk::TreeModelColumn<std::string> control;
@@ -97,28 +94,25 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 		Gtk::TreeModelColumn<std::string> shiftcontrol;
 	};
 
-	AvailableActionColumns available_action_columns;
 	FunctionKeyColumns function_key_columns;
 	MidiPortColumns midi_port_columns;
 
 	Gtk::ScrolledWindow function_key_scroller;
 	Gtk::TreeView function_key_editor;
 	Glib::RefPtr<Gtk::ListStore> function_key_model;
-	Glib::RefPtr<Gtk::TreeStore> available_action_model;
+
+	const ActionManager::ActionModel& action_model;
 
 	Glib::RefPtr<Gtk::ListStore> build_midi_port_list (bool for_input);
 
-	void build_available_action_menu ();
 	void refresh_function_key_editor ();
 	void build_function_key_editor ();
-	void action_changed (const Glib::ustring &sPath, const Glib::ustring &text, Gtk::TreeModelColumnBase);
+	void action_changed (const Glib::ustring &sPath, const Gtk::TreeModel::iterator &, Gtk::TreeModelColumnBase);
 	Gtk::CellRendererCombo* make_action_renderer (Glib::RefPtr<Gtk::TreeStore> model, Gtk::TreeModelColumnBase);
 
 	void surface_combo_changed ();
 	void profile_combo_changed ();
 	void ipmidi_spinner_changed ();
-
-	std::map<std::string,std::string> action_map; // map from action names to paths
 
 	Gtk::CheckButton relay_click_button;
 	Gtk::CheckButton backlight_button;
@@ -128,9 +122,10 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 	Gtk::HScale      touch_sensitivity_scale;
 	Gtk::Button      recalibrate_fader_button;
 	Gtk::Adjustment  ipmidi_base_port_adjustment;
-	Gtk::Button      discover_button;
 
-	void discover_clicked ();
+	Gtk::HBox  hpacker;
+	Gtk::Image image;
+
 	void recalibrate_faders ();
 	void toggle_backlight ();
 	void touch_sensitive_change ();
@@ -145,16 +140,16 @@ class MackieControlProtocolGUI : public Gtk::Notebook
 	void update_port_combos (std::vector<std::string> const&, std::vector<std::string> const&,
 	                         Gtk::ComboBox* input_combo,
 	                         Gtk::ComboBox* output_combo,
-	                         boost::shared_ptr<Mackie::Surface> surface);
+	                         std::shared_ptr<MACKIE_NAMESPACE::Surface> surface);
 
-	PBD::ScopedConnection connection_change_connection;
+	PBD::ScopedConnectionList _port_connections;
 	void connection_handler ();
 
 	Glib::RefPtr<Gtk::ListStore> build_midi_port_list (std::vector<std::string> const & ports, bool for_input);
 	bool _ignore_profile_changed;
 	bool ignore_active_change;
-	void active_port_changed (Gtk::ComboBox* combo, boost::weak_ptr<Mackie::Surface> ws, bool for_input);
+	void active_port_changed (Gtk::ComboBox* combo, std::weak_ptr<MACKIE_NAMESPACE::Surface> ws, bool for_input);
 };
 
-}
-
+} // namespace Mackie
+} // namespace ArdourSurface

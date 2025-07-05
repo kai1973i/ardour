@@ -1,19 +1,19 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2018 Paul Davis <paul@linuxaudiosystems.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "ardour/session.h"
@@ -40,68 +40,59 @@ Maschine2::connect_signals ()
 	// TODO: use some convenience macros here
 
 	/* Signals */
-	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&Maschine2::notify_transport_state_changed, this), this);
-	session->TransportLooped.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&Maschine2::notify_loop_state_changed, this), this);
-	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&Maschine2::notify_record_state_changed, this), this);
-	Config->ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&Maschine2::notify_parameter_changed, this, _1), this);
-	session->config.ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&Maschine2::notify_parameter_changed, this, _1), this);
-	session->DirtyChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&Maschine2::notify_session_dirty_changed, this), this);
-	session->history().Changed.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&Maschine2::notify_history_changed, this), this);
+	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, std::bind (&Maschine2::notify_transport_state_changed, this), this);
+	session->TransportLooped.connect (session_connections, MISSING_INVALIDATOR, std::bind (&Maschine2::notify_loop_state_changed, this), this);
+	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&Maschine2::notify_record_state_changed, this), this);
+	Config->ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&Maschine2::notify_parameter_changed, this, _1), this);
+	session->config.ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&Maschine2::notify_parameter_changed, this, _1), this);
+	session->DirtyChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&Maschine2::notify_session_dirty_changed, this), this);
+	session->history().Changed.connect (session_connections, MISSING_INVALIDATOR, std::bind (&Maschine2::notify_history_changed, this), this);
 
 	/* Actions */
-	Glib::RefPtr<Gtk::Action> act;
+	Glib::RefPtr<Gtk::ToggleAction> tact;
+	Glib::RefPtr<Gtk::RadioAction> ract;
 #if 0
-	act = ActionManager::get_action (X_("Editor"), X_("ToggleMeasureVisibility"));
-	if (act) {
-		Glib::RefPtr<Gtk::ToggleAction> tact = Glib::RefPtr<Gtk::ToggleAction>::cast_dynamic (act);
-		tact->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_grid_change));
-	}
+	tact = ActionManager::find_toggle_action (X_("Editor"), X_("ToggleMeasureVisibility"));
+	tact->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_grid_change));
 #endif
-	act = ActionManager::get_action (X_("Editor"), X_("snap-off"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		ract->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_snap_change));
-	}
-	act = ActionManager::get_action (X_("Editor"), X_("snap-magnetic"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		ract->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_snap_change));
-	}
-	act = ActionManager::get_action (X_("Editor"), X_("snap-normal"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		ract->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_snap_change));
-	}
+	ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-off"));
+	ract->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_snap_change));
+
+	ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-magnetic"));
+	ract->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_snap_change));
+
+	ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-normal"));
+	ract->signal_toggled ().connect (sigc::mem_fun (*this, &Maschine2::notify_snap_change));
 
 	/* Surface events */
-	_ctrl->button (M2Contols::Play)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_play, this));
-	_ctrl->button (M2Contols::Rec)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_record, this));
-	_ctrl->button (M2Contols::Loop)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_loop, this));
-	_ctrl->button (M2Contols::Metronom)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_metronom, this));
-	_ctrl->button (M2Contols::GotoStart)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_rewind, this));
-	_ctrl->button (M2Contols::FastRewind)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "Transport", "RewindSlow"));
-	_ctrl->button (M2Contols::FastForward)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "Transport", "ForwardSlow"));
-	_ctrl->button (M2Contols::Panic)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "MIDI", "panic"));
-	_ctrl->button (M2Contols::JumpForward)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "Editor", "jump-forward-to-mark"));
-	_ctrl->button (M2Contols::JumpBackward)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "Editor", "jump-backward-to-mark"));
+	_ctrl->button (M2Contols::Play)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_play, this));
+	_ctrl->button (M2Contols::Rec)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_record, this));
+	_ctrl->button (M2Contols::Loop)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_loop, this));
+	_ctrl->button (M2Contols::Metronom)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_metronom, this));
+	_ctrl->button (M2Contols::GotoStart)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_rewind, this));
+	_ctrl->button (M2Contols::FastRewind)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "Transport", "RewindSlow"));
+	_ctrl->button (M2Contols::FastForward)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "Transport", "ForwardSlow"));
+	_ctrl->button (M2Contols::Panic)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "MIDI", "panic"));
+	_ctrl->button (M2Contols::JumpForward)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "Editor", "jump-forward-to-mark"));
+	_ctrl->button (M2Contols::JumpBackward)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "Editor", "jump-backward-to-mark"));
 
-	_ctrl->button (M2Contols::Grid)->pressed.connect (button_connections, invalidator (*this), boost::bind (&Maschine2::button_snap_pressed, this), gui_context());
-	_ctrl->button (M2Contols::Grid)->released.connect (button_connections, invalidator (*this), boost::bind (&Maschine2::button_snap_released, this), gui_context());
-	_ctrl->button (M2Contols::Grid)->changed.connect (button_connections, invalidator (*this), boost::bind (&Maschine2::button_snap_changed, this, _1), gui_context());
+	_ctrl->button (M2Contols::Grid)->pressed.connect (button_connections, invalidator (*this), std::bind (&Maschine2::button_snap_pressed, this), gui_context());
+	_ctrl->button (M2Contols::Grid)->released.connect (button_connections, invalidator (*this), std::bind (&Maschine2::button_snap_released, this), gui_context());
+	_ctrl->button (M2Contols::Grid)->changed.connect (button_connections, invalidator (*this), std::bind (&Maschine2::button_snap_changed, this, _1), gui_context());
 
-	_ctrl->button (M2Contols::Save)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "Common", "Save"));
-	_ctrl->button (M2Contols::Undo)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "Editor", "undo"));
-	_ctrl->button (M2Contols::Redo)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_action, this, "Editor", "redo"));
+	_ctrl->button (M2Contols::Save)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "Common", "Save"));
+	_ctrl->button (M2Contols::Undo)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "Editor", "undo"));
+	_ctrl->button (M2Contols::Redo)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_action, this, "Editor", "redo"));
 
-	_ctrl->button (M2Contols::MasterVolume)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::handle_master_change, this, MST_VOLUME));
-	_ctrl->button (M2Contols::MasterTempo)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::handle_master_change, this, MST_TEMPO));
+	_ctrl->button (M2Contols::MasterVolume)->released.connect_same_thread (button_connections, std::bind (&Maschine2::handle_master_change, this, MST_VOLUME));
+	_ctrl->button (M2Contols::MasterTempo)->released.connect_same_thread (button_connections, std::bind (&Maschine2::handle_master_change, this, MST_TEMPO));
 
-	_ctrl->button (M2Contols::EncoderWheel)->released.connect_same_thread (button_connections, boost::bind (&Maschine2::button_encoder, this));
-	_ctrl->encoder (0)->changed.connect_same_thread (button_connections, boost::bind (&Maschine2::encoder_master, this, _1));
+	_ctrl->button (M2Contols::EncoderWheel)->released.connect_same_thread (button_connections, std::bind (&Maschine2::button_encoder, this));
+	_ctrl->encoder (0)->changed.connect_same_thread (button_connections, std::bind (&Maschine2::encoder_master, this, _1));
 
 	for (unsigned int pad = 0; pad < 16; ++pad) {
-		_ctrl->pad (pad)->event.connect_same_thread (button_connections, boost::bind (&Maschine2::pad_event, this, pad, _1, _2));
-		_ctrl->pad (pad)->changed.connect_same_thread (button_connections, boost::bind (&Maschine2::pad_change, this, pad, _1));
+		_ctrl->pad (pad)->event.connect_same_thread (button_connections, std::bind (&Maschine2::pad_event, this, pad, _1, _2));
+		_ctrl->pad (pad)->changed.connect_same_thread (button_connections, std::bind (&Maschine2::pad_change, this, pad, _1));
 	}
 
 	/* set initial values */
@@ -118,15 +109,15 @@ void
 Maschine2::notify_record_state_changed ()
 {
 	switch (session->record_status ()) {
-		case Session::Disabled:
+		case Disabled:
 			_ctrl->button (M2Contols::Rec)->set_color (0);
 			_ctrl->button (M2Contols::Rec)->set_blinking (false);
 			break;
-		case Session::Enabled:
+		case Enabled:
 			_ctrl->button (M2Contols::Rec)->set_color (COLOR_WHITE);
 			_ctrl->button (M2Contols::Rec)->set_blinking (true);
 			break;
-		case Session::Recording:
+		case Recording:
 			_ctrl->button (M2Contols::Rec)->set_color (COLOR_WHITE);
 			_ctrl->button (M2Contols::Rec)->set_blinking (false);
 			break;
@@ -136,7 +127,7 @@ Maschine2::notify_record_state_changed ()
 void
 Maschine2::notify_transport_state_changed ()
 {
-	if (session->transport_rolling ()) {
+	if (transport_rolling ()) {
 		_ctrl->button (M2Contols::Play)->set_color (COLOR_WHITE);
 	} else {
 		_ctrl->button (M2Contols::Play)->set_color (0);
@@ -167,11 +158,8 @@ Maschine2::notify_parameter_changed (std::string param)
 void
 Maschine2::notify_grid_change ()
 {
-	Glib::RefPtr<Gtk::Action> act = ActionManager::get_action (X_("Editor"), X_("ToggleMeasureVisibility"));
-	if (act) {
-		Glib::RefPtr<Gtk::ToggleAction> tact = Glib::RefPtr<Gtk::ToggleAction>::cast_dynamic (act);
-		_ctrl->button (M2Contols::Grid)->set_color (tact->get_active () ? COLOR_WHITE : 0);
-	}
+	Glib::RefPtr<Gtk::ToggleAction> tact = ActionManager::find_toggle_action (X_("Editor"), X_("ToggleMeasureVisibility"));
+	_ctrl->button (M2Contols::Grid)->set_color (tact->get_active () ? COLOR_WHITE : 0);
 }
 #endif
 
@@ -183,16 +171,10 @@ Maschine2::notify_snap_change ()
 		return;
 	}
 
-	Glib::RefPtr<Gtk::Action> act = ActionManager::get_action (X_("Editor"), X_("snap-magnetic"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		if (ract->get_active ()) { rgba = COLOR_GRAY; }
-	}
-	act = ActionManager::get_action (X_("Editor"), X_("snap-normal"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		if (ract->get_active ()) { rgba = COLOR_WHITE; }
-	}
+	Glib::RefPtr<Gtk::RadioAction> ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-magnetic"));
+	if (ract->get_active ()) { rgba = COLOR_GRAY; }
+	ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-normal"));
+	if (ract->get_active ()) { rgba = COLOR_WHITE; }
 
 	_ctrl->button (M2Contols::Grid)->set_color (rgba);
 }
@@ -216,7 +198,7 @@ Maschine2::notify_history_changed ()
 void
 Maschine2::button_play ()
 {
-	if (session->transport_rolling ()) {
+	if (transport_rolling ()) {
 		transport_stop ();
 	} else {
 		transport_play ();
@@ -244,7 +226,7 @@ Maschine2::button_metronom ()
 void
 Maschine2::button_rewind ()
 {
-	goto_start (session->transport_rolling ());
+	goto_start (transport_rolling ());
 }
 
 void
@@ -257,11 +239,8 @@ Maschine2::button_action (const std::string& group, const std::string& item)
 void
 Maschine2::button_grid ()
 {
-	Glib::RefPtr<Gtk::Action> act = ActionManager::get_action (X_("Editor"), X_("ToggleMeasureVisibility"));
-	if (act) {
-		Glib::RefPtr<Gtk::ToggleAction> tact = Glib::RefPtr<Gtk::ToggleAction>::cast_dynamic (act);
-		tact->set_active (!tact->get_active ());
-	}
+	Glib::RefPtr<Gtk::ToggleAction> tact = ActionManager::find_toggle_action (X_("Editor"), X_("ToggleMeasureVisibility"));
+	tact->set_active (!tact->get_active ());
 }
 #endif
 
@@ -288,34 +267,18 @@ Maschine2::button_snap_released ()
 	_ctrl->button (M2Contols::Grid)->set_blinking (false);
 
 	const char* action = 0;
-	Glib::RefPtr<Gtk::Action> act = ActionManager::get_action (X_("Editor"), X_("snap-off"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		if (ract->get_active ()) { action = "snap-normal"; }
-	}
 
-	act = ActionManager::get_action (X_("Editor"), X_("snap-normal"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		if (ract->get_active ()) { action = "snap-magnetic"; }
-	}
+	Glib::RefPtr<Gtk::RadioAction> ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-off"));
+	if (ract->get_active ()) { action = "snap-normal"; }
 
-	act = ActionManager::get_action (X_("Editor"), X_("snap-magnetic"));
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		if (ract->get_active ()) { action = "snap-off"; }
-	}
+	ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-normal"));
+	if (ract->get_active ()) { action = "snap-magnetic"; }
 
-	if (!action) {
-		assert (0);
-		return;
-	}
+	ract = ActionManager::get_radio_action (X_("Editor"), X_("snap-magnetic"));
+	if (ract->get_active ()) { action = "snap-off"; }
 
-	act = ActionManager::get_action (X_("Editor"), action);
-	if (act) {
-		Glib::RefPtr<Gtk::RadioAction> ract = Glib::RefPtr<Gtk::RadioAction>::cast_dynamic (act);
-		ract->set_active (true);
-	}
+	ract = ActionManager::get_radio_action (X_("Editor"), action);
+	ract->set_active (true);
 }
 
 /* Master mode + state -- main encoder fn */
@@ -361,11 +324,11 @@ Maschine2::notify_master_change ()
 	}
 }
 
-static void apply_ac_delta (boost::shared_ptr<AutomationControl> ac, double d) {
+static void apply_ac_delta (std::shared_ptr<AutomationControl> ac, double d) {
 	if (!ac) {
 		return;
 	}
-	ac->set_value (ac->interface_to_internal (min (ac->upper(), max (ac->lower(), ac->internal_to_interface (ac->get_value()) + d))),
+	ac->set_value (ac->interface_to_internal (std::min (ac->upper(), std::max (ac->lower(), ac->internal_to_interface (ac->get_value()) + d))),
 			PBD::Controllable::UseGroup);
 }
 
@@ -385,9 +348,9 @@ Maschine2::encoder_master (int delta)
 		case MST_NONE:
 			if (_ctrl->button (M2Contols::BtnShift, M2Contols::ModNone)->active ()) {
 				if (delta > 0) {
-					AccessAction ("Editor", "temporal-zoom-in");
+					AccessAction ("Editing", "temporal-zoom-in");
 				} else {
-					AccessAction ("Editor", "temporal-zoom-out");
+					AccessAction ("Editing", "temporal-zoom-out");
 				}
 			} else {
 				if (delta > 0) {
@@ -399,7 +362,7 @@ Maschine2::encoder_master (int delta)
 			break;
 		case MST_VOLUME:
 			{
-				boost::shared_ptr<Route> master = session->master_out ();
+				std::shared_ptr<Route> master = session->master_out ();
 				if (master) {
 					// TODO consider _ctrl->button (M2Contols::EncoderWheel)->is_pressed() for fine grained
 					const double factor = _ctrl->button (M2Contols::BtnShift, M2Contols::ModNone)->active () ? 256. : 32.;

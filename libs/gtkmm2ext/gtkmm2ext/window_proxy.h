@@ -1,31 +1,32 @@
 /*
-  Copyright (C) 2015 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2015-2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __gtkmm2ext_window_proxy_h__
 #define __gtkmm2ext_window_proxy_h__
 
 #include <string>
-#include <gdkmm/event.h>
+#include <ydkmm/event.h>
 #include <glibmm/refptr.h>
 #include <sigc++/trackable.h>
 
 #include "pbd/statefuldestructible.h"
+
+#include <ytkmm/action.h>
 
 #include "gtkmm2ext/visibility.h"
 
@@ -40,8 +41,7 @@ class VisibilityTracker;
 
 class LIBGTKMM2EXT_API WindowProxy : public PBD::StatefulDestructible, public virtual sigc::trackable
 {
-  public:
-	WindowProxy (const std::string& name);
+public:
 	WindowProxy (const std::string& name, const std::string& menu_name);
 	WindowProxy (const std::string& name, const std::string& menu_name, const XMLNode&);
 	virtual ~WindowProxy();
@@ -52,8 +52,8 @@ class LIBGTKMM2EXT_API WindowProxy : public PBD::StatefulDestructible, public vi
 	void present ();
 	void maybe_show ();
 
-	bool visible() const;
-	bool fully_visible() const;
+	virtual bool visible() const;
+	virtual bool fully_visible() const;
 	const std::string& name() const { return _name; }
 	const std::string& menu_name() const { return _menu_name; }
 
@@ -64,10 +64,12 @@ class LIBGTKMM2EXT_API WindowProxy : public PBD::StatefulDestructible, public vi
 	void drop_window ();
 	void use_window (Gtk::Window&);
 
+	void set_transient_for (Gtk::Window&);
+
 	virtual Gtk::Window* get (bool create = false) = 0;
 
 	virtual int set_state (const XMLNode&, int version);
-	virtual XMLNode& get_state ();
+	virtual XMLNode& get_state () const;
 
 	enum StateMask {
 		Position = 0x1,
@@ -84,7 +86,7 @@ class LIBGTKMM2EXT_API WindowProxy : public PBD::StatefulDestructible, public vi
 	sigc::signal0<void> signal_map;
 	sigc::signal0<void> signal_unmap;
 
-  protected:
+protected:
 	std::string  _name;
 	std::string  _menu_name;
 	Glib::RefPtr<Gtk::Action> _action;

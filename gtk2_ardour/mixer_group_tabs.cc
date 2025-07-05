@@ -1,29 +1,31 @@
 /*
-    Copyright (C) 2009 Paul Davis
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <boost/foreach.hpp>
 
 #include "gtkmm2ext/utils.h"
 
 #include "ardour/route_group.h"
 
 #include "gtkmm2ext/colors.h"
+#include "gtkmm2ext/rgb_macros.h"
 
 #include "mixer_group_tabs.h"
 #include "mixer_strip.h"
@@ -68,7 +70,7 @@ MixerGroupTabs::compute_tabs () const
 			continue;
 		}
 
-		if (s->route()->is_master() || s->route()->is_monitor() || !s->marked_for_display()) {
+		if (s->route()->is_main_bus () || !s->marked_for_display()) {
 			continue;
 		}
 #ifdef MIXBUS
@@ -114,6 +116,10 @@ MixerGroupTabs::draw_tab (cairo_t* cr, Tab const & tab)
 
 	if (tab.group && tab.group->is_active()) {
 		Gtkmm2ext::color_to_rgba (tab.color, r, g, b, a);
+	} else if (!tab.group && _dragging_new_tab) {
+		Gdk::Color col = ARDOUR_UI_UTILS::round_robin_palette_color (true);
+		color_t ct = Gtkmm2ext::gdk_color_to_rgba (col);
+		Gtkmm2ext::color_to_rgba (ct, r, g, b, a);
 	} else {
 		Gtkmm2ext::color_to_rgba (UIConfiguration::instance().color ("inactive group tab"), r, g, b, a);
 	}
@@ -170,7 +176,7 @@ MixerGroupTabs::routes_for_tab (Tab const * t) const
 			continue;
 		}
 
-		if (s->route()->is_master() || s->route()->is_monitor() || !s->marked_for_display()) {
+		if (s->route()->is_main_bus () || !s->marked_for_display()) {
 			continue;
 		}
 
@@ -195,8 +201,8 @@ RouteList
 MixerGroupTabs::selected_routes () const
 {
 	RouteList rl;
-	BOOST_FOREACH (AxisView* r, _mixer->selection().axes) {
-		boost::shared_ptr<Route> rp = boost::dynamic_pointer_cast<Route> (r->stripable());
+	for (AxisView* r : _mixer->selection().axes) {
+		std::shared_ptr<Route> rp = std::dynamic_pointer_cast<Route> (r->stripable());
 		if (rp) {
 			rl.push_back (rp);
 		}

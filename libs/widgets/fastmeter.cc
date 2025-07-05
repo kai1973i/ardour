@@ -1,20 +1,21 @@
 /*
-    Copyright (C) 2003-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2003-2006 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <cmath>
@@ -24,10 +25,12 @@
 #include <stdlib.h>
 
 #include <glibmm.h>
-#include <gdkmm.h>
 
 #include "gtkmm2ext/utils.h"
 #include "widgets/fastmeter.h"
+
+#include "widgets/ui_config.h"
+
 
 #define UINT_TO_RGB(u,r,g,b) { (*(r)) = ((u)>>16)&0xff; (*(g)) = ((u)>>8)&0xff; (*(b)) = (u)&0xff; }
 #define UINT_TO_RGBA(u,r,g,b,a) { UINT_TO_RGB(((u)>>8),r,g,b); (*(a)) = (u)&0xff; }
@@ -68,13 +71,14 @@ FastMeter::FastMeter (long hold, unsigned long dimen, Orientation o, int len,
 	, current_level(0)
 	, current_peak(0)
 	, highlight(false)
+	, outline_color(0)
 {
 	last_peak_rect.width = 0;
 	last_peak_rect.height = 0;
 	last_peak_rect.x = 0;
 	last_peak_rect.y = 0;
 
-	no_rgba_overlay = ! Glib::getenv("NO_METER_SHADE").empty();
+	no_rgba_overlay = ! Glib::getenv("ARDOUR_NO_METER_SHADE").empty();
 
 	_clr[0] = clr0;
 	_clr[1] = clr1;
@@ -124,6 +128,8 @@ FastMeter::FastMeter (long hold, unsigned long dimen, Orientation o, int len,
 
 	request_width = pixrect.width + 2;
 	request_height= pixrect.height + 2;
+
+	outline_color = UIConfigurationBase::instance().color ("meter outline");
 
 	clear ();
 }
@@ -560,7 +566,7 @@ FastMeter::vertical_expose (cairo_t* cr, cairo_rectangle_t* area)
 	GdkRectangle background;
 	GdkRectangle eventarea;
 
-	cairo_set_source_rgb (cr, 0, 0, 0); // black
+	Gtkmm2ext::set_source_rgba (cr, outline_color);
 	rounded_rectangle (cr, 0, 0, pixwidth + 2, pixheight + 2, 2);
 	cairo_stroke (cr);
 
@@ -633,7 +639,7 @@ FastMeter::horizontal_expose (cairo_t* cr, cairo_rectangle_t* area)
 	GdkRectangle background;
 	GdkRectangle eventarea;
 
-	cairo_set_source_rgb (cr, 0, 0, 0); // black
+	Gtkmm2ext::set_source_rgba (cr, outline_color);
 	rounded_rectangle (cr, 0, 0, pixwidth + 2, pixheight + 2, 2);
 	cairo_stroke (cr);
 
@@ -703,7 +709,7 @@ FastMeter::set (float lvl, float peak)
 	if (pixwidth <= 0 || pixheight <=0) return;
 
 	if (peak == -1) {
-		if (lvl >= current_peak) {
+		if (lvl >= current_peak && lvl > 0) {
 			current_peak = lvl;
 			hold_state = hold_cnt;
 		}
@@ -847,7 +853,7 @@ FastMeter::queue_horizontal_redraw (const Glib::RefPtr<Gdk::Window>& win, float 
 	GdkRegion* region = 0;
 	bool queue = false;
 
-	if (rect.height != 0) {
+	if (rect.width != 0) {
 
 		/* ok, first region to draw ... */
 

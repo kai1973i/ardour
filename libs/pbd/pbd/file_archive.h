@@ -1,24 +1,27 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #ifndef _pbd_archive_h_
 #define _pbd_archive_h_
 
+#include <atomic>
+
+#include <archive.h>
+#include <archive_entry.h>
 #include <pthread.h>
 
 #include "pbd/signals.h"
@@ -29,14 +32,19 @@
 
 
 namespace PBD {
+class Progress;
 
 class LIBPBD_API FileArchive
 {
 	public:
-		FileArchive (const std::string& url);
+		FileArchive (const std::string& url, Progress* p = NULL);
+		~FileArchive ();
 
 		int inflate (const std::string& destdir);
 		std::vector<std::string> contents ();
+
+		std::string next_file_name ();
+		int extract_current_file (const std::string& destpath);
 
 		/* these are mapped to libarchive's lzmaz
 		 * compression level 0..9
@@ -50,13 +58,12 @@ class LIBPBD_API FileArchive
 		int create (const std::string& srcdir, CompressionLevel compression_level = CompressGood);
 		int create (const std::map <std::string, std::string>& filemap, CompressionLevel compression_level = CompressGood);
 
-		PBD::Signal2<void, size_t, size_t> progress; // TODO
-
 		struct MemPipe {
 			public:
-				MemPipe ()
+				MemPipe (Progress* p)
 					: data (NULL)
-					, progress (0)
+					, query_length (false)
+					, progress (p)
 				{
 					pthread_mutex_init (&_lock, NULL);
 					pthread_cond_init (&_ready, NULL);
@@ -81,7 +88,7 @@ class LIBPBD_API FileArchive
 					size = 0;
 					done = false;
 					processed = 0;
-					length = -1;
+					length = 0;
 					unlock ();
 				}
 
@@ -95,9 +102,11 @@ class LIBPBD_API FileArchive
 				size_t   size;
 				bool     done;
 
-				double   processed;
-				double   length;
-				FileArchive* progress;
+				size_t processed;
+				size_t length;
+				bool   query_length;
+
+				Progress* progress;
 
 			private:
 				pthread_mutex_t _lock;
@@ -106,7 +115,8 @@ class LIBPBD_API FileArchive
 
 		struct Request {
 			public:
-				Request (const std::string& u)
+				Request (const std::string& u, Progress* p)
+					: mp (p)
 				{
 					if (u.size () > 0) {
 						url = strdup (u.c_str());
@@ -133,7 +143,6 @@ class LIBPBD_API FileArchive
 		};
 
 	private:
-
 		int process_file ();
 		int process_url ();
 
@@ -148,8 +157,17 @@ class LIBPBD_API FileArchive
 
 		bool is_url ();
 
+		struct archive* setup_file_archive ();
+
+		std::string fetch (const std::string & url, const std::string& destdir) const;
+
 		Request   _req;
 		pthread_t _tid;
+
+		Progress* _progress;
+
+		struct archive_entry* _current_entry;
+		struct archive* _archive;
 };
 
 } /* namespace */

@@ -1,28 +1,30 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Author: Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2013-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include <algorithm>
 #include <sigc++/bind.h>
 #include "ardour/tempo.h"
 
 #include "pbd/file_utils.h"
 #include "pbd/types_convert.h"
+#include "ardour/filesystem_paths.h"
 #include "ardour/session_directory.h"
 
 #include "ardour_ui.h"
@@ -32,7 +34,6 @@
 #include "utils_videotl.h"
 #include "rgb_macros.h"
 #include "video_timeline.h"
-#include "video_tool_paths.h"
 
 #include <gtkmm2ext/utils.h>
 #include <pthread.h>
@@ -70,8 +71,8 @@ VideoTimeLine::VideoTimeLine (PublicEditor *ed, ArdourCanvas::Container *vbg, in
 	video_server_url = video_get_server_url(Config);
 	server_docroot   = video_get_docroot(Config);
 
-	VtlUpdate.connect (*this, invalidator (*this), boost::bind (&PublicEditor::queue_visual_videotimeline_update, editor), gui_context());
-	GuiUpdate.connect (*this, invalidator (*this), boost::bind (&VideoTimeLine::gui_update, this, _1), gui_context());
+	VtlUpdate.connect (*this, invalidator (*this), std::bind (&PublicEditor::queue_visual_videotimeline_update, editor), gui_context());
+	GuiUpdate.connect (*this, invalidator (*this), std::bind (&VideoTimeLine::gui_update, this, _1), gui_context());
 }
 
 VideoTimeLine::~VideoTimeLine ()
@@ -142,7 +143,7 @@ VideoTimeLine::set_session (ARDOUR::Session *s)
 	SessionHandlePtr::set_session (s);
 	if (!_session) { return ; }
 
-	_session->SessionSaveUnderway.connect_same_thread (sessionsave, boost::bind (&VideoTimeLine::save_session, this));
+	_session->SessionSaveUnderway.connect_same_thread (sessionsave, std::bind (&VideoTimeLine::save_session, this));
 
 	XMLNode* node = _session->extra_xml (X_("Videotimeline"));
 
@@ -223,7 +224,7 @@ VideoTimeLine::set_state (const XMLNode& node, int /*version*/)
 }
 
 XMLNode&
-VideoTimeLine::get_state ()
+VideoTimeLine::get_state () const
 {
 	XMLNode* node = new XMLNode (X_("Videotimeline"));
 	node->set_property (X_("VideoOffset"), video_offset_p);
@@ -328,7 +329,7 @@ VideoTimeLine::update_video_timeline()
 		/* high-zoom: need space between successive video-frames */
 		vtl_dist = rint(apv);
 	} else {
-		/* continous timeline: skip video-frames */
+		/* continuous timeline: skip video-frames */
 		vtl_dist = ceil(display_vframe_width * samples_per_pixel / apv) * apv;
 	}
 
@@ -370,7 +371,7 @@ VideoTimeLine::update_video_timeline()
 	while (video_frames.size() < visible_video_frames) {
 		VideoImageFrame *frame;
 		frame = new VideoImageFrame(*editor, *videotl_group, display_vframe_width, bar_height, video_server_url, translated_filename());
-		frame->ImgChanged.connect (*this, invalidator (*this), boost::bind (&PublicEditor::queue_visual_videotimeline_update, editor), gui_context());
+		frame->ImgChanged.connect (*this, invalidator (*this), std::bind (&PublicEditor::queue_visual_videotimeline_update, editor), gui_context());
 		video_frames.push_back(frame);
 	}
 
@@ -544,7 +545,7 @@ VideoTimeLine::check_server ()
 			, video_server_url.c_str()
 			, (video_server_url.length()>0 && video_server_url.at(video_server_url.length()-1) == '/')?"":"/"
 			);
-	char* res = ArdourCurl::http_get (url, NULL);
+	char* res = ArdourCurl::http_get (url, NULL, false);
 	if (res) {
 		if (strstr(res, "status: ok, online.")) { ok = true; }
 		free(res);
@@ -566,7 +567,7 @@ VideoTimeLine::check_server_docroot ()
 			, video_server_url.c_str()
 			, (video_server_url.length()>0 && video_server_url.at(video_server_url.length()-1) == '/')?"":"/"
 			);
-	char* res = ArdourCurl::http_get (url, NULL);
+	char* res = ArdourCurl::http_get (url, NULL, false);
 	if (!res) {
 		return false;
 	}
@@ -662,7 +663,7 @@ VideoTimeLine::flush_cache () {
 			, video_server_url.c_str()
 			, (video_server_url.length()>0 && video_server_url.at(video_server_url.length()-1) == '/')?"":"/"
 			);
-	char* res = ArdourCurl::http_get (url, NULL);
+	char* res = ArdourCurl::http_get (url, NULL, false);
 	if (res) {
 		free (res);
 	}
@@ -721,12 +722,14 @@ VideoTimeLine::find_xjadeo () {
 			<< endmsg;
 	}
 
+	volatile bool terminated = false;
+
 	if (found_xjadeo ()) {
-		ARDOUR::SystemExec version_check(_xjadeo_bin, X_("--version"));
+		ARDOUR::SystemExec version_check (_xjadeo_bin, X_("--version"), true);
 		xjadeo_version = "";
-		version_check.ReadStdout.connect_same_thread (*this, boost::bind (&VideoTimeLine::xjadeo_readversion, this, _1 ,_2));
-		version_check.Terminated.connect_same_thread (*this, boost::bind (&VideoTimeLine::xjadeo_readversion, this, "\n" ,1));
-		if (version_check.start(2)) {
+		version_check.ReadStdout.connect_same_thread (*this, std::bind (&VideoTimeLine::xjadeo_readversion, this, _1 ,_2));
+		version_check.Terminated.connect_same_thread (*this, [&] { xjadeo_readversion ("\n",1); terminated = true;} );
+		if (version_check.start (ARDOUR::SystemExec::MergeWithStdin)) {
 			warning << _(
 					"Video-monitor 'xjadeo' cannot be launched."
 					) << endmsg;
@@ -741,8 +744,14 @@ VideoTimeLine::find_xjadeo () {
 #endif
 
 		int timeout = 300;
-		while (xjadeo_version.empty() && --timeout) {
+		while (!terminated && --timeout) {
 			Glib::usleep(10000);
+		}
+
+		if (!timeout) {
+			_xjadeo_bin = X_("");
+			warning << _("Video-monitor 'xjadeo' version detection timed out.") << endmsg;
+			return;
 		}
 
 		bool v_ok = false;
@@ -755,6 +764,9 @@ VideoTimeLine::find_xjadeo () {
 				if (v_major >= 1) v_ok = true;
 				else if (v_major == 0 && v_minor >= 8) v_ok = true;
 				else if (v_major == 0 && v_minor >= 7 && v_micro >= 7) v_ok = true;
+			}
+			if (v_ok) {
+				info << string_compose ("xjadeo version: %1.%2.%3", v_major, v_minor, v_micro) << endmsg;
 			}
 		}
 		if (!v_ok) {
@@ -791,11 +803,14 @@ VideoTimeLine::find_harvid () {
 	if (harvid_bin.empty ()) {
 		return;
 	}
-	ARDOUR::SystemExec version_check(harvid_bin, X_("--version"));
+
+	volatile bool terminated = false;
+
+	ARDOUR::SystemExec version_check (harvid_bin, X_("--version"), true);
 	harvid_version = "";
-	version_check.ReadStdout.connect_same_thread (*this, boost::bind (&VideoTimeLine::harvid_readversion, this, _1 ,_2));
-	version_check.Terminated.connect_same_thread (*this, boost::bind (&VideoTimeLine::harvid_readversion, this, "\n" ,1));
-	if (version_check.start(2)) {
+	version_check.ReadStdout.connect_same_thread (*this, std::bind (&VideoTimeLine::harvid_readversion, this, _1 ,_2));
+	version_check.Terminated.connect_same_thread (*this, [&] { harvid_readversion ("\n",1); terminated = true;} );
+	if (version_check.start (ARDOUR::SystemExec::MergeWithStdin)) {
 		return;
 	}
 
@@ -806,8 +821,13 @@ VideoTimeLine::find_harvid () {
 #endif
 
 	int timeout = 300;
-	while (harvid_version.empty() && --timeout) {
+	while (!terminated && --timeout) {
 		Glib::usleep(10000);
+	}
+
+	if (!timeout) {
+		warning << _("Video-decoder 'harvid' version detection timed out.") << endmsg;
+		return;
 	}
 
 	size_t vo = harvid_version.find("harvid v");
@@ -830,7 +850,7 @@ VideoTimeLine::open_video_monitor() {
 		vmonitor->set_session(_session);
 		vmonitor->set_offset(video_offset);
 		vmonitor->Terminated.connect (sigc::mem_fun (*this, &VideoTimeLine::terminated_video_monitor));
-		vmonitor->UiState.connect (*this, invalidator (*this), boost::bind (&VideoTimeLine::gui_update, this, _1), gui_context());
+		vmonitor->UiState.connect (*this, invalidator (*this), std::bind (&VideoTimeLine::gui_update, this, _1), gui_context());
 	} else if (vmonitor->is_started()) {
 		return;
 	}

@@ -1,27 +1,32 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2015 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#ifndef __gtk2_ardour_monitor_section_h__
+#define __gtk2_ardour_monitor_section_h__
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/box.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/sizegroup.h>
-#include <gtkmm/table.h>
-#include <gtkmm/viewport.h>
+#include <ytkmm/box.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/sizegroup.h>
+#include <ytkmm/table.h>
+#include <ytkmm/viewport.h>
 
 #include "gtkmm2ext/bindings.h"
 
@@ -29,11 +34,10 @@
 #include "widgets/ardour_knob.h"
 #include "widgets/ardour_display.h"
 
+#include "io_button.h"
 #include "level_meter.h"
 #include "route_ui.h"
-#include "monitor_selector.h"
 
-#include "plugin_selector.h"
 #include "processor_box.h"
 #include "processor_selection.h"
 
@@ -41,10 +45,12 @@ namespace ArdourWidgets {
 	class TearOff;
 }
 
+class PluginSelector;
+
 class MonitorSection : public RouteUI, public Gtk::EventBox
 {
 public:
-	MonitorSection (ARDOUR::Session*);
+	MonitorSection ();
 	~MonitorSection ();
 
 	void set_session (ARDOUR::Session*);
@@ -53,7 +59,9 @@ public:
 
 	std::string state_id() const;
 
-	PluginSelector* plugin_selector() { return _plugin_selector; }
+	PluginSelector* plugin_selector();
+
+	void use_others_actions ();
 
 private:
 	Gtk::HBox hpacker;
@@ -91,47 +99,16 @@ private:
 	ArdourWidgets::ArdourDisplay*  solo_boost_display;
 	ArdourWidgets::ArdourDisplay*  solo_cut_display;
 
-	std::list<boost::shared_ptr<ARDOUR::Bundle> > output_menu_bundles;
-	Gtk::Menu output_menu;
-	MonitorSelectorWindow *_output_selector;
-	ArdourWidgets::ArdourButton* output_button;
-
-	void maybe_add_bundle_to_output_menu (boost::shared_ptr<ARDOUR::Bundle>, ARDOUR::BundleList const &);
-	void bundle_output_chosen (boost::shared_ptr<ARDOUR::Bundle>);
-	void update_output_display ();
-	void disconnect_output ();
-	void edit_output_configuration ();
+	IOButton _output_button;
 
 	void populate_buttons ();
 	void map_state ();
 
-	boost::shared_ptr<ARDOUR::MonitorProcessor> _monitor;
-	boost::shared_ptr<ARDOUR::Route> _route;
+	std::shared_ptr<ARDOUR::MonitorProcessor> _monitor;
 
-	enum MonitorActions {
-		MonitorMono,
-		MonitorCutAll,
-		MonitorDimAll,
-		ToggleExclusiveSolo,
-		ToggleMuteOverridesSolo,
-		SoloUseInPlace,
-		SoloUseAFL,
-		SoloUsePFL,
-		ToggleMonitorProcessorBox
-	};
-
-	enum ChannelActions {
-		CutChannel,
-		DimChannel,
-		SoloChannel,
-		InvertChannel
-	};
-
-	static Glib::RefPtr<Gtk::ActionGroup> monitor_actions;
-	static void register_actions ();
-
-	static void action_proxy0 (enum MonitorActions);
-	static void action_proxy1 (enum ChannelActions, uint32_t);
+	Glib::RefPtr<Gtk::ActionGroup> monitor_actions;
+	Glib::RefPtr<Gtk::ActionGroup> solo_actions;
+	void register_actions ();
 
 	void cut_channel (uint32_t);
 	void dim_channel (uint32_t);
@@ -146,8 +123,6 @@ private:
 	void dim_level_changed ();
 	void solo_boost_changed ();
 	void gain_value_changed ();
-	gint output_press (GdkEventButton *);
-	gint output_release (GdkEventButton *);
 
 	ArdourWidgets::ArdourButton solo_in_place_button;
 	ArdourWidgets::ArdourButton afl_button;
@@ -179,33 +154,35 @@ private:
 	void isolated_changed ();
 
 	PBD::ScopedConnection config_connection;
-	PBD::ScopedConnectionList control_connections;
-	PBD::ScopedConnectionList output_changed_connections;
+	PBD::ScopedConnectionList connections;
+	PBD::ScopedConnectionList route_connections;
 
 	bool _inhibit_solo_model_update;
 
 	void assign_controllables ();
-
-	void port_connected_or_disconnected (boost::weak_ptr<ARDOUR::Port>, boost::weak_ptr<ARDOUR::Port>);
+	void unassign_controllables ();
 
 	void update_processor_box ();
 
 	void route_property_changed (const PBD::PropertyChange&) {}
 
 	ProcessorBox* insert_box;
-	PluginSelector* _plugin_selector;
 	ProcessorSelection _rr_selection;
-	void help_count_processors (boost::weak_ptr<ARDOUR::Processor> p, uint32_t* cnt) const;
+	void help_count_processors (std::weak_ptr<ARDOUR::Processor> p, uint32_t* cnt) const;
 	uint32_t count_processors ();
 
 	void processors_changed (ARDOUR::RouteProcessorChange);
-	Glib::RefPtr<Gtk::Action> proctoggle;
+	Glib::RefPtr<Gtk::ToggleAction> proctoggle;
 	bool _ui_initialized;
 
-	static Gtkmm2ext::ActionMap myactions;
-	static Gtkmm2ext::Bindings* bindings;
+	Gtkmm2ext::Bindings* bindings;
 
-	static void load_bindings ();
+	void load_bindings ();
 	bool enter_handler (GdkEventCrossing*);
 	bool leave_handler (GdkEventCrossing*);
+
+	void toggle_use_monitor_section ();
+	void drop_route ();
 };
+
+#endif /* __gtk2_ardour_monitor_section_h__ */

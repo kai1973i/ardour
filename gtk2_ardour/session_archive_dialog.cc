@@ -1,27 +1,27 @@
 /*
-    Copyright (C) 2015 Paul Davis
-    Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "ardour/filename_extensions.h"
+
+#include "gtkmm2ext/utils.h"
 
 #include "session_archive_dialog.h"
 
@@ -34,24 +34,22 @@ using namespace ARDOUR;
 SessionArchiveDialog::SessionArchiveDialog ()
 	: ArdourDialog (_("Zip/Archive Current Session"))
 	, ProgressReporter ()
+	, format_Label (ARDOUR::session_archive_suffix)
 	, only_used_checkbox (_("Exclude unused audio sources"))
 {
 	VBox* vbox = get_vbox();
 
 	vbox->set_spacing (6);
 
-	format_selector.append_text (ARDOUR::session_archive_suffix);
-	format_selector.set_active_text (ARDOUR::session_archive_suffix);
+	encode_selector.append (_("None"));
+	encode_selector.append (_("FLAC 16bit"));
+	encode_selector.append (_("FLAC 24bit"));
+	encode_selector.set_active_text (_("FLAC 16bit")); // TODO remember
 
-	encode_selector.append_text (_("None"));
-	encode_selector.append_text (_("FLAC 16bit"));
-	encode_selector.append_text (_("FLAC 24bit"));
-	encode_selector.set_active_text ("FLAC 16bit"); // TODO remember
-
-	compression_selector.append_text (_("None"));
-	compression_selector.append_text (_("Fast"));
-	compression_selector.append_text (_("Good"));
-	compression_selector.set_active_text ("Good"); // TODO remember
+	compression_selector.append (_("None"));
+	compression_selector.append (_("Fast"));
+	compression_selector.append (_("Good"));
+	compression_selector.set_active_text (_("Good")); // TODO remember
 
 	Gtk::Table* table = manage (new Gtk::Table ());
 	table->set_col_spacings (10);
@@ -66,7 +64,7 @@ SessionArchiveDialog::SessionArchiveDialog ()
 	HBox* hbox = manage (new HBox);
 	hbox->set_spacing (6);
 	hbox->pack_start (name_entry, true, true);
-	hbox->pack_start (format_selector, false, false);
+	hbox->pack_start (format_Label, false, false);
 	table->attach (*hbox, 1, 2, row, row + 1, Gtk::FILL | Gtk::EXPAND, Gtk::SHRINK);
 
 	++row;
@@ -106,6 +104,7 @@ SessionArchiveDialog::SessionArchiveDialog ()
 	add_button (Stock::CANCEL, RESPONSE_CANCEL);
 	add_button (Stock::OK, RESPONSE_OK);
 
+	Gtkmm2ext::add_volume_shortcuts (target_folder_selector);
 	target_folder_selector.set_action (FILE_CHOOSER_ACTION_SELECT_FOLDER);
 	target_folder_selector.set_current_folder (Config->get_default_session_parent_dir ()); // TODO get/set default_archive_dir
 	name_entry.signal_changed().connect (sigc::mem_fun (*this, &SessionArchiveDialog::name_entry_changed));
@@ -123,7 +122,7 @@ SessionArchiveDialog::name_entry_changed ()
 		return;
 	}
 
-	std::string dir = Glib::build_filename (target_folder(), name_entry.get_text() + format_selector.get_active_text ());
+	std::string dir = Glib::build_filename (target_folder(), name_entry.get_text() + ARDOUR::session_archive_suffix);
 
 	if (Glib::file_test (dir, Glib::FILE_TEST_EXISTS)) {
 		set_response_sensitive (RESPONSE_OK, false);
@@ -229,10 +228,20 @@ SessionArchiveDialog::set_compression_level (PBD::FileArchive::CompressionLevel 
 }
 
 void
-SessionArchiveDialog::update_progress_gui (float p)
+SessionArchiveDialog::on_response (int response_id)
 {
 	set_response_sensitive (RESPONSE_OK, false);
-	set_response_sensitive (RESPONSE_CANCEL, false);
+	if (response_id != Gtk::RESPONSE_OK) {
+		set_response_sensitive (RESPONSE_CANCEL, false);
+		cancel ();
+	}
+	Gtk::Dialog::on_response (response_id);
+}
+
+void
+SessionArchiveDialog::update_progress_gui (float p)
+{
+
 	progress_bar.show ();
 	if (p < 0) {
 		progress_bar.set_text (_("Archiving Session"));

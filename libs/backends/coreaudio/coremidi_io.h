@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,9 +11,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef __libbackend_coremidi_io_h__
@@ -27,10 +27,10 @@
 #include <AudioToolbox/AudioToolbox.h>
 
 #include <map>
+#include <memory>
 #include <vector>
 #include <string>
 
-#include <boost/shared_ptr.hpp>
 #include "pbd/ringbuffer.h"
 
 namespace ARDOUR {
@@ -38,7 +38,7 @@ namespace ARDOUR {
 typedef struct _CoreMIDIPacket {
 	MIDITimeStamp timeStamp;
 	UInt16 length;
-	Byte data[256];
+	Byte data[1024];
 #if 0 // unused
 	_CoreMIDIPacket (MIDITimeStamp t, Byte *d, UInt16 l)
 		: timeStamp(t)
@@ -56,13 +56,14 @@ typedef struct _CoreMIDIPacket {
 		: timeStamp(other->timeStamp)
 		, length (other->length)
 	{
+		assert (length <= 1024);
 		if (length > 0) {
 			memcpy(data, other->data, length);
 		}
 	}
 } CoreMIDIPacket;
 
-typedef std::vector<boost::shared_ptr<CoreMIDIPacket> > CoreMIDIQueue;
+typedef std::vector<std::shared_ptr<CoreMIDIPacket> > CoreMIDIQueue;
 
 class CoreMidiIo {
 public:
@@ -72,11 +73,10 @@ public:
 	void start ();
 	void stop ();
 
-	void start_cycle ();
+	void start_cycle (MIDITimeStamp, double cycle_ns);
 
 	int send_event (uint32_t, double, const uint8_t *, const size_t);
-	int send_events (uint32_t, double, const void *);
-	size_t recv_event (uint32_t, double, uint64_t &, uint8_t *, size_t &);
+	size_t recv_event (uint32_t, uint64_t &, uint8_t *, size_t &);
 
 	uint32_t n_midi_inputs (void) const { return _n_midi_in; }
 	uint32_t n_midi_outputs (void) const { return _n_midi_out; }
@@ -109,7 +109,9 @@ private:
 	uint32_t          _n_midi_in;
 	uint32_t          _n_midi_out;
 
-	MIDITimeStamp     _time_at_cycle_start;
+	MIDITimeStamp     _send_start;
+	MIDITimeStamp     _recv_start;
+	MIDITimeStamp     _recv_end;
 	bool              _active; // internal deactivate during discovery etc
 	bool              _enabled; // temporary disable, e.g. during freewheeli
 	bool              _run; // general status

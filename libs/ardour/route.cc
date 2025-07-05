@@ -1,21 +1,33 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2007 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006 Jesse Chappell <jesse@essej.net>
+ * Copyright (C) 2008-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2011-2012 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2013-2015 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2013-2017 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2018 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2015-2018 Len Ovens <len@ovenwerks.net>
+ * Copyright (C) 2016 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2017-2018 Johannes Mueller <github@johannes-mueller.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -32,7 +44,6 @@
 #include "pbd/enumwriter.h"
 #include "pbd/locale_guard.h"
 #include "pbd/memento_command.h"
-#include "pbd/stacktrace.h"
 #include "pbd/types_convert.h"
 #include "pbd/unwind.h"
 
@@ -41,6 +52,9 @@
 #include "ardour/audio_track.h"
 #include "ardour/audio_port.h"
 #include "ardour/audioengine.h"
+#ifdef HAVE_BEATBOX
+#include "ardour/beatbox.h"
+#endif
 #include "ardour/boost_debug.h"
 #include "ardour/buffer.h"
 #include "ardour/buffer_set.h"
@@ -51,6 +65,7 @@
 #include "ardour/disk_writer.h"
 #include "ardour/event_type_map.h"
 #include "ardour/gain_control.h"
+#include "ardour/graph.h"
 #include "ardour/internal_return.h"
 #include "ardour/internal_send.h"
 #include "ardour/meter.h"
@@ -60,26 +75,33 @@
 #include "ardour/midi_track.h"
 #include "ardour/monitor_control.h"
 #include "ardour/monitor_processor.h"
+#include "ardour/monitor_return.h"
 #include "ardour/pannable.h"
 #include "ardour/panner.h"
 #include "ardour/panner_shell.h"
 #include "ardour/parameter_descriptor.h"
 #include "ardour/phase_control.h"
 #include "ardour/plugin_insert.h"
+#include "ardour/plugin_manager.h"
 #include "ardour/polarity_processor.h"
 #include "ardour/port.h"
 #include "ardour/port_insert.h"
 #include "ardour/processor.h"
 #include "ardour/profile.h"
+#include "ardour/revision.h"
 #include "ardour/route.h"
 #include "ardour/route_group.h"
 #include "ardour/send.h"
 #include "ardour/session.h"
 #include "ardour/solo_control.h"
 #include "ardour/solo_isolate_control.h"
+#include "ardour/surround_return.h"
+#include "ardour/surround_send.h"
+#include "ardour/triggerbox.h"
 #include "ardour/types_convert.h"
 #include "ardour/unknown_processor.h"
 #include "ardour/utils.h"
+#include "ardour/well_known_enum.h"
 #include "ardour/vca.h"
 
 #include "pbd/i18n.h"
@@ -88,7 +110,9 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-PBD::Signal3<int,boost::shared_ptr<Route>, boost::shared_ptr<PluginInsert>, Route::PluginSetupOptions > Route::PluginSetup;
+PBD::Signal<int(std::shared_ptr<Route>, std::shared_ptr<PluginInsert>, Route::PluginSetupOptions )> Route::PluginSetup;
+
+PBD::Signal<void(std::weak_ptr<Route> )> Route::FanOut;
 
 /** Base class for all routable/mixable objects (tracks and busses) */
 Route::Route (Session& sess, string name, PresentationInfo::Flag flag, DataType default_type)
@@ -97,47 +121,48 @@ Route::Route (Session& sess, string name, PresentationInfo::Flag flag, DataType 
 	, Muteable (sess, name)
 	, _active (true)
 	, _signal_latency (0)
+	, _output_latency (0)
 	, _disk_io_point (DiskIOPreFader)
-	, _pending_process_reorder (0)
-	, _pending_signals (0)
-	, _pending_declick (true)
 	, _meter_point (MeterPostFader)
 	, _pending_meter_point (MeterPostFader)
-	, _meter_type (MeterPeak)
 	, _denormal_protection (false)
 	, _recordable (true)
-	, _declickable (false)
+	, _comment_editor_window (0)
 	, _have_internal_generator (false)
 	, _default_type (default_type)
+	, _instrument_fanned_out (false)
 	, _loop_location (NULL)
+	, _volume_applies_to_output (true)
 	, _track_number (0)
 	, _strict_io (false)
 	, _in_configure_processors (false)
 	, _initial_io_setup (false)
 	, _in_sidechain_setup (false)
+	, _monitor_gain (0)
 	, _custom_meter_position_noted (false)
 	, _pinmgr_proxy (0)
 	, _patch_selector_dialog (0)
 {
 	processor_max_streams.reset();
+
+	_pending_process_reorder.store (0);
+	_pending_listen_change.store (0);
+	_pending_surround_send.store (0);
+	_pending_signals.store (0);
 }
 
-boost::weak_ptr<Route>
+std::weak_ptr<Route>
 Route::weakroute () {
-	return boost::weak_ptr<Route> (boost::dynamic_pointer_cast<Route> (shared_from_this ()));
+	return std::weak_ptr<Route> (std::dynamic_pointer_cast<Route> (shared_from_this ()));
 }
 
 int
 Route::init ()
 {
-	/* set default meter type */
-	if (is_master()) {
-		_meter_type = Config->get_meter_type_master ();
-	}
-	else if (dynamic_cast<Track*>(this)) {
-		_meter_type = Config->get_meter_type_track ();
-	} else {
-		_meter_type = Config->get_meter_type_bus ();
+	/* default master bus to use strict i/o */
+	if (is_singleton ()) {
+		_strict_io = true;
+		_meter_point = _pending_meter_point = MeterOutput;
 	}
 
 	/* add standard controls */
@@ -150,26 +175,28 @@ Route::init ()
 	 * Automatable API. -- Don't call add_control () here.
 	 */
 
-	_solo_control.reset (new SoloControl (_session, X_("solo"), *this, *this));
-	add_control (_solo_control);
-	_solo_control->Changed.connect_same_thread (*this, boost::bind (&Route::solo_control_changed, this, _1, _2));
+	Temporal::TimeDomainProvider const & tdp (*this);
 
-	_mute_control.reset (new MuteControl (_session, X_("mute"), *this));
+	_solo_control.reset (new SoloControl (_session, X_("solo"), *this, *this, tdp));
+	add_control (_solo_control);
+	_solo_control->Changed.connect_same_thread (*this, std::bind (&Route::solo_control_changed, this, _1, _2));
+
+	_mute_control.reset (new MuteControl (_session, X_("mute"), *this, tdp));
 	add_control (_mute_control);
 
-	_phase_control.reset (new PhaseControl (_session, X_("phase")));
+	_phase_control.reset (new PhaseControl (_session, X_("phase"), tdp));
 	add_control (_phase_control);
 
-	_solo_isolate_control.reset (new SoloIsolateControl (_session, X_("solo-iso"), *this, *this));
+	_solo_isolate_control.reset (new SoloIsolateControl (_session, X_("solo-iso"), *this, tdp));
 	add_control (_solo_isolate_control);
 
-	_solo_safe_control.reset (new SoloSafeControl (_session, X_("solo-safe")));
+	_solo_safe_control.reset (new SoloSafeControl (_session, X_("solo-safe"), tdp));
 	add_control (_solo_safe_control);
 
 	/* panning */
 
 	if (!(_presentation_info.flags() & PresentationInfo::MonitorOut)) {
-		_pannable.reset (new Pannable (_session));
+		_pannable.reset (new Pannable (_session, Temporal::TimeDomainProvider (Config->get_default_automation_time_domain())));
 	}
 
 	/* input and output objects */
@@ -177,28 +204,34 @@ Route::init ()
 	_input.reset (new IO (_session, _name, IO::Input, _default_type));
 	_output.reset (new IO (_session, _name, IO::Output, _default_type));
 
-	_input->changed.connect_same_thread (*this, boost::bind (&Route::input_change_handler, this, _1, _2));
-	_input->PortCountChanging.connect_same_thread (*this, boost::bind (&Route::input_port_count_changing, this, _1));
+	_input->changed.connect_same_thread (*this, std::bind (&Route::input_change_handler, this, _1, _2));
+	_input->PortCountChanging.connect_same_thread (*this, std::bind (&Route::input_port_count_changing, this, _1));
 
-	_output->changed.connect_same_thread (*this, boost::bind (&Route::output_change_handler, this, _1, _2));
-	_output->PortCountChanging.connect_same_thread (*this, boost::bind (&Route::output_port_count_changing, this, _1));
+	_output->changed.connect_same_thread (*this, std::bind (&Route::output_change_handler, this, _1, _2));
+	_output->PortCountChanging.connect_same_thread (*this, std::bind (&Route::output_port_count_changing, this, _1));
 
 	/* add the amp/fader processor.
 	 * it should be the first processor to be added on every route.
 	 */
 
 	_amp.reset (new Amp (_session, X_("Fader"), _gain_control, true));
-	add_processor (_amp, PostFader);
+	_amp->activate ();
+	_amp->set_owner (this);
 
 	_polarity.reset (new PolarityProcessor (_session, _phase_control));
-	_polarity->activate();
 	_polarity->set_owner (this);
+
+	if (!is_surround_master ()) {
+		_polarity->activate();
+	}
 
 	if (is_monitor ()) {
 		_amp->set_display_name (_("Monitor"));
+		_gain_control->set_flag (Controllable::MonitorControl);
+		_trim_control->set_flag (Controllable::MonitorControl);
 	}
 
-	if (!is_master() && !is_monitor() && !is_auditioner()) {
+	if (!is_singleton () && !is_auditioner ()) {
 		_delayline.reset (new DelayLine (_session, name ()));
 	}
 
@@ -207,13 +240,15 @@ Route::init ()
 	_trim.reset (new Amp (_session, X_("Trim"), _trim_control, false));
 	_trim->set_display_to_user (false);
 
-	if (dynamic_cast<AudioTrack*>(this)) {
+	if (is_surround_master ()) {
+		_trim->deactivate ();
+	} else if (dynamic_cast<AudioTrack*>(this)) {
 		/* we can't do this in the AudioTrack's constructor
 		 * because _trim does not exit then
 		 */
 		_trim->activate();
 	}
-	else if (!dynamic_cast<Track*>(this) && ! ( is_monitor() || is_auditioner() )) {
+	else if (!dynamic_cast<Track*>(this) && ! (is_monitor() || is_auditioner())) {
 		/* regular bus */
 		_trim->activate();
 	}
@@ -227,12 +262,34 @@ Route::init ()
 	_meter->set_display_to_user (false);
 	_meter->activate ();
 
+	/* set default meter type */
+	if (is_master()) {
+#ifdef MIXBUS
+		set_meter_type (MeterK14);
+#else
+		set_meter_type (Config->get_meter_type_master ());
+#endif
+	} else if (dynamic_cast<Track*>(this)) {
+		set_meter_type (Config->get_meter_type_track ());
+	} else {
+		set_meter_type (Config->get_meter_type_bus ());
+	}
+
 	_main_outs.reset (new Delivery (_session, _output, _pannable, _mute_master, _name, Delivery::Main));
+	/* master output volume */
+	if (is_master()) {
+		_volume_control.reset (new GainControl (_session, MainOutVolume));
+		_volume_control->set_flag (Controllable::NotAutomatable);
+		_main_outs->set_gain_control (_volume_control);
+		_volume.reset (new Amp (_session, X_("LAN Amp"), _volume_control, false));
+		_volume->set_display_to_user (false);
+		_volume->deactivate ();
+	}
 	_main_outs->activate ();
 
 	if (is_monitor()) {
 		/* where we listen to tracks */
-		_intreturn.reset (new InternalReturn (_session));
+		_intreturn.reset (new MonitorReturn (_session, tdp));
 		_intreturn->activate ();
 
 		/* the thing that provides proper control over a control/monitor/listen bus
@@ -242,11 +299,36 @@ Route::init ()
 		_monitor_control->activate ();
 	}
 
-	/* now that we have _meter, its safe to connect to this */
+	if (is_surround_master ()) {
+		_meter_point = _pending_meter_point = MeterPreFader;
+		_surround_return.reset (new SurroundReturn (_session, this));
+		_surround_return->set_owner (this);
+		_surround_return->activate ();
+		panner_shell()->set_bypassed (true);
 
+		_monitor_control.reset (new MonitorProcessor (_session));
+		_monitor_control->activate ();
+		_output->set_audio_channel_names (std::vector<std::string> {
+				_("L"), _("R"), _("C"), _("LFE"), _("Ls"), _("Rs"),
+				_("Lrs"), _("Rrs"), _("Lfh"), _("Rfh"), _("Lrh"), _("Rrh"),
+				_("BinL"), _("BinR")
+				});
+	}
+
+	if (_presentation_info.flags() & PresentationInfo::FoldbackBus) {
+		panner_shell()->select_panner_by_uri ("http://ardour.org/plugin/panner_balance");
+	}
+
+	/* now set up processor chain and invisible processors */
 	{
 		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
-		configure_processors (0);
+		{
+			Glib::Threads::RWLock::WriterLock lm (_processor_lock);
+			_processors.push_back (_amp);
+		}
+		if (!_session.loading()) {
+			configure_processors (0);
+		}
 	}
 
 	return 0;
@@ -274,30 +356,22 @@ Route::~Route ()
 }
 
 string
-Route::ensure_track_or_route_name(string name, Session &session)
+Route::ensure_track_or_route_name (string newname) const
 {
-	string newname = name;
+	/* remove any colons (and other nasty chars) */
+	newname = legalize_for_universal_path (newname);
 
-	while (!session.io_name_is_legal (newname)) {
+	/* Some ctrl surfaces may put NULL in the middle of a string.
+	 * Ben found out just how much havoc this can wreak. SysEx 1s 4 b1tch. */
+	newname.erase (std::remove (newname.begin(), newname.end(), '\0'), newname.end());
+
+	while (!_session.io_name_is_legal (newname)) {
 		newname = bump_name_once (newname, ' ');
+		if (newname == name()) {
+			break;
+		}
 	}
-
 	return newname;
-}
-
-void
-Route::set_trim (gain_t val, Controllable::GroupControlDisposition /* group override */)
-{
-	// TODO route group, see set_gain()
-	// _trim_control->route_set_value (val);
-}
-
-void
-Route::maybe_declick (BufferSet&, samplecnt_t, int)
-{
-	/* this is the "bus" implementation and they never declick.
-	 */
-	return;
 }
 
 /** Process this route for one (sub) cycle (process thread)
@@ -313,7 +387,7 @@ Route::maybe_declick (BufferSet&, samplecnt_t, int)
 void
 Route::process_output_buffers (BufferSet& bufs,
 			       samplepos_t start_sample, samplepos_t end_sample, pframes_t nframes,
-			       int declick, bool gain_automation_ok, bool run_disk_reader)
+			       bool gain_automation_ok, bool run_disk_reader)
 {
 	/* Caller must hold process lock */
 	assert (!AudioEngine::instance()->process_lock().trylock());
@@ -327,31 +401,48 @@ Route::process_output_buffers (BufferSet& bufs,
 		return;
 	}
 
-	/* We should offset the route-owned ctrls by the given latency, however
-	 * this only affects Mute. Other route-owned controls (solo, polarity..)
-	 * are not automatable.
-	 *
-	 * Mute has its own issues since there's not a single mute-point,
-	 * but in general
-	 */
-	automation_run (start_sample, nframes);
-
 	if (_pannable) {
-		_pannable->automation_run (start_sample + _signal_latency, nframes);
+		/* this is only for the benfit of updating the UI.
+		 *
+		 * Panner's `::distribute_one_automated()` evalualte
+		 * a sample-accurate curve using start/end of the
+		 * delivery processor.
+		 */
+		_pannable->automation_run (start_sample, nframes);
 	}
+
+	const int speed = (is_auditioner() ? 1 : _session.transport_speed (true));
+	assert (speed == -1 || speed == 0 || speed == 1);
+
+	const samplecnt_t output_latency = speed * _output_latency;
+	const samplecnt_t latency_offset = speed * (_signal_latency + _output_latency);
+
+	/* Mute is the only actual route-owned control (solo, solo safe, polarity
+	 * are not automatable).
+	 *
+	 * Here we offset mute automation to align to output/master bus
+	 * to be consistent with the fader. This applied to the
+	 * "Main outs" mute point.
+	 *
+	 * Other mute points in the middle of signal flow flow
+	 * will not be handled correctly. That would mean to add
+	 * _signal_latency - accumulated processor effective_latency() at mute mute
+	 */
+
+	automation_run (start_sample + output_latency, nframes);
 
 	/* figure out if we're going to use gain automation */
 	if (gain_automation_ok) {
 		_amp->set_gain_automation_buffer (_session.gain_automation_buffer ());
 		_amp->setup_gain_automation (
-				start_sample + _amp->output_latency (),
-				end_sample + _amp->output_latency (),
+				start_sample + _amp->output_latency () + output_latency,
+				end_sample + _amp->output_latency () + output_latency,
 				nframes);
 
 		_trim->set_gain_automation_buffer (_session.trim_automation_buffer ());
 		_trim->setup_gain_automation (
-				start_sample + _trim->output_latency (),
-				end_sample + _trim->output_latency (),
+				start_sample + _trim->output_latency () + output_latency,
+				end_sample + _trim->output_latency () + output_latency,
 				nframes);
 	}
 
@@ -365,24 +456,14 @@ Route::process_output_buffers (BufferSet& bufs,
 	 * -> at Time T= -15, the disk-reader reads sample T=0.
 	 * By the Time T=0 is reached (dt=15 later) that sample is audible.
 	 */
+	start_sample += latency_offset;
+	end_sample += latency_offset;
 
-	const double speed = (is_auditioner() ? 1.0 : _session.transport_speed ());
-
-	const sampleoffset_t latency_offset = _signal_latency + _output->latency ();
-	if (speed < 0) {
-		/* when rolling backwards this can become negative */
-		start_sample -= latency_offset;
-		end_sample -= latency_offset;
-	} else {
-		start_sample += latency_offset;
-		end_sample += latency_offset;
-	}
-
-	/* Note: during intial pre-roll 'start_sample' as passed as argument can be negative.
+	/* Note: during initial pre-roll 'start_sample' as passed as argument can be negative.
 	 * Functions calling process_output_buffers() will set  "run_disk_reader"
 	 * to false if the pre-roll count-down is larger than playback_latency ().
 	 *
-	 * playback_latency() is guarnteed to be <= _signal_latency + _output->latency ()
+	 * playback_latency() is guaranteed to be <= _signal_latency + _output->latency ()
 	 */
 	assert (!_disk_reader || !run_disk_reader || start_sample >= 0 || speed < 0);
 
@@ -398,7 +479,7 @@ Route::process_output_buffers (BufferSet& bufs,
 	bool run_disk_writer = false;
 	if (_disk_writer && speed > 0) {
 		samplecnt_t latency_preroll = _session.remaining_latency_preroll ();
-		run_disk_writer = latency_preroll < nframes + (_signal_latency + _output->latency ());
+		run_disk_writer = latency_preroll <= nframes + (_signal_latency + _output_latency);
 		if (end_sample - _disk_writer->input_latency () < _session.transport_sample ()) {
 			run_disk_writer = true;
 		}
@@ -417,19 +498,10 @@ Route::process_output_buffers (BufferSet& bufs,
 	 * Also during remaining_latency_preroll, transport_rolling () is false, but
 	 * we may need to monitor disk instead.
 	 */
-	MonitorState ms = monitoring_state ();
-	bool silence = _have_internal_generator ? false : (ms == MonitoringSilence);
+	const MonitorState ms = monitoring_state ();
+	const bool silent = _have_internal_generator || (_triggerbox && !_triggerbox->empty ()) ? false : (ms == MonitoringSilence);
 
-	_main_outs->no_outs_cuz_we_no_monitor (silence);
-
-	/* -------------------------------------------------------------------------------------------
-	   GLOBAL DECLICK (for transport changes etc.)
-	   ----------------------------------------------------------------------------------------- */
-
-	// XXX not latency compensated. calls Amp::declick, but there may be
-	// plugins between disk and Fader.
-	maybe_declick (bufs, nframes, declick);
-	_pending_declick = 0;
+	_main_outs->no_outs_cuz_we_no_monitor (silent);
 
 	/* -------------------------------------------------------------------------------------------
 	   DENORMAL CONTROL
@@ -457,30 +529,16 @@ Route::process_output_buffers (BufferSet& bufs,
 
 	samplecnt_t latency = 0;
 
-	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-
-		/* TODO check for split cycles here.
-		 *
-		 * start_frame, end_frame is adjusted by latency and may
-		 * cross loop points.
-		 */
-
-#ifndef NDEBUG
-		/* if it has any inputs, make sure they match */
-		if (boost::dynamic_pointer_cast<UnknownProcessor> (*i) == 0 && (*i)->input_streams() != ChanCount::ZERO) {
-			if (bufs.count() != (*i)->input_streams()) {
-				DEBUG_TRACE (
-					DEBUG::Processors, string_compose (
-						"input port mismatch %1 bufs = %2 input for %3 = %4\n",
-						_name, bufs.count(), (*i)->name(), (*i)->input_streams()
-						)
-					);
-			}
-		}
-#endif
+	for (auto const & proc : _processors) {
 
 		bool re_inject_oob_data = false;
-		if ((*i) == _disk_reader) {
+
+		if (proc == _disk_reader) {
+			/* ignore port-count from prior plugins, use DR's count.
+			 * see also Route::try_configure_processors_unlocked
+			 */
+			bufs.set_count (proc->output_streams());
+
 			/* Well now, we've made it past the disk-writer and to the disk-reader.
 			 * Time to decide what to do about monitoring.
 			 *
@@ -498,35 +556,47 @@ Route::process_output_buffers (BufferSet& bufs,
 		}
 
 		double pspeed = speed;
-		if ((!run_disk_reader && (*i) == _disk_reader) || (!run_disk_writer && (*i) == _disk_writer)) {
+		if ((!run_disk_reader && ((proc == _disk_reader) || (proc == _triggerbox))) || (!run_disk_writer && proc == _disk_writer)) {
 			/* run with speed 0, no-roll */
 			pspeed = 0;
 		}
 
-		if (speed < 0) {
-			(*i)->run (bufs, start_sample + latency, end_sample + latency, pspeed, nframes, *i != _processors.back());
-		} else {
-			(*i)->run (bufs, start_sample - latency, end_sample - latency, pspeed, nframes, *i != _processors.back());
-		}
-
-		bufs.set_count ((*i)->output_streams());
-
-		/* Note: plugin latency may change. While the plugin does inform the session via
+		/* Note: plugin latency may change. The plugin does inform the session via
 		 * processor_latency_changed(). But the session may not yet have gotten around to
 		 * update the actual worste-case and update this track's _signal_latency.
-		 *
 		 * So there can be cases where adding up all latencies may not equal _signal_latency.
+		 *
+		 * Also running a plugin may change the plugin's latency, so we need to
+		 * add the latency first. Otherwise this can lead to bistable case
+		 * in case of automation playback. e.g.
+		 *
+		 * cycle 1: run (t): automation (t) = on: -> increase latency
+		 * cycle 2: run (t-latency): automation (t-latency) = off -> decrease latency
+		 * repeat.
 		 */
-		if ((*i)->active ()) {
-			latency += (*i)->signal_latency ();
+
+		if (proc->active ()) {
+			if (speed < 0) {
+				latency -= proc->effective_latency ();
+			} else {
+				latency += proc->effective_latency ();
+			}
 		}
+
+		if (speed < 0) {
+			proc->run (bufs, start_sample + latency, end_sample + latency, pspeed, nframes, proc != _processors.back());
+		} else {
+			proc->run (bufs, start_sample - latency, end_sample - latency, pspeed, nframes, proc != _processors.back());
+		}
+
+		bufs.set_count (proc->output_streams());
 
 		if (re_inject_oob_data) {
 			write_out_of_band_data (bufs, nframes);
 		}
 
 #if 0
-		if ((*i) == _delayline) {
+		if (proc == _delayline) {
 			latency += _delayline->delay ();
 		}
 #endif
@@ -535,7 +605,7 @@ Route::process_output_buffers (BufferSet& bufs,
 
 void
 Route::bounce_process (BufferSet& buffers, samplepos_t start, samplecnt_t nframes,
-		boost::shared_ptr<Processor> endpoint,
+		std::shared_ptr<Processor> endpoint,
 		bool include_endpoint, bool for_export, bool for_freeze)
 {
 	/* If no processing is required, there's no need to go any further. */
@@ -552,18 +622,23 @@ Route::bounce_process (BufferSet& buffers, samplepos_t start, samplecnt_t nframe
 	_trim->setup_gain_automation (start, start + nframes, nframes);
 
 	latency = 0;
-	const double speed = _session.transport_speed ();
+	bool seen_disk_io = false;
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
 
 		if (!include_endpoint && (*i) == endpoint) {
 			break;
 		}
 
-		/* if we're *not* exporting, stop processing if we come across a routing processor. */
-		if (!for_export && boost::dynamic_pointer_cast<PortInsert>(*i)) {
-			break;
+		if (!for_export && !seen_disk_io) {
+			if (std::dynamic_pointer_cast<DiskReader> (*i)) {
+				seen_disk_io = true;
+				buffers.set_count ((*i)->output_streams());
+			}
+			continue;
 		}
-		if (!for_export && for_freeze && (*i)->does_routing() && (*i)->active()) {
+
+		/* if we're *not* exporting, stop processing if we come across a routing processor. */
+		if (!for_export && !can_freeze_processor (*i, !for_freeze)) {
 			break;
 		}
 
@@ -575,17 +650,17 @@ Route::bounce_process (BufferSet& buffers, samplepos_t start, samplecnt_t nframe
 		 */
 		if ((*i) == _main_outs) {
 			assert ((*i)->does_routing());
-			(*i)->run (buffers, start - latency, start - latency + nframes, speed, nframes, true);
+			(*i)->run (buffers, start - latency, start - latency + nframes, 1.0, nframes, true);
 			buffers.set_count ((*i)->output_streams());
 		}
 
 		/* don't run any processors that do routing.
 		 * Also don't bother with metering.
 		 */
-		if (!(*i)->does_routing() && !boost::dynamic_pointer_cast<PeakMeter>(*i)) {
+		if (!(*i)->does_routing() && !std::dynamic_pointer_cast<PeakMeter>(*i)) {
 			(*i)->run (buffers, start - latency, start - latency + nframes, 1.0, nframes, true);
 			buffers.set_count ((*i)->output_streams());
-			latency += (*i)->signal_latency ();
+			latency += (*i)->effective_latency ();
 		}
 
 		if ((*i) == endpoint) {
@@ -595,7 +670,7 @@ Route::bounce_process (BufferSet& buffers, samplepos_t start, samplecnt_t nframe
 }
 
 samplecnt_t
-Route::bounce_get_latency (boost::shared_ptr<Processor> endpoint,
+Route::bounce_get_latency (std::shared_ptr<Processor> endpoint,
 		bool include_endpoint, bool for_export, bool for_freeze) const
 {
 	samplecnt_t latency = 0;
@@ -603,18 +678,22 @@ Route::bounce_get_latency (boost::shared_ptr<Processor> endpoint,
 		return latency;
 	}
 
+	bool seen_disk_io = false;
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
 		if (!include_endpoint && (*i) == endpoint) {
 			break;
 		}
-		if (!for_export && boost::dynamic_pointer_cast<PortInsert>(*i)) {
+		if (!for_export && !seen_disk_io) {
+			if (std::dynamic_pointer_cast<DiskReader> (*i)) {
+				seen_disk_io = true;
+			}
+			continue;
+		}
+		if (!for_export && !can_freeze_processor (*i, !for_freeze)) {
 			break;
 		}
-		if (!for_export && for_freeze && (*i)->does_routing() && (*i)->active()) {
-			break;
-		}
-		if (!(*i)->does_routing() && !boost::dynamic_pointer_cast<PeakMeter>(*i)) {
-			latency += (*i)->signal_latency ();
+		if (!(*i)->does_routing() && !std::dynamic_pointer_cast<PeakMeter>(*i)) {
+			latency += (*i)->effective_latency ();
 		}
 		if ((*i) == endpoint) {
 			break;
@@ -624,24 +703,25 @@ Route::bounce_get_latency (boost::shared_ptr<Processor> endpoint,
 }
 
 ChanCount
-Route::bounce_get_output_streams (ChanCount &cc, boost::shared_ptr<Processor> endpoint,
+Route::bounce_get_output_streams (ChanCount &cc, std::shared_ptr<Processor> endpoint,
 		bool include_endpoint, bool for_export, bool for_freeze) const
 {
 	if (!endpoint && !include_endpoint) {
 		return cc;
 	}
 
+	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
+
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
 		if (!include_endpoint && (*i) == endpoint) {
 			break;
 		}
-		if (!for_export && boost::dynamic_pointer_cast<PortInsert>(*i)) {
+		if (!for_export && !can_freeze_processor (*i, !for_freeze)) {
 			break;
 		}
-		if (!for_export && for_freeze && (*i)->does_routing() && (*i)->active()) {
-			break;
-		}
-		if (!(*i)->does_routing() && !boost::dynamic_pointer_cast<PeakMeter>(*i)) {
+		if (!(*i)->does_routing() && !std::dynamic_pointer_cast<PeakMeter>(*i)) {
+			cc = (*i)->output_streams();
+		} else if (*i == _main_outs) {
 			cc = (*i)->output_streams();
 		}
 		if ((*i) == endpoint) {
@@ -658,15 +738,21 @@ Route::n_process_buffers ()
 }
 
 void
-Route::monitor_run (samplepos_t start_sample, samplepos_t end_sample, pframes_t nframes, int declick)
+Route::monitor_run (samplepos_t start_sample, samplepos_t end_sample, pframes_t nframes)
 {
 	assert (is_monitor());
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock, Glib::Threads::TRY_LOCK);
-	run_route (start_sample, end_sample, nframes, declick, true, false);
+	run_route (start_sample, end_sample, nframes, true, false);
 }
 
 void
-Route::run_route (samplepos_t start_sample, samplepos_t end_sample, pframes_t nframes, int declick, bool gain_automation_ok, bool run_disk_reader)
+Route::process ()
+{
+	_graph->process_one_route (this);
+}
+
+void
+Route::run_route (samplepos_t start_sample, samplepos_t end_sample, pframes_t nframes, bool gain_automation_ok, bool run_disk_reader)
 {
 	BufferSet& bufs (_session.get_route_buffers (n_process_buffers()));
 
@@ -675,14 +761,13 @@ Route::run_route (samplepos_t start_sample, samplepos_t end_sample, pframes_t nf
 	/* filter captured data before meter sees it */
 	filter_input (bufs);
 
-	if (is_monitor() && _session.listening() && !_session.is_auditioning()) {
-
+	if (is_monitor()) {
 		/* control/monitor bus ignores input ports when something is
-		   feeding the listen "stream". data will "arrive" into the
-		   route from the intreturn processor element.
-		*/
-
-		bufs.silence (nframes, 0);
+		 * feeding the listen "stream". data will "arrive" into the
+		 * route from the intreturn processor element.
+		 */
+		gain_t monitor_target_gain = _session.listening() && !_session.is_auditioning() ? 0. : 1.;
+		_monitor_gain = Amp::apply_gain (bufs, _session.nominal_sample_rate (), nframes, _monitor_gain, monitor_target_gain);
 	}
 
 	snapshot_out_of_band_data (nframes);
@@ -692,7 +777,7 @@ Route::run_route (samplepos_t start_sample, samplepos_t end_sample, pframes_t nf
 
 	/* run processor chain */
 
-	process_output_buffers (bufs, start_sample, end_sample, nframes, declick, gain_automation_ok, run_disk_reader);
+	process_output_buffers (bufs, start_sample, end_sample, nframes, gain_automation_ok, run_disk_reader);
 
 	/* map events (e.g. MIDI-CC) back to control-parameters */
 	update_controls (bufs);
@@ -732,18 +817,15 @@ Route::push_solo_isolate_upstream (int32_t delta)
 {
 	/* forward propagate solo-isolate status to everything fed by this route, but not those via sends only */
 
-	boost::shared_ptr<RouteList> routes = _session.get_routes ();
-	for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
+	std::shared_ptr<RouteList const> routes = _session.get_routes ();
+	for (auto const& i : *routes) {
 
-		if ((*i).get() == this || !(*i)->can_solo()) {
+		if (i.get() == this || !i->can_solo()) {
 			continue;
 		}
 
-		bool sends_only;
-		bool does_feed = feeds (*i, &sends_only);
-
-		if (does_feed && !sends_only) {
-			(*i)->solo_isolate_control()->mod_solo_isolated_by_upstream (delta);
+		if (feeds (i)) {
+			i->solo_isolate_control()->mod_solo_isolated_by_upstream (delta);
 		}
 	}
 }
@@ -752,23 +834,20 @@ void
 Route::push_solo_upstream (int delta)
 {
 	DEBUG_TRACE (DEBUG::Solo, string_compose("\t ... INVERT push from %1\n", _name));
-	for (FedBy::iterator i = _fed_by.begin(); i != _fed_by.end(); ++i) {
-		if (i->sends_only) {
-			continue;
-		}
-		boost::shared_ptr<Route> sr (i->r.lock());
-		if (sr) {
-			sr->solo_control()->mod_solo_by_others_downstream (-delta);
+	for (auto const& i : _session._current_route_graph.to (std::dynamic_pointer_cast<Route> (shared_from_this ()))) {
+		std::shared_ptr<Route> r = std::dynamic_pointer_cast<Route> (i);
+		if (r) {
+			r->solo_control()->mod_solo_by_others_downstream (-delta);
 		}
 	}
 }
 
 #if 0
 static void
-dump_processors(const string& name, const list<boost::shared_ptr<Processor> >& procs)
+dump_processors(const string& name, const list<std::shared_ptr<Processor> >& procs)
 {
 	cerr << name << " {" << endl;
-	for (list<boost::shared_ptr<Processor> >::const_iterator p = procs.begin();
+	for (list<std::shared_ptr<Processor> >::const_iterator p = procs.begin();
 			p != procs.end(); ++p) {
 		cerr << "\t" << (*p)->name() << " ID = " << (*p)->id() << " @ " << (*p) << endl;
 	}
@@ -779,7 +858,7 @@ dump_processors(const string& name, const list<boost::shared_ptr<Processor> >& p
 /** Supposing that we want to insert a Processor at a given Placement, return
  *  the processor to add the new one before (or 0 to add at the end).
  */
-boost::shared_ptr<Processor>
+std::shared_ptr<Processor>
 Route::before_processor_for_placement (Placement p)
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
@@ -794,24 +873,24 @@ Route::before_processor_for_placement (Placement p)
 		loc = find (_processors.begin(), _processors.end(), _main_outs);
 	}
 
-	return loc != _processors.end() ? *loc : boost::shared_ptr<Processor> ();
+	return loc != _processors.end() ? *loc : std::shared_ptr<Processor> ();
 }
 
 /** Supposing that we want to insert a Processor at a given index, return
- *  the processor to add the new one before (or 0 to add at the end).
+ *  the processor to add the new one before (or -1 to add at the end).
  */
-boost::shared_ptr<Processor>
+std::shared_ptr<Processor>
 Route::before_processor_for_index (int index)
 {
 	if (index == -1) {
-		return boost::shared_ptr<Processor> ();
+		return std::shared_ptr<Processor> ();
 	}
 
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 
 	ProcessorList::iterator i = _processors.begin ();
 	int j = 0;
-	while (i != _processors.end() && j < index) {
+	while (i != _processors.end() && (!(*i)->display_to_user() || j < index)) {
 		if ((*i)->display_to_user()) {
 			++j;
 		}
@@ -819,14 +898,14 @@ Route::before_processor_for_index (int index)
 		++i;
 	}
 
-	return (i != _processors.end() ? *i : boost::shared_ptr<Processor> ());
+	return (i != _processors.end() ? *i : std::shared_ptr<Processor> ());
 }
 
 /** Add a processor either pre- or post-fader
  *  @return 0 on success, non-0 on failure.
  */
 int
-Route::add_processor (boost::shared_ptr<Processor> processor, Placement placement, ProcessorStreams* err, bool activation_allowed)
+Route::add_processor (std::shared_ptr<Processor> processor, Placement placement, ProcessorStreams* err, bool activation_allowed)
 {
 	return add_processor (processor, before_processor_for_placement (placement), err, activation_allowed);
 }
@@ -837,7 +916,7 @@ Route::add_processor (boost::shared_ptr<Processor> processor, Placement placemen
  *  @return 0 on success, non-0 on failure.
  */
 int
-Route::add_processor_by_index (boost::shared_ptr<Processor> processor, int index, ProcessorStreams* err, bool activation_allowed)
+Route::add_processor_by_index (std::shared_ptr<Processor> processor, int index, ProcessorStreams* err, bool activation_allowed)
 {
 	return add_processor (processor, before_processor_for_index (index), err, activation_allowed);
 }
@@ -847,13 +926,13 @@ Route::add_processor_by_index (boost::shared_ptr<Processor> processor, int index
  *  @return 0 on success, non-0 on failure.
  */
 int
-Route::add_processor (boost::shared_ptr<Processor> processor, boost::shared_ptr<Processor> before, ProcessorStreams* err, bool activation_allowed)
+Route::add_processor (std::shared_ptr<Processor> processor, std::shared_ptr<Processor> before, ProcessorStreams* err, bool activation_allowed)
 {
 	assert (processor != _meter);
 	assert (processor != _main_outs);
 
 	DEBUG_TRACE (DEBUG::Processors, string_compose (
-		             "%1 adding processor %2\n", name(), processor->name()));
+		             "%1 adding processor %2\n", name(), processor->display_name()));
 
 	ProcessorList pl;
 
@@ -872,7 +951,7 @@ Route::add_processor (boost::shared_ptr<Processor> processor, boost::shared_ptr<
 }
 
 void
-Route::processor_selfdestruct (boost::weak_ptr<Processor> wp)
+Route::processor_selfdestruct (std::weak_ptr<Processor> wp)
 {
 	/* We cannot destruct the processor here (usually RT-thread
 	 * with various locks held - in case of sends also io_locks).
@@ -888,7 +967,7 @@ Route::add_processor_from_xml_2X (const XMLNode& node, int version)
 	XMLProperty const * prop;
 
 	try {
-		boost::shared_ptr<Processor> processor;
+		std::shared_ptr<Processor> processor;
 
 		/* bit of a hack: get the `placement' property from the <Redirect> tag here
 		   so that we can add the processor in the right place (pre/post-fader)
@@ -921,22 +1000,19 @@ Route::add_processor_from_xml_2X (const XMLNode& node, int version)
 						prop->value() == "audiounit") {
 
 					if (_session.get_disable_all_loaded_plugins ()) {
-						processor.reset (new UnknownProcessor (_session, node));
+						processor.reset (new UnknownProcessor (_session, node, this));
 					} else {
-						processor.reset (new PluginInsert (_session));
-						processor->set_owner (this);
+						processor.reset (new PluginInsert (_session, *this));
 					}
 
 				} else {
-
 					processor.reset (new PortInsert (_session, _pannable, _mute_master));
 				}
-
 			}
 
 		} else if (node.name() == "Send") {
 
-			boost::shared_ptr<Pannable> sendpan (new Pannable (_session));
+			std::shared_ptr<Pannable> sendpan (new Pannable (_session, Temporal::TimeDomainProvider (Config->get_default_automation_time_domain())));
 			processor.reset (new Send (_session, sendpan, _mute_master));
 
 		} else {
@@ -945,6 +1021,8 @@ Route::add_processor_from_xml_2X (const XMLNode& node, int version)
 			return false;
 		}
 
+		processor->set_owner (this);
+
 		if (processor->set_state (node, version)) {
 			return false;
 		}
@@ -952,7 +1030,7 @@ Route::add_processor_from_xml_2X (const XMLNode& node, int version)
 		//A2 uses the "active" flag in the toplevel redirect node, not in the child plugin/IO
 		if (i != children.end()) {
 			if ((prop = (*i)->property (X_("active"))) != 0) {
-				if ( string_to<bool> (prop->value()) && (!_session.get_bypass_all_loaded_plugins () || !processor->display_to_user () ) )
+				if (string_to<bool> (prop->value()) && (!_session.get_bypass_all_loaded_plugins () || !processor->display_to_user ()))
 					processor->activate();
 				else
 					processor->deactivate();
@@ -978,12 +1056,12 @@ inline Route::PluginSetupOptions operator&= (Route::PluginSetupOptions& a, const
 }
 
 int
-Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor> before, ProcessorStreams* err)
+Route::add_processors (const ProcessorList& others, std::shared_ptr<Processor> before, ProcessorStreams* err)
 {
 	ProcessorList::iterator loc;
-	boost::shared_ptr <PluginInsert> fanout;
+	std::shared_ptr <PluginInsert> fanout;
 
-	if (g_atomic_int_get (&_pending_process_reorder)) {
+	if (_pending_process_reorder.load () || _pending_listen_change.load ()) {
 		/* we need to flush any pending re-order changes */
 		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
 		apply_processor_changes_rt ();
@@ -1007,14 +1085,21 @@ Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor>
 
 	// check if there's an instrument to replace or configure
 	for (ProcessorList::const_iterator i = others.begin(); i != others.end(); ++i) {
-		boost::shared_ptr<PluginInsert> pi;
-		if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*i)) == 0) {
+
+		std::shared_ptr<PluginInsert> pi;
+		if ((pi = std::dynamic_pointer_cast<PluginInsert>(*i)) == 0) {
 			continue;
 		}
 		if (!pi->plugin ()->get_info ()->is_instrument ()) {
 			continue;
 		}
-		boost::shared_ptr<Processor> instrument = the_instrument ();
+		if (std::dynamic_pointer_cast<TriggerBox>(*i)) {
+			/* triggerbox looks a lot like an instrument, but it
+			   isn't a replacement for an instrument
+			*/
+			continue;
+		}
+		std::shared_ptr<Processor> instrument = the_instrument ();
 		ChanCount in (DataType::MIDI, 1);
 		ChanCount out (DataType::AUDIO, 2); // XXX route's out?!
 
@@ -1030,6 +1115,10 @@ Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor>
 
 		pi->set_strict_io (_strict_io);
 
+		if (is_auditioner()) {
+			continue;
+		}
+
 		PluginSetupOptions mask = None;
 		if (Config->get_ask_replace_instrument ()) {
 			mask |= CanReplace;
@@ -1041,8 +1130,8 @@ Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor>
 		flags &= mask;
 
 		if (flags != None) {
-			boost::optional<int> rv = PluginSetup (boost::dynamic_pointer_cast<Route>(shared_from_this ()), pi, flags);  /* EMIT SIGNAL */
-			int mode = rv.get_value_or (0);
+			std::optional<int> rv = PluginSetup (std::dynamic_pointer_cast<Route>(shared_from_this ()), pi, flags);  /* EMIT SIGNAL */
+			int mode = rv.value_or (0);
 			switch (mode & 3) {
 				case 1:
 					to_skip.push_back (*i); // don't add this one;
@@ -1060,12 +1149,19 @@ Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor>
 		}
 	}
 
+	bool routing_processor_added = false;
+
 	{
 		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
 		Glib::Threads::RWLock::WriterLock lm (_processor_lock);
 		ProcessorState pstate (this);
 
 		for (ProcessorList::const_iterator i = others.begin(); i != others.end(); ++i) {
+
+			std::shared_ptr<TriggerBox> tb = std::dynamic_pointer_cast<TriggerBox> (*i);
+			if (tb) {
+				_triggerbox = tb;
+			}
 
 			if (*i == _meter) {
 				continue;
@@ -1075,9 +1171,10 @@ Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor>
 				continue;
 			}
 
-			boost::shared_ptr<PluginInsert> pi;
+			std::shared_ptr<PluginInsert> pi;
 
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
+				PluginManager::instance().stats_use_plugin (pi->plugin()->get_info());
 				pi->set_strict_io (_strict_io);
 			}
 
@@ -1108,7 +1205,8 @@ Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor>
 			}
 
 			if (pi && pi->has_sidechain ()) {
-				pi->sidechain_input ()->changed.connect_same_thread (*this, boost::bind (&Route::sidechain_change_handler, this, _1, _2));
+				pi->update_sidechain_name ();
+				pi->sidechain_input ()->changed.connect_same_thread (*pi, std::bind (&Route::sidechain_change_handler, this, _1, _2));
 			}
 
 			if ((*i)->active()) {
@@ -1116,37 +1214,45 @@ Route::add_processors (const ProcessorList& others, boost::shared_ptr<Processor>
 				(*i)->activate ();
 			}
 
-			(*i)->ActiveChanged.connect_same_thread (*this, boost::bind (&Session::update_latency_compensation, &_session, false));
+			(*i)->ActiveChanged.connect_same_thread (*this, std::bind (&Session::queue_latency_recompute, &_session));
 
-			boost::shared_ptr<Send> send;
-			if ((send = boost::dynamic_pointer_cast<Send> (*i))) {
-				send->SelfDestruct.connect_same_thread (*this,
-						boost::bind (&Route::processor_selfdestruct, this, boost::weak_ptr<Processor> (*i)));
+			std::shared_ptr<Send> send;
+			if ((send = std::dynamic_pointer_cast<Send> (*i))) {
+				send->SelfDestruct.connect_same_thread (**i,
+						std::bind (&Route::processor_selfdestruct, this, std::weak_ptr<Processor> (*i)));
+				if (send->output()) {
+					send->output()->changed.connect_same_thread (**i, std::bind (&Route::output_change_handler, this, _1, _2));
+				}
+			}
+
+			if (std::dynamic_pointer_cast<InternalSend>(*i)) {
+				routing_processor_added = true;
 			}
 		}
 
 		for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-			boost::shared_ptr<PluginInsert> pi;
+			std::shared_ptr<PluginInsert> pi;
 
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
 				if (pi->has_no_inputs ()) {
 					_have_internal_generator = true;
 					break;
 				}
 			}
 		}
-
-		_output->set_user_latency (0);
 	}
 
 	reset_instrument_info ();
-	processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+	processors_changed (RouteProcessorChange (routing_processor_added ? RouteProcessorChange::SendReturnChange : RouteProcessorChange::GeneralChange, false)); /* EMIT SIGNAL */
 	set_processor_positions ();
 
 	if (fanout && fanout->configured ()
 			&& fanout->output_streams().n_audio() > 2
-			&& boost::dynamic_pointer_cast<PluginInsert> (the_instrument ()) == fanout) {
-		fan_out (); /* EMIT SIGNAL */
+			&& std::dynamic_pointer_cast<PluginInsert> (the_instrument ()) == fanout) {
+		/* This adds new tracks or busses, and changes connections.
+		 * This cannot be done here, and needs to be delegated to the GUI thread. */
+		_instrument_fanned_out = true;
+		FanOut (std::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this())); /* EMIT SIGNAL */
 	}
 	return 0;
 }
@@ -1208,7 +1314,7 @@ Route::disable_plugins (Placement p)
 	placement_range(p, start, end);
 
 	for (ProcessorList::iterator i = start; i != end; ++i) {
-		if (boost::dynamic_pointer_cast<PluginInsert> (*i)) {
+		if (std::dynamic_pointer_cast<PluginInsert> (*i)) {
 			(*i)->enable (false);
 		}
 	}
@@ -1224,7 +1330,7 @@ Route::disable_plugins ()
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		if (boost::dynamic_pointer_cast<PluginInsert> (*i)) {
+		if (std::dynamic_pointer_cast<PluginInsert> (*i)) {
 			(*i)->enable (false);
 		}
 	}
@@ -1245,17 +1351,16 @@ Route::ab_plugins (bool forward)
 		*/
 
 		for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-			if (!boost::dynamic_pointer_cast<PluginInsert> (*i)) {
+			if (!std::dynamic_pointer_cast<PluginInsert> (*i)) {
 				continue;
 			}
-			if (!(*i)->display_to_user ()) {
+			if (!(*i)->display_to_user () || is_internal_processor (*i)) {
 				continue;
 			}
-#ifdef MIXBUS
-			if (boost::dynamic_pointer_cast<PluginInsert> (*i)->is_channelstrip()) {
+			if (std::dynamic_pointer_cast<PluginInsert> (*i)->is_channelstrip()) {
+
 				continue;
 			}
-#endif
 
 			if ((*i)->enabled ()) {
 				(*i)->enable (false);
@@ -1270,17 +1375,15 @@ Route::ab_plugins (bool forward)
 		/* backward = if the redirect was marked to go active on the next ab, do so */
 
 		for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-			if (!boost::dynamic_pointer_cast<PluginInsert> (*i)) {
+			if (!std::dynamic_pointer_cast<PluginInsert> (*i)) {
 				continue;
 			}
-			if (!(*i)->display_to_user ()) {
+			if (!(*i)->display_to_user () || is_internal_processor (*i)) {
 				continue;
 			}
-#ifdef MIXBUS
-			if (boost::dynamic_pointer_cast<PluginInsert> (*i)->is_channelstrip()) {
+			if (std::dynamic_pointer_cast<PluginInsert> (*i)->is_channelstrip()) {
 				continue;
 			}
-#endif
 
 			(*i)->enable ((*i)->get_next_ab_is_active ());
 		}
@@ -1296,7 +1399,7 @@ Route::ab_plugins (bool forward)
 void
 Route::clear_processors (Placement p)
 {
-	if (!_session.engine().connected()) {
+	if (!_session.engine().running()) {
 		return;
 	}
 
@@ -1370,16 +1473,16 @@ Route::clear_processors (Placement p)
 }
 
 bool
-Route::is_internal_processor (boost::shared_ptr<Processor> p) const
+Route::is_internal_processor (std::shared_ptr<Processor> p) const
 {
-	if (p == _amp || p == _meter || p == _main_outs || p == _delayline || p == _trim || p == _polarity) {
+	if (p == _amp || p == _meter || p == _main_outs || p == _delayline || p == _trim || p == _polarity || (_volume && p == _volume) || (_triggerbox && p == _triggerbox) || (_surround_return && p == _surround_return) || (_surround_send && p == _surround_send)) {
 		return true;
 	}
 	return false;
 }
 
 int
-Route::remove_processor (boost::shared_ptr<Processor> processor, ProcessorStreams* err, bool need_process_lock)
+Route::remove_processor (std::shared_ptr<Processor> processor, ProcessorStreams* err, bool need_process_lock)
 {
 	// TODO once the export point can be configured properly, do something smarter here
 	if (processor == _capturing_processor) {
@@ -1401,9 +1504,11 @@ Route::remove_processor (boost::shared_ptr<Processor> processor, ProcessorStream
 		return 0;
 	}
 
-	if (!_session.engine().connected()) {
+	if (!_session.engine().running()) {
 		return 1;
 	}
+
+	bool routing_processor_removed = false;
 
 	processor_max_streams.reset();
 
@@ -1420,48 +1525,39 @@ Route::remove_processor (boost::shared_ptr<Processor> processor, ProcessorStream
 
 		ProcessorState pstate (this);
 
-		ProcessorList::iterator i;
-		bool removed = false;
-
-		for (i = _processors.begin(); i != _processors.end(); ) {
-			if (*i == processor) {
-
-				/* move along, see failure case for configure_processors()
-				   where we may need to reconfigure the processor.
-				*/
-
-				/* stop redirects that send signals to JACK ports
-				   from causing noise as a result of no longer being
-				   run.
-				*/
-
-				boost::shared_ptr<IOProcessor> iop = boost::dynamic_pointer_cast<IOProcessor> (*i);
-				boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert>(*i);
-
-				if (pi != 0) {
-					assert (iop == 0);
-					iop = pi->sidechain();
-				}
-
-				if (iop != 0) {
-					iop->disconnect ();
-				}
-
-				i = _processors.erase (i);
-				removed = true;
-				break;
-
-			} else {
-				++i;
-			}
-
-			_output->set_user_latency (0);
-		}
-
-		if (!removed) {
+		ProcessorList::iterator i = find (_processors.begin(), _processors.end(), processor);
+		if (i == _processors.end ()) {
 			/* what? */
 			return 1;
 		}
+
+		/* stop redirects that send signals to JACK ports
+		 * from causing noise as a result of no longer being run
+		 */
+		std::shared_ptr<IOProcessor> iop = std::dynamic_pointer_cast<IOProcessor> (*i);
+		std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert>(*i);
+
+		if (pi != 0) {
+			assert (iop == 0);
+			iop = pi->sidechain();
+		}
+
+		if (iop != 0) {
+			/* This calls Route::sidechain_change_handler -> Route::input_change_handler()
+			 * When the route is implicitly soloed this further calls
+			 * Route::direct_feeds_according_to_reality() which takes a
+			 * ReaderLock (_processor_lock). So we need to release the lock first.
+			 */
+			lm.release ();
+			iop->disconnect ();
+			lm.acquire ();
+		}
+
+		if (std::dynamic_pointer_cast<InternalSend>(*i)) {
+			routing_processor_removed = true;
+		}
+
+		_processors.erase (i);
 
 		if (configure_processors_unlocked (err, &lm)) {
 			pstate.restore ();
@@ -1473,9 +1569,9 @@ Route::remove_processor (boost::shared_ptr<Processor> processor, ProcessorStream
 		_have_internal_generator = false;
 
 		for (i = _processors.begin(); i != _processors.end(); ++i) {
-			boost::shared_ptr<PluginInsert> pi;
+			std::shared_ptr<PluginInsert> pi;
 
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
 				if (pi->has_no_inputs ()) {
 					_have_internal_generator = true;
 					break;
@@ -1489,14 +1585,14 @@ Route::remove_processor (boost::shared_ptr<Processor> processor, ProcessorStream
 
 	reset_instrument_info ();
 	processor->drop_references ();
-	processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+	processors_changed (RouteProcessorChange (routing_processor_removed ? RouteProcessorChange::SendReturnChange : RouteProcessorChange::GeneralChange, false)); /* EMIT SIGNAL */
 	set_processor_positions ();
 
 	return 0;
 }
 
 int
-Route::replace_processor (boost::shared_ptr<Processor> old, boost::shared_ptr<Processor> sub, ProcessorStreams* err)
+Route::replace_processor (std::shared_ptr<Processor> old, std::shared_ptr<Processor> sub, ProcessorStreams* err)
 {
 	/* these can never be removed */
 	if (is_internal_processor (old)) {
@@ -1508,7 +1604,7 @@ Route::replace_processor (boost::shared_ptr<Processor> old, boost::shared_ptr<Pr
 	}
 
 	/* I/Os are out, too */
-	if (boost::dynamic_pointer_cast<IOProcessor> (old) || boost::dynamic_pointer_cast<IOProcessor> (sub)) {
+	if (std::dynamic_pointer_cast<IOProcessor> (old) || std::dynamic_pointer_cast<IOProcessor> (sub)) {
 		return 1;
 	}
 
@@ -1517,7 +1613,7 @@ Route::replace_processor (boost::shared_ptr<Processor> old, boost::shared_ptr<Pr
 		return 1;
 	}
 
-	if (!AudioEngine::instance()->connected() || !old || !sub) {
+	if (!AudioEngine::instance()->running() || !old || !sub) {
 		return 1;
 	}
 
@@ -1554,8 +1650,8 @@ Route::replace_processor (boost::shared_ptr<Processor> old, boost::shared_ptr<Pr
 		}
 
 		if (_strict_io) {
-			boost::shared_ptr<PluginInsert> pi;
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(sub)) != 0) {
+			std::shared_ptr<PluginInsert> pi;
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(sub)) != 0) {
 				pi->set_strict_io (true);
 			}
 		}
@@ -1569,8 +1665,8 @@ Route::replace_processor (boost::shared_ptr<Processor> old, boost::shared_ptr<Pr
 		_have_internal_generator = false;
 
 		for (i = _processors.begin(); i != _processors.end(); ++i) {
-			boost::shared_ptr<PluginInsert> pi;
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
+			std::shared_ptr<PluginInsert> pi;
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
 				if (pi->has_no_inputs ()) {
 					_have_internal_generator = true;
 					break;
@@ -1582,8 +1678,7 @@ Route::replace_processor (boost::shared_ptr<Processor> old, boost::shared_ptr<Pr
 			sub->enable (true);
 		}
 
-		sub->ActiveChanged.connect_same_thread (*this, boost::bind (&Session::update_latency_compensation, &_session, false));
-		_output->set_user_latency (0);
+		sub->ActiveChanged.connect_same_thread (*sub, std::bind (&Session::queue_latency_recompute, &_session));
 	}
 
 	reset_instrument_info ();
@@ -1598,9 +1693,11 @@ Route::remove_processors (const ProcessorList& to_be_deleted, ProcessorStreams* 
 {
 	ProcessorList deleted;
 
-	if (!_session.engine().connected()) {
+	if (!_session.engine().running()) {
 		return 1;
 	}
+
+	bool routing_processor_removed = false;
 
 	processor_max_streams.reset();
 
@@ -1610,7 +1707,7 @@ Route::remove_processors (const ProcessorList& to_be_deleted, ProcessorStreams* 
 		ProcessorState pstate (this);
 
 		ProcessorList::iterator i;
-		boost::shared_ptr<Processor> processor;
+		std::shared_ptr<Processor> processor;
 
 		for (i = _processors.begin(); i != _processors.end(); ) {
 
@@ -1635,8 +1732,8 @@ Route::remove_processors (const ProcessorList& to_be_deleted, ProcessorStreams* 
 			   run.
 			*/
 
-			boost::shared_ptr<IOProcessor> iop = boost::dynamic_pointer_cast<IOProcessor>(processor);
-			boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert>(processor);
+			std::shared_ptr<IOProcessor> iop = std::dynamic_pointer_cast<IOProcessor>(processor);
+			std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert>(processor);
 			if (pi != 0) {
 				assert (iop == 0);
 				iop = pi->sidechain();
@@ -1644,6 +1741,10 @@ Route::remove_processors (const ProcessorList& to_be_deleted, ProcessorStreams* 
 
 			if (iop != 0) {
 				iop->disconnect ();
+			}
+
+			if (std::dynamic_pointer_cast<InternalSend>(processor)) {
+				routing_processor_removed = true;
 			}
 
 			deleted.push_back (processor);
@@ -1654,8 +1755,6 @@ Route::remove_processors (const ProcessorList& to_be_deleted, ProcessorStreams* 
 			/* none of those in the requested list were found */
 			return 0;
 		}
-
-		_output->set_user_latency (0);
 
 		if (configure_processors_unlocked (err, &lm)) {
 			pstate.restore ();
@@ -1668,9 +1767,9 @@ Route::remove_processors (const ProcessorList& to_be_deleted, ProcessorStreams* 
 		_have_internal_generator = false;
 
 		for (i = _processors.begin(); i != _processors.end(); ++i) {
-			boost::shared_ptr<PluginInsert> pi;
+			std::shared_ptr<PluginInsert> pi;
 
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
 				if (pi->has_no_inputs ()) {
 					_have_internal_generator = true;
 					break;
@@ -1686,19 +1785,32 @@ Route::remove_processors (const ProcessorList& to_be_deleted, ProcessorStreams* 
 	}
 
 	reset_instrument_info ();
-	processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+	processors_changed (RouteProcessorChange (routing_processor_removed ? RouteProcessorChange::SendReturnChange : RouteProcessorChange::GeneralChange, false)); /* EMIT SIGNAL */
 	set_processor_positions ();
 
 	return 0;
 }
 
 void
+Route::stop_triggers (bool now)
+{
+	if (_triggerbox) {
+		if (now) {
+			_triggerbox->stop_all_immediately ();
+		} else {
+			_triggerbox->stop_all_quantized();
+		}
+	}
+}
+
+void
 Route::reset_instrument_info ()
 {
-	boost::shared_ptr<Processor> instr = the_instrument();
-	if (instr) {
-		_instrument_info.set_internal_instrument (instr);
+	std::shared_ptr<Processor> instr = the_instrument();
+	if (!instr) {
+		_instrument_fanned_out = false;
 	}
+	_instrument_info.set_internal_instrument (instr);
 }
 
 /** Caller must hold process lock */
@@ -1742,12 +1854,19 @@ Route::try_configure_processors_unlocked (ChanCount in, ProcessorStreams* err)
 	DEBUG_TRACE (DEBUG::Processors, string_compose ("%1: configure processors\n", _name));
 	DEBUG_TRACE (DEBUG::Processors, "{\n");
 
+	ChanCount disk_io = in;
+
 	for (ProcessorList::iterator p = _processors.begin(); p != _processors.end(); ++p, ++index) {
+
+		if (std::dynamic_pointer_cast<DiskReader> (*p)) {
+			/* disk-reader has the same i/o as disk-writer */
+			in = max (in, disk_io);
+		}
 
 		if ((*p)->can_support_io_configuration(in, out)) {
 
-			if (boost::dynamic_pointer_cast<Delivery> (*p)
-					&& boost::dynamic_pointer_cast<Delivery> (*p)->role() == Delivery::Main
+			if (std::dynamic_pointer_cast<Delivery> (*p)
+					&& std::dynamic_pointer_cast<Delivery> (*p)->role() == Delivery::Main
 					&& !is_auditioner()
 					&& (is_monitor() || _strict_io || Profile->get_mixbus ())) {
 				/* with strict I/O the panner + output are forced to
@@ -1762,17 +1881,20 @@ Route::try_configure_processors_unlocked (ChanCount in, ProcessorStreams* err)
 				 * by calling _output->ensure_io()
 				 */
 				if (!is_master() && _session.master_out () && in.n_audio() > 0) {
-					/* ..but at least as many as there are master-inputs, if
-					 * the delivery is dealing with audio */
-					// XXX this may need special-casing for mixbus (master-outputs)
-					// and should maybe be a preference anyway ?!
-					out = ChanCount::max (in, _session.master_out ()->n_inputs ());
+					if (!is_monitor()) {
+						/* ..but at least as many as there are master-inputs, if
+						 * the delivery is dealing with audio */
+						out = ChanCount::max (in, _session.master_out ()->n_inputs ());
+					} else {
+						/* monitor-bus follows the master-bus' output */
+						out = ChanCount::max (in, _session.master_out ()->n_outputs ());
+					}
 				} else {
 					out = in;
 				}
 			}
 
-			DEBUG_TRACE (DEBUG::Processors, string_compose ("\t%1 ID=%2 in=%3 out=%4\n",(*p)->name(), (*p)->id(), in, out));
+			DEBUG_TRACE (DEBUG::Processors, string_compose ("\t%1 ID=%2 in=%3 out=%4\n",(*p)->display_name(), (*p)->id(), in, out));
 			configuration.push_back(make_pair(in, out));
 
 			if (is_monitor()) {
@@ -1794,12 +1916,12 @@ Route::try_configure_processors_unlocked (ChanCount in, ProcessorStreams* err)
 					 */
 					DEBUG_TRACE (DEBUG::Processors, "Monitor: Channel configuration change.\n");
 				}
-				if (boost::dynamic_pointer_cast<InternalSend> (*p)) {
+				if (std::dynamic_pointer_cast<InternalSend> (*p)) {
 					// internal sends make no sense, only feedback
 					DEBUG_TRACE (DEBUG::Processors, "Monitor: No Sends allowed.\n");
 					return list<pair<ChanCount, ChanCount> > ();
 				}
-				if (boost::dynamic_pointer_cast<PortInsert> (*p)) {
+				if (std::dynamic_pointer_cast<PortInsert> (*p)) {
 					/* External Sends can be problematic. one can add/remove ports
 					 * there signal leaves the DAW to external monitors anyway, so there's
 					 * no real use for allowing them here anyway.
@@ -1807,12 +1929,20 @@ Route::try_configure_processors_unlocked (ChanCount in, ProcessorStreams* err)
 					DEBUG_TRACE (DEBUG::Processors, "Monitor: No External Sends allowed.\n");
 					return list<pair<ChanCount, ChanCount> > ();
 				}
-				if (boost::dynamic_pointer_cast<Send> (*p)) {
+				if (std::dynamic_pointer_cast<Send> (*p)) {
 					// ditto
 					DEBUG_TRACE (DEBUG::Processors, "Monitor: No Sends allowed.\n");
 					return list<pair<ChanCount, ChanCount> > ();
 				}
 			}
+
+			if (std::dynamic_pointer_cast<DiskWriter> (*p)) {
+				assert (in == out);
+				disk_io = out;
+			}
+
+
+			/* next processor's in == this processor's out*/
 			in = out;
 		} else {
 			if (err) {
@@ -1900,23 +2030,28 @@ Route::configure_processors_unlocked (ProcessorStreams* err, Glib::Threads::RWLo
 		processor_max_streams = ChanCount::max(processor_max_streams, c->first);
 		processor_max_streams = ChanCount::max(processor_max_streams, c->second);
 
-		boost::shared_ptr<IOProcessor> iop;
-		boost::shared_ptr<PluginInsert> pi;
-		if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*p)) != 0) {
+		std::shared_ptr<IOProcessor> iop;
+		std::shared_ptr<PluginInsert> pi;
+		if ((pi = std::dynamic_pointer_cast<PluginInsert>(*p)) != 0) {
 			/* plugins connected via Split or Hide Match may have more channels.
 			 * route/scratch buffers are needed for all of them
 			 * The configuration may only be a subset (both input and output)
 			 */
 			processor_max_streams = ChanCount::max(processor_max_streams, pi->required_buffers());
 		}
-		else if ((iop = boost::dynamic_pointer_cast<IOProcessor>(*p)) != 0) {
+		else if ((iop = std::dynamic_pointer_cast<IOProcessor>(*p)) != 0) {
 			processor_max_streams = ChanCount::max(processor_max_streams, iop->natural_input_streams());
 			processor_max_streams = ChanCount::max(processor_max_streams, iop->natural_output_streams());
 		}
+		else if (std::dynamic_pointer_cast<TriggerBox>(*p) != 0) {
+			/* TB sidechain control input */
+			processor_max_streams = ChanCount::max(processor_max_streams, c->first + ChanCount (DataType::MIDI, 1));
+		}
+
 		out = c->second;
 
-		if (boost::dynamic_pointer_cast<Delivery> (*p)
-				&& boost::dynamic_pointer_cast<Delivery> (*p)->role() == Delivery::Main) {
+		if (std::dynamic_pointer_cast<Delivery> (*p)
+				&& std::dynamic_pointer_cast<Delivery> (*p)->role() == Delivery::Main) {
 			/* main delivery will increase port count to match input.
 			 * the Delivery::Main is usually the last processor - followed only by
 			 * 'MeterOutput'.
@@ -1930,7 +2065,6 @@ Route::configure_processors_unlocked (ProcessorStreams* err, Glib::Threads::RWLo
 
 	lr.release ();
 	lm->acquire ();
-
 
 	if (_meter) {
 		_meter->set_max_channels (processor_max_streams);
@@ -1960,17 +2094,16 @@ Route::all_visible_processors_active (bool state)
 	}
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		if (!(*i)->display_to_user() || boost::dynamic_pointer_cast<Amp> (*i)) {
+		if (!(*i)->display_to_user () || is_internal_processor (*i)) {
 			continue;
 		}
-#ifdef MIXBUS
-		boost::shared_ptr<PluginInsert> pi;
-		if (0 != (pi = boost::dynamic_pointer_cast<PluginInsert>(*i))) {
+
+		std::shared_ptr<PluginInsert> pi;
+		if (0 != (pi = std::dynamic_pointer_cast<PluginInsert>(*i))) {
 			if (pi->is_channelstrip ()) {
 				continue;
 			}
 		}
-#endif
 		(*i)->enable (state);
 	}
 
@@ -2024,7 +2157,7 @@ Route::apply_processor_order (const ProcessorList& new_order)
 	/* "new_order" is an ordered list of processors to be positioned according to "placement".
 	 * NOTE: all processors in "new_order" MUST be marked as display_to_user(). There maybe additional
 	 * processors in the current actual processor list that are hidden. Any visible processors
-	 *  in the current list but not in "new_order" will be assumed to be deleted.
+	 * in the current list but not in "new_order" will be assumed to be deleted.
 	 */
 
 	/* "as_it_will_be" and "_processors" are lists of shared pointers.
@@ -2032,8 +2165,8 @@ Route::apply_processor_order (const ProcessorList& new_order)
 	 * (note though that  ::processors_reorder_needs_configure() ensured that
 	 * this function will only ever be called from the rt-thread if no processor were removed)
 	 *
-	 * either way, I can't proove it, but an x-run due to re-order here is less likley
-	 * than an x-run-less 'ardour-silent cycle' both of which effectively "click".
+	 * either way, I can't proove it, but an xrun due to re-order here is less likely
+	 * than an xrun-less 'ardour-silent cycle' both of which effectively "click".
 	 */
 
 	ProcessorList as_it_will_be;
@@ -2043,20 +2176,20 @@ Route::apply_processor_order (const ProcessorList& new_order)
 	oiter = _processors.begin();
 	niter = new_order.begin();
 
-	while (niter !=  new_order.end()) {
+	while (niter != new_order.end ()) {
 
 		/* if the next processor in the old list is invisible (i.e. should not be in the new order)
-		   then append it to the temp list.
-
-		   Otherwise, see if the next processor in the old list is in the new list. if not,
-		   its been deleted. If its there, append it to the temp list.
-		   */
+		 * then append it to the temp list.
+		 *
+		 * Otherwise, see if the next processor in the old list is in the new list. if not,
+		 * its been deleted. If its there, append it to the temp list.
+		 */
 
 		if (oiter == _processors.end()) {
 
 			/* no more elements in the old list, so just stick the rest of
-			   the new order onto the temp list.
-			   */
+			 * the new order onto the temp list.
+			 */
 
 			as_it_will_be.insert (as_it_will_be.end(), niter, new_order.end());
 			while (niter != new_order.end()) {
@@ -2092,6 +2225,44 @@ Route::apply_processor_order (const ProcessorList& new_order)
 
 	/* If the meter is in a custom position, find it and make a rough note of its position */
 	maybe_note_meter_position ();
+
+	/* if any latent plugins were re-ordered and sends or side-chains are present
+	 * in the signal-flow, a full latency-recompute is needed.
+	 *
+	 * The Session will be informed about the new order via
+	 *  processors_changed()
+	 * and test if a full latency-recompute is required by comparing
+	 * _signal_latency != ::update_signal_latency();
+	 *
+	 * Since the route's latency itself does not initially change by
+	 * re-ordering, we need to force this:
+	 */
+	bool need_latency_recompute = false;
+	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
+		if (std::dynamic_pointer_cast<PortInsert> (*i)) {
+			need_latency_recompute = true;
+			break;
+		} else if (std::dynamic_pointer_cast<LatentSend> (*i)) {
+			need_latency_recompute = true;
+			break;
+		} else if (std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert> (*i)) {
+			if (pi->sidechain_input ()) {
+				need_latency_recompute = true;
+				break;
+			}
+		}
+	}
+	if (need_latency_recompute) {
+		/* force a change, the correct value will be set
+		 * ::update_signal_latency() will be called via
+		 *
+		 * SIGNAL processors_changed () ->
+		 * -> Session::route_processors_changed ()
+		 * -> Session::update_latency_compensation ()
+		 * -> Route::::update_signal_latency ()
+		 */
+	_signal_latency = 0;
+	}
 }
 
 void
@@ -2099,9 +2270,9 @@ Route::move_instrument_down (bool postfader)
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	ProcessorList new_order;
-	boost::shared_ptr<Processor> instrument;
+	std::shared_ptr<Processor> instrument;
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert>(*i);
+		std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert>(*i);
 		if (pi && pi->plugin ()->get_info ()->is_instrument ()) {
 			instrument = *i;
 		} else if (instrument && *i == _amp) {
@@ -2126,17 +2297,22 @@ Route::move_instrument_down (bool postfader)
 int
 Route::reorder_processors (const ProcessorList& new_order, ProcessorStreams* err)
 {
-	// it a change is already queued, wait for it
-	// (unless engine is stopped. apply immediately and proceed
-	while (g_atomic_int_get (&_pending_process_reorder)) {
+	/* If a change is already queued, wait for it
+	 * (unless engine is stopped. apply immediately and proceed
+	 */
+	while (_pending_process_reorder.load ()) {
 		if (!AudioEngine::instance()->running()) {
 			DEBUG_TRACE (DEBUG::Processors, "offline apply queued processor re-order.\n");
 			Glib::Threads::RWLock::WriterLock lm (_processor_lock);
 
+			_pending_process_reorder.store (0);
+			_pending_listen_change.store (0);
+
 			apply_processor_order(_pending_processor_order);
+			_pending_processor_order.clear ();
 			setup_invisible_processors ();
 
-			g_atomic_int_set (&_pending_process_reorder, 0);
+			update_signal_latency (true);
 
 			processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
 			set_processor_positions ();
@@ -2162,6 +2338,12 @@ Route::reorder_processors (const ProcessorList& new_order, ProcessorStreams* err
 		}
 
 		lm.release();
+
+		/* update processor input/output latency (total signal_latency does not change).
+		 * delaylines may changes, so the Engine Lock is required.
+		 */
+		update_signal_latency (true);
+
 		lx.release();
 
 		processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
@@ -2173,22 +2355,21 @@ Route::reorder_processors (const ProcessorList& new_order, ProcessorStreams* err
 
 		// _pending_processor_order is protected by _processor_lock
 		_pending_processor_order = new_order;
-		g_atomic_int_set (&_pending_process_reorder, 1);
+		_pending_process_reorder.store (1);
 	}
-
-	/* update processor input/output latency
-	 * (total signal_latency does not change)
-	 */
-	update_signal_latency (true);
 
 	return 0;
 }
 
 bool
-Route::add_remove_sidechain (boost::shared_ptr<Processor> proc, bool add)
+Route::add_remove_sidechain (std::shared_ptr<Processor> proc, bool add)
 {
-	boost::shared_ptr<PluginInsert> pi;
-	if ((pi = boost::dynamic_pointer_cast<PluginInsert>(proc)) == 0) {
+	if (_session.actively_recording () || _in_sidechain_setup) {
+		return false;
+	}
+
+	std::shared_ptr<PluginInsert> pi;
+	if ((pi = std::dynamic_pointer_cast<PluginInsert>(proc)) == 0) {
 		return false;
 	}
 
@@ -2205,13 +2386,14 @@ Route::add_remove_sidechain (boost::shared_ptr<Processor> proc, bool add)
 	}
 
 	{
-		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ()); // take before Writerlock to avoid deadlock
-		Glib::Threads::RWLock::WriterLock lm (_processor_lock);
 		PBD::Unwinder<bool> uw (_in_sidechain_setup, true);
 
-		lx.release (); // IO::add_port() and ~IO takes process lock  - XXX check if this is safe
 		if (add) {
-			if (!pi->add_sidechain ()) {
+			ChanCount sc (pi->sidechain_input_pins ());
+			if (sc.n_audio () == 0 && sc.n_midi () == 0) {
+				sc.set (DataType::AUDIO, 1);
+			}
+			if (!pi->add_sidechain (sc.n_audio (), sc.n_midi ())) {
 				return false;
 			}
 		} else {
@@ -2220,11 +2402,15 @@ Route::add_remove_sidechain (boost::shared_ptr<Processor> proc, bool add)
 			}
 		}
 
-		lx.acquire ();
+		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ()); // take before Writerlock to avoid deadlock
+		Glib::Threads::RWLock::WriterLock lm (_processor_lock);
+
 		list<pair<ChanCount, ChanCount> > c = try_configure_processors_unlocked (n_inputs (), 0);
-		lx.release ();
 
 		if (c.empty()) {
+			lm.release ();
+			lx.release ();
+
 			if (add) {
 				pi->del_sidechain ();
 			} else {
@@ -2233,12 +2419,13 @@ Route::add_remove_sidechain (boost::shared_ptr<Processor> proc, bool add)
 			}
 			return false;
 		}
-		lx.acquire ();
+
 		configure_processors_unlocked (0, &lm);
 	}
 
 	if (pi->has_sidechain ()) {
-		pi->sidechain_input ()->changed.connect_same_thread (*this, boost::bind (&Route::sidechain_change_handler, this, _1, _2));
+		pi->reset_sidechain_map ();
+		pi->sidechain_input ()->changed.connect_same_thread (*pi, std::bind (&Route::sidechain_change_handler, this, _1, _2));
 	}
 
 	processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
@@ -2247,10 +2434,14 @@ Route::add_remove_sidechain (boost::shared_ptr<Processor> proc, bool add)
 }
 
 bool
-Route::plugin_preset_output (boost::shared_ptr<Processor> proc, ChanCount outs)
+Route::plugin_preset_output (std::shared_ptr<Processor> proc, ChanCount outs)
 {
-	boost::shared_ptr<PluginInsert> pi;
-	if ((pi = boost::dynamic_pointer_cast<PluginInsert>(proc)) == 0) {
+	if (_session.actively_recording ()) {
+		return false;
+	}
+
+	std::shared_ptr<PluginInsert> pi;
+	if ((pi = std::dynamic_pointer_cast<PluginInsert>(proc)) == 0) {
 		return false;
 	}
 
@@ -2286,17 +2477,20 @@ Route::plugin_preset_output (boost::shared_ptr<Processor> proc, ChanCount outs)
 }
 
 bool
-Route::reset_plugin_insert (boost::shared_ptr<Processor> proc)
+Route::reset_plugin_insert (std::shared_ptr<Processor> proc)
 {
 	ChanCount unused;
 	return customize_plugin_insert (proc, 0, unused, unused);
 }
 
 bool
-Route::customize_plugin_insert (boost::shared_ptr<Processor> proc, uint32_t count, ChanCount outs, ChanCount sinks)
+Route::customize_plugin_insert (std::shared_ptr<Processor> proc, uint32_t count, ChanCount outs, ChanCount sinks)
 {
-	boost::shared_ptr<PluginInsert> pi;
-	if ((pi = boost::dynamic_pointer_cast<PluginInsert>(proc)) == 0) {
+	if (_session.actively_recording ()) {
+		return false;
+	}
+	std::shared_ptr<PluginInsert> pi;
+	if ((pi = std::dynamic_pointer_cast<PluginInsert>(proc)) == 0) {
 		return false;
 	}
 
@@ -2340,7 +2534,7 @@ Route::customize_plugin_insert (boost::shared_ptr<Processor> proc, uint32_t coun
 		configure_processors_unlocked (0, &lm);
 	}
 
-	processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+	processors_changed (RouteProcessorChange (RouteProcessorChange::CustomPinChange, false)); /* EMIT SIGNAL */
 	_session.set_dirty ();
 	return true;
 }
@@ -2354,8 +2548,8 @@ Route::set_strict_io (const bool enable)
 		_strict_io = enable;
 		Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 		for (ProcessorList::iterator p = _processors.begin(); p != _processors.end(); ++p) {
-			boost::shared_ptr<PluginInsert> pi;
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*p)) != 0) {
+			std::shared_ptr<PluginInsert> pi;
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(*p)) != 0) {
 				pi->set_strict_io (_strict_io);
 			}
 		}
@@ -2366,8 +2560,8 @@ Route::set_strict_io (const bool enable)
 			// not possible
 			_strict_io = !enable; // restore old value
 			for (ProcessorList::iterator p = _processors.begin(); p != _processors.end(); ++p) {
-				boost::shared_ptr<PluginInsert> pi;
-				if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*p)) != 0) {
+				std::shared_ptr<PluginInsert> pi;
+				if ((pi = std::dynamic_pointer_cast<PluginInsert>(*p)) != 0) {
 					pi->set_strict_io (_strict_io);
 				}
 			}
@@ -2378,14 +2572,14 @@ Route::set_strict_io (const bool enable)
 		configure_processors (0);
 		lx.release ();
 
-		processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+		processors_changed (RouteProcessorChange (RouteProcessorChange::CustomPinChange, false)); /* EMIT SIGNAL */
 		_session.set_dirty ();
 	}
 	return true;
 }
 
 XMLNode&
-Route::get_state()
+Route::get_state() const
 {
 	return state (false);
 }
@@ -2397,19 +2591,37 @@ Route::get_template()
 }
 
 XMLNode&
-Route::state (bool save_template)
+Route::state (bool save_template) const
 {
 	if (!_session._template_state_dir.empty()) {
-		foreach_processor (sigc::bind (sigc::mem_fun (*this, &Route::set_plugin_state_dir), _session._template_state_dir));
+		Route* ncthis = const_cast<Route*> (this);
+		foreach_processor (sigc::bind (sigc::mem_fun (*ncthis, &Route::set_plugin_state_dir), _session._template_state_dir));
 	}
 
 	XMLNode *node = new XMLNode("Route");
 	ProcessorList::iterator i;
 
+	if(save_template) {
+		XMLNode* child = node->add_child("ProgramVersion");
+		child->set_property("created-with", _session.created_with);
+
+		std::string modified_with = string_compose ("%1 %2", PROGRAM_NAME, revision);
+		child->set_property("modified-with", modified_with);
+	}
+
+	/* This is needed for templates and when duplicating routes, in which case
+	 * the route-state is directly passed to new_route_from_template().
+	 */
+	node->set_property("version", CURRENT_SESSION_FILE_VERSION);
+
 	node->set_property (X_("id"), id ());
 	node->set_property (X_("name"), name());
 	node->set_property (X_("default-type"), _default_type);
 	node->set_property (X_("strict-io"), _strict_io);
+
+	if (is_master ()) {
+		node->set_property (X_("volume-applies-to-output"), _volume_applies_to_output);
+	}
 
 	node->add_child_nocopy (_presentation_info.get_state());
 
@@ -2418,7 +2630,7 @@ Route::state (bool save_template)
 	node->set_property (X_("meter-point"), _meter_point);
 	node->set_property (X_("disk-io-point"), _disk_io_point);
 
-	node->set_property (X_("meter-type"), _meter_type);
+	node->set_property (X_("meter-type"), _meter->meter_type ());
 
 	if (_route_group) {
 		node->set_property (X_("route-group"), _route_group->name());
@@ -2435,6 +2647,10 @@ Route::state (bool save_template)
 	node->add_child_nocopy (_mute_control->get_state ());
 	node->add_child_nocopy (_phase_control->get_state ());
 
+	if (_volume_control) {
+		node->add_child_nocopy (_volume_control->get_state ());
+	}
+
 	if (!skip_saving_automation) {
 		node->add_child_nocopy (Automatable::get_automation_xml_state ());
 	}
@@ -2450,8 +2666,8 @@ Route::state (bool save_template)
 
 	{
 		Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
-		for (i = _processors.begin(); i != _processors.end(); ++i) {
-			if (*i == _delayline) {
+		for (auto const & p : _processors) {
+			if (p == _delayline) {
 				continue;
 			}
 			if (save_template) {
@@ -2464,15 +2680,15 @@ Route::state (bool save_template)
 					 the monitor section, because these will always be
 					 added if necessary.
 					 */
-				boost::shared_ptr<InternalSend> is;
+				std::shared_ptr<InternalSend> is;
 
-				if ((is = boost::dynamic_pointer_cast<InternalSend> (*i)) != 0) {
+				if ((is = std::dynamic_pointer_cast<InternalSend> (p)) != 0) {
 					if (is->role() == Delivery::Listen) {
 						continue;
 					}
 				}
 			}
-			node->add_child_nocopy((*i)->get_state ());
+			node->add_child_nocopy (p->get_state ());
 		}
 	}
 
@@ -2481,14 +2697,15 @@ Route::state (bool save_template)
 	}
 
 	if (_custom_meter_position_noted) {
-		boost::shared_ptr<Processor> after = _processor_after_last_custom_meter.lock ();
+		std::shared_ptr<Processor> after = _processor_after_last_custom_meter.lock ();
 		if (after) {
 			node->set_property (X_("processor-after-last-custom-meter"), after->id());
 		}
 	}
 
 	if (!_session._template_state_dir.empty()) {
-		foreach_processor (sigc::bind (sigc::mem_fun (*this, &Route::set_plugin_state_dir), ""));
+		Route* ncthis = const_cast<Route*> (this);
+		foreach_processor (sigc::bind (sigc::mem_fun (*ncthis, &Route::set_plugin_state_dir), ""));
 	}
 
 	node->add_child_copy (Slavable::get_state());
@@ -2514,13 +2731,31 @@ Route::set_state (const XMLNode& node, int version)
 
 	std::string route_name;
 	if (node.get_property (X_("name"), route_name)) {
-		Route::set_name (route_name);
+		set_name (route_name);
 	}
 
 	set_id (node);
 	_initial_io_setup = true;
 
 	Stripable::set_state (node, version);
+
+	/*  "This should never happen"
+	Stripable's job is to save/recall the PresentationInfo flags for bus/track audio/midi VCA etc.
+	But I found a case where no "type" flag is set, so the strip never shows up on any UI.
+	Since I don't know the source of the error, I have to assume that it could happen again.
+	So: if a stripable doesn't have any flags set, populate them from our audio/midi track/bus identity.
+	*/
+	PresentationInfo::Flag file_flags = _presentation_info.flags();
+	if ( !(file_flags & PresentationInfo::TypeMask) ) {
+		if (dynamic_cast<AudioTrack*>(this)) {
+			_presentation_info.set_flags ( PresentationInfo::Flag (file_flags | PresentationInfo::AudioTrack) );
+		} else if (dynamic_cast<MidiTrack*>(this)) {
+			_presentation_info.set_flags ( PresentationInfo::Flag (file_flags | PresentationInfo::MidiTrack) );
+		} else {
+			//no idea what this is, so let's call it an audio bus
+			_presentation_info.set_flags ( PresentationInfo::Flag (file_flags | PresentationInfo::AudioBus) );
+		}
+	}
 
 	node.get_property (X_("strict-io"), _strict_io);
 
@@ -2561,18 +2796,10 @@ Route::set_state (const XMLNode& node, int version)
 			if (_pannable) {
 				_pannable->set_state (*child, version);
 			} else {
-				warning << string_compose (_("Pannable state found for route (%1) without a panner!"), name()) << endmsg;
+				warning << string_compose (_("Panner state mismatches for track/bus (%1)."), name()) << endmsg;
 			}
 		} else if (child->name() == Slavable::xml_node_name) {
 			Slavable::set_state (*child, version);
-		}
-	}
-
-	MeterPoint mp;
-	if (node.get_property (X_("meter-point"), mp)) {
-		set_meter_point (mp, true);
-		if (_meter) {
-			_meter->set_display_to_user (_meter_point == MeterCustom);
 		}
 	}
 
@@ -2584,17 +2811,44 @@ Route::set_state (const XMLNode& node, int version)
 		if (_disk_reader) {
 			_disk_reader->set_display_to_user (diop == DiskIOCustom);
 		}
+		if (_triggerbox) {
+			_triggerbox->set_display_to_user (diop == DiskIOCustom);
+		}
 		set_disk_io_point (diop);
 	}
 
-	node.get_property (X_("meter-type"), _meter_type);
+	MeterType meter_type;
+	if (node.get_property (X_("meter-type"), meter_type)) {
+		set_meter_type (meter_type);
+	}
 
 	_initial_io_setup = false;
 
-	set_processor_state (processor_state);
+	if (is_master ()) {
+		node.get_property (X_("volume-applies-to-output"), _volume_applies_to_output);
+		if (_volume_applies_to_output) {
+			_volume->deactivate ();
+			_volume->set_display_to_user (false);
+			main_outs()->set_gain_control (_volume_control);
+		} else {
+			_volume->set_display_to_user (true);
+			_volume->activate ();
+			main_outs()->set_gain_control (std::shared_ptr<GainControl> ());
+		}
+	}
+
+	set_processor_state (processor_state, version);
 
 	// this looks up the internal instrument in processors
 	reset_instrument_info();
+
+	MeterPoint mp;
+	if (node.get_property (X_("meter-point"), mp)) {
+		set_meter_point (mp);
+		if (_meter) {
+			_meter->set_display_to_user (_meter_point == MeterCustom);
+		}
+	}
 
 	bool denormal_protection;
 	if (node.get_property (X_("denormal-protection"), denormal_protection)) {
@@ -2651,12 +2905,16 @@ Route::set_state (const XMLNode& node, int version)
 				_solo_isolate_control->set_state (*child, version);
 			} else if (control_name == _mute_control->name()) {
 				_mute_control->set_state (*child, version);
+			} else if (_volume_control && control_name == _volume_control->name()) {
+				_volume_control->set_state (*child, version);
 			} else if (control_name == _phase_control->name()) {
 				_phase_control->set_state (*child, version);
+			} else if (control_name == "recenable" && version <= 3002) {
+				/* ignore (now "rec-enable"), handled by Track */
 			} else {
 				Evoral::Parameter p = EventTypeMap::instance().from_symbol (control_name);
 				if (p.type () >= MidiCCAutomation && p.type () < MidiSystemExclusiveAutomation) {
-					boost::shared_ptr<AutomationControl> ac = automation_control (p, true);
+					std::shared_ptr<AutomationControl> ac = automation_control (p, true);
 					if (ac) {
 						ac->set_state (*child, version);
 					}
@@ -2859,6 +3117,20 @@ Route::set_state_2X (const XMLNode& node, int version)
 		}
 	}
 
+	bool phase_invert; /* yes / no - apply to all channels */
+	if (node.get_property (X_("phase-invert"), phase_invert)) {
+		/* phase_control is not usually configured at this point in time
+		 * _phase_control->count() == 0. However in v2, polarity invert
+		 * is directly after the input, so the input channel count can be used.
+		 * NB. v2 busses: polarity invert was only applied to inputs. Aux-return
+		 * was not affected. This is no longer the case (and may break sessions).
+		 */
+		uint64_t pol_cnt = std::max ((uint64_t)_input->n_ports().n_audio (), _phase_control->count ());
+		for (uint64_t c = 0; c < pol_cnt; ++c) {
+			_phase_control->set_phase_invert (c, phase_invert);
+		}
+	}
+
 	return 0;
 }
 
@@ -2888,56 +3160,91 @@ Route::set_processor_state_2X (XMLNodeList const & nList, int version)
 }
 
 void
-Route::set_processor_state (const XMLNode& node)
+Route::set_processor_state (const XMLNode& node, int version)
 {
 	const XMLNodeList &nlist = node.children();
+
+	if (nlist.empty()) {
+		return;
+	}
+
 	XMLNodeConstIterator niter;
 	ProcessorList new_order;
 	bool must_configure = false;
+	Temporal::TimeDomainProvider const & tdp (*this);
 
 	for (niter = nlist.begin(); niter != nlist.end(); ++niter) {
 
 		XMLProperty* prop = (*niter)->property ("type");
 
 		if (prop->value() == "amp") {
-			_amp->set_state (**niter, Stateful::current_state_version);
+			_amp->set_state (**niter, version);
 			new_order.push_back (_amp);
 		} else if (prop->value() == "trim") {
-			_trim->set_state (**niter, Stateful::current_state_version);
+			_trim->set_state (**niter, version);
 			new_order.push_back (_trim);
+		} else if (prop->value() == "main-volume") {
+			assert (is_master ());
+			_volume->set_state (**niter, version);
+			new_order.push_back (_volume);
+#ifdef HAVE_BEATBOX
+		} else if (prop->value() == "beatbox" && _beatbox) {
+			_beatbox->set_state (**niter, Stateful::current_state_version);
+			new_order.push_back (_beatbox);
+#endif
 		} else if (prop->value() == "meter") {
-			_meter->set_state (**niter, Stateful::current_state_version);
+			_meter->set_state (**niter, version);
 			new_order.push_back (_meter);
 		} else if (prop->value() == "polarity") {
-			_polarity->set_state (**niter, Stateful::current_state_version);
+			_polarity->set_state (**niter, version);
 			new_order.push_back (_polarity);
 		} else if (prop->value() == "delay") {
 			// skip -- internal
 		} else if (prop->value() == "main-outs") {
-			_main_outs->set_state (**niter, Stateful::current_state_version);
-		} else if (prop->value() == "intreturn") {
+			_main_outs->set_state (**niter, version);
+		} else if (prop->value() == "monreturn") {
 			if (!_intreturn) {
-				_intreturn.reset (new InternalReturn (_session));
+				_intreturn.reset (new MonitorReturn (_session, tdp));
 				must_configure = true;
 			}
-			_intreturn->set_state (**niter, Stateful::current_state_version);
-		} else if (is_monitor() && prop->value() == "monitor") {
+			_intreturn->set_state (**niter, version);
+		} else if (prop->value() == "intreturn") {
+			if (!_intreturn) {
+
+				if (is_monitor ()) {
+					_intreturn.reset (new MonitorReturn (_session, tdp));
+				} else {
+					_intreturn.reset (new InternalReturn (_session, tdp));
+				}
+
+				must_configure = true;
+			}
+			_intreturn->set_state (**niter, version);
+		} else if ((is_monitor() || is_surround_master ()) && prop->value() == "monitor") {
 			if (!_monitor_control) {
 				_monitor_control.reset (new MonitorProcessor (_session));
 				must_configure = true;
 			}
-			_monitor_control->set_state (**niter, Stateful::current_state_version);
+			_monitor_control->set_state (**niter, version);
 		} else if (prop->value() == "capture") {
 			/* CapturingProcessor should never be restored, it's always
 			   added explicitly when needed */
 		} else if (prop->value() == "diskreader" && _disk_reader) {
-			_disk_reader->set_state (**niter, Stateful::current_state_version);
+			_disk_reader->set_state (**niter, version);
 			new_order.push_back (_disk_reader);
 		} else if (prop->value() == "diskwriter" && _disk_writer) {
-			_disk_writer->set_state (**niter, Stateful::current_state_version);
+			_disk_writer->set_state (**niter, version);
 			new_order.push_back (_disk_writer);
+		} else if (prop->value() == "triggerbox") {
+			if (!_triggerbox) {
+				_triggerbox.reset (new TriggerBox (_session, _default_type));
+				_triggerbox->set_owner (this);
+			}
+			_triggerbox->set_state (**niter, version);
+
+			new_order.push_back (_triggerbox);
 		} else {
-			set_processor_state (**niter, prop, new_order, must_configure);
+			set_processor_state (**niter, version, prop, new_order, must_configure);
 		}
 	}
 
@@ -2952,18 +3259,34 @@ Route::set_processor_state (const XMLNode& node)
 		 */
 		_processors = new_order;
 
-		if (must_configure) {
+		/* When a required/existing internal processor is not in the list, it needs to
+		 * be added via configure_processors() -> setup_invisible_processors()
+		 */
+		if (_monitor_control) {
+			must_configure |= find (_processors.begin(), _processors.end(), _monitor_control) == _processors.end ();
+		}
+		if (_main_outs) {
+			must_configure |= find (_processors.begin(), _processors.end(), _main_outs) == _processors.end ();
+		}
+		if (_delayline) {
+			must_configure |= find (_processors.begin(), _processors.end(), _delayline) == _processors.end ();
+		}
+		if (_intreturn) {
+			must_configure |= find (_processors.begin(), _processors.end(), _intreturn) == _processors.end ();
+		}
+
+		if (must_configure && !_session.loading()) {
 			configure_processors_unlocked (0, &lm);
 		}
 
 		for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
 
 			(*i)->set_owner (this);
-			(*i)->ActiveChanged.connect_same_thread (*this, boost::bind (&Session::update_latency_compensation, &_session, false));
+			(*i)->ActiveChanged.connect_same_thread (**i, std::bind (&Session::queue_latency_recompute, &_session));
 
-			boost::shared_ptr<PluginInsert> pi;
+			std::shared_ptr<PluginInsert> pi;
 
-			if ((pi = boost::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
+			if ((pi = std::dynamic_pointer_cast<PluginInsert>(*i)) != 0) {
 				if (pi->has_no_inputs ()) {
 					_have_internal_generator = true;
 					break;
@@ -2980,14 +3303,15 @@ Route::set_processor_state (const XMLNode& node)
 }
 
 bool
-Route::set_processor_state (XMLNode const & node, XMLProperty const* prop, ProcessorList& new_order, bool& must_configure)
+Route::set_processor_state (XMLNode const& node, int version, XMLProperty const* prop, ProcessorList& new_order, bool& must_configure)
 {
 	ProcessorList::iterator o;
+	Temporal::TimeDomainProvider const & tdp (*this);
 
 	for (o = _processors.begin(); o != _processors.end(); ++o) {
 		XMLProperty const * id_prop = node.property(X_("id"));
 		if (id_prop && (*o)->id() == id_prop->value()) {
-			(*o)->set_state (node, Stateful::current_state_version);
+			(*o)->set_state (node, version);
 			new_order.push_back (*o);
 			break;
 		}
@@ -2997,11 +3321,11 @@ Route::set_processor_state (XMLNode const & node, XMLProperty const* prop, Proce
 
 	if (o == _processors.end()) {
 
-		boost::shared_ptr<Processor> processor;
+		std::shared_ptr<Processor> processor;
 
 		if (prop->value() == "intsend") {
 
-			processor.reset (new InternalSend (_session, _pannable, _mute_master, boost::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this()), boost::shared_ptr<Route>(), Delivery::Aux, true));
+			processor.reset (new InternalSend (_session, _pannable, _mute_master, std::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this()), std::shared_ptr<Route>(), Delivery::Aux, true));
 
 		} else if (prop->value() == "ladspa" || prop->value() == "Ladspa" ||
 		           prop->value() == "lv2" ||
@@ -3009,49 +3333,70 @@ Route::set_processor_state (XMLNode const & node, XMLProperty const* prop, Proce
 		           prop->value() == "mac-vst" ||
 		           prop->value() == "lxvst" ||
 		           prop->value() == "luaproc" ||
+		           prop->value() == "vst3" ||
 		           prop->value() == "audiounit") {
 
 			if (_session.get_disable_all_loaded_plugins ()) {
-				processor.reset (new UnknownProcessor (_session, node));
+				processor.reset (new UnknownProcessor (_session, node, this));
 			} else {
-				processor.reset (new PluginInsert (_session));
+				processor.reset (new PluginInsert (_session, tdp));
 				processor->set_owner (this);
-				if (_strict_io) {
-					boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert>(processor);
-					pi->set_strict_io (true);
-				}
-
 			}
 		} else if (prop->value() == "port") {
 
 			processor.reset (new PortInsert (_session, _pannable, _mute_master));
+			processor->set_owner (this);
 
 		} else if (prop->value() == "send") {
+#ifndef LIVETRAX
+			Delivery::Role role;
+			if (Delivery::role_from_xml (node, role) && role == Delivery::DirectOuts) {
+				return true;
+			}
+#endif
 
 			processor.reset (new Send (_session, _pannable, _mute_master, Delivery::Send, true));
-			boost::shared_ptr<Send> send = boost::dynamic_pointer_cast<Send> (processor);
-			send->SelfDestruct.connect_same_thread (*this,
-			                                        boost::bind (&Route::processor_selfdestruct, this, boost::weak_ptr<Processor> (processor)));
+			std::shared_ptr<Send> send = std::dynamic_pointer_cast<Send> (processor);
+			send->SelfDestruct.connect_same_thread (*send, std::bind (&Route::processor_selfdestruct, this, std::weak_ptr<Processor> (processor)));
+			if (send->output()) {
+				send->output()->changed.connect_same_thread (*send, std::bind (&Route::output_change_handler, this, _1, _2));
+			}
 
+		} else if (prop->value() == "sursend") {
+			_surround_send.reset (new SurroundSend (_session, _mute_master));
+			_surround_send->set_owner (this);
+			processor = _surround_send;
+		} else if (prop->value() == "surreturn") {
+			if (_surround_return) {
+				_surround_return->set_state (node, version);
+			}
+			return true;
 		} else {
+			warning << string_compose(_("unknown Processor type \"%1\"; ignored"), prop->value()) << endmsg;
 			return false;
 		}
 
-		if (processor->set_state (node, Stateful::current_state_version) != 0) {
+		if (processor->set_state (node, version) != 0) {
 			/* This processor could not be configured.  Turn it into a UnknownProcessor */
-			processor.reset (new UnknownProcessor (_session, node));
+			processor.reset (new UnknownProcessor (_session, node, this));
+		}
+
+		/* set strict I/O only after loading plugin state, because
+		 * individual plugins may override this */
+		std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert> (processor);
+		if (pi && _strict_io) {
+			pi->set_strict_io (true);
 		}
 
 		/* subscribe to Sidechain IO changes */
-		boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert> (processor);
 		if (pi && pi->has_sidechain ()) {
-			pi->sidechain_input ()->changed.connect_same_thread (*this, boost::bind (&Route::sidechain_change_handler, this, _1, _2));
+			pi->sidechain_input ()->changed.connect_same_thread (*pi, std::bind (&Route::sidechain_change_handler, this, _1, _2));
 		}
 
 		/* we have to note the monitor send here, otherwise a new one will be created
 		   and the state of this one will be lost.
 		*/
-		boost::shared_ptr<InternalSend> isend = boost::dynamic_pointer_cast<InternalSend> (processor);
+		std::shared_ptr<InternalSend> isend = std::dynamic_pointer_cast<InternalSend> (processor);
 		if (isend && isend->role() == Delivery::Listen) {
 			_monitor_send = isend;
 		}
@@ -3066,26 +3411,20 @@ Route::set_processor_state (XMLNode const & node, XMLProperty const* prop, Proce
 	return true;
 }
 
-void
-Route::curve_reallocate ()
-{
-//	_gain_automation_curve.finish_resize ();
-//	_pan_automation_curve.finish_resize ();
-}
-
-void
-Route::silence (samplecnt_t nframes)
+int
+Route::silence (pframes_t nframes)
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock, Glib::Threads::TRY_LOCK);
 	if (!lm.locked()) {
-		return;
+		return 1;
 	}
 
 	silence_unlocked (nframes);
+	return 0;
 }
 
 void
-Route::silence_unlocked (samplecnt_t nframes)
+Route::silence_unlocked (pframes_t nframes)
 {
 	/* Must be called with the processor lock held */
 
@@ -3100,9 +3439,9 @@ Route::silence_unlocked (samplecnt_t nframes)
 	}
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		boost::shared_ptr<PluginInsert> pi;
+		std::shared_ptr<PluginInsert> pi;
 
-		if (!_active && (pi = boost::dynamic_pointer_cast<PluginInsert> (*i)) != 0) {
+		if (!_active && (pi = std::dynamic_pointer_cast<PluginInsert> (*i)) != 0) {
 			/* evaluate automated automation controls */
 			pi->automation_run (now, nframes);
 			/* skip plugins, they don't need anything when we're not active */
@@ -3117,7 +3456,7 @@ void
 Route::add_internal_return ()
 {
 	if (!_intreturn) {
-		_intreturn.reset (new InternalReturn (_session));
+		_intreturn.reset (new InternalReturn (_session, *this));
 		add_processor (_intreturn, PreFader);
 	}
 }
@@ -3128,7 +3467,7 @@ Route::add_send_to_internal_return (InternalSend* send)
 	Glib::Threads::RWLock::ReaderLock rm (_processor_lock);
 
 	for (ProcessorList::const_iterator x = _processors.begin(); x != _processors.end(); ++x) {
-		boost::shared_ptr<InternalReturn> d = boost::dynamic_pointer_cast<InternalReturn>(*x);
+		std::shared_ptr<InternalReturn> d = std::dynamic_pointer_cast<InternalReturn>(*x);
 
 		if (d) {
 			return d->add_send (send);
@@ -3142,7 +3481,7 @@ Route::remove_send_from_internal_return (InternalSend* send)
 	Glib::Threads::RWLock::ReaderLock rm (_processor_lock);
 
 	for (ProcessorList::const_iterator x = _processors.begin(); x != _processors.end(); ++x) {
-		boost::shared_ptr<InternalReturn> d = boost::dynamic_pointer_cast<InternalReturn>(*x);
+		std::shared_ptr<InternalReturn> d = std::dynamic_pointer_cast<InternalReturn>(*x);
 
 		if (d) {
 			return d->remove_send (send);
@@ -3159,10 +3498,11 @@ Route::enable_monitor_send ()
 	/* master never sends to monitor section via the normal mechanism */
 	assert (!is_master ());
 	assert (!is_monitor ());
+	assert (!is_surround_master ());
 
 	/* make sure we have one */
 	if (!_monitor_send) {
-		_monitor_send.reset (new InternalSend (_session, _pannable, _mute_master, boost::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this()), _session.monitor_out(), Delivery::Listen));
+		_monitor_send.reset (new InternalSend (_session, _pannable, _mute_master, std::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this()), _session.monitor_out(), Delivery::Listen));
 		_monitor_send->set_display_to_user (false);
 	}
 
@@ -3175,7 +3515,7 @@ Route::enable_monitor_send ()
  *  @param before Processor to insert before, or 0 to insert at the end.
  */
 int
-Route::add_aux_send (boost::shared_ptr<Route> route, boost::shared_ptr<Processor> before)
+Route::add_aux_send (std::shared_ptr<Route> route, std::shared_ptr<Processor> before)
 {
 	assert (route != _session.monitor_out ());
 
@@ -3184,7 +3524,7 @@ Route::add_aux_send (boost::shared_ptr<Route> route, boost::shared_ptr<Processor
 
 		for (ProcessorList::iterator x = _processors.begin(); x != _processors.end(); ++x) {
 
-			boost::shared_ptr<InternalSend> d = boost::dynamic_pointer_cast<InternalSend> (*x);
+			std::shared_ptr<InternalSend> d = std::dynamic_pointer_cast<InternalSend> (*x);
 
 			if (d && d->target_route() == route) {
 				/* already listening via the specified IO: do nothing */
@@ -3195,11 +3535,11 @@ Route::add_aux_send (boost::shared_ptr<Route> route, boost::shared_ptr<Processor
 
 	try {
 
-		boost::shared_ptr<InternalSend> listener;
+		std::shared_ptr<InternalSend> listener;
 
 		{
 			Glib::Threads::Mutex::Lock lm (AudioEngine::instance()->process_lock ());
-			listener.reset (new InternalSend (_session, _pannable, _mute_master, boost::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this()), route, Delivery::Aux));
+			listener.reset (new InternalSend (_session, _pannable, _mute_master, std::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this()), route, Delivery::Aux));
 		}
 
 		add_processor (listener, before);
@@ -3211,48 +3551,62 @@ Route::add_aux_send (boost::shared_ptr<Route> route, boost::shared_ptr<Processor
 	return 0;
 }
 
-void
-Route::remove_aux_or_listen (boost::shared_ptr<Route> route)
+int
+Route::add_foldback_send (std::shared_ptr<Route> route, bool post_fader)
 {
-	ProcessorStreams err;
-	ProcessorList::iterator tmp;
+	assert (route != _session.monitor_out ());
+	std::shared_ptr<Processor> before;
+	if (post_fader) {
+		before = before_processor_for_placement (PostFader);
+	} else {
+		before = before_processor_for_placement (PreFader);
+	}
 
 	{
-		Glib::Threads::RWLock::ReaderLock rl(_processor_lock);
+		Glib::Threads::RWLock::ReaderLock rm (_processor_lock);
 
-		/* have to do this early because otherwise processor reconfig
-		 * will put _monitor_send back in the list
-		 */
-
-		if (route == _session.monitor_out()) {
-			_monitor_send.reset ();
-		}
-
-	  again:
 		for (ProcessorList::iterator x = _processors.begin(); x != _processors.end(); ++x) {
 
-			boost::shared_ptr<InternalSend> d = boost::dynamic_pointer_cast<InternalSend>(*x);
+			std::shared_ptr<InternalSend> d = std::dynamic_pointer_cast<InternalSend> (*x);
 
 			if (d && d->target_route() == route) {
-				rl.release ();
-				if (remove_processor (*x, &err, false) > 0) {
-					rl.acquire ();
-					continue;
-				}
-				rl.acquire ();
-
-				/* list could have been demolished while we dropped the lock
-				   so start over.
-				*/
-				if (_session.engine().connected()) {
-					/* i/o processors cannot be removed if the engine is not running
-					 * so don't live-loop in case the engine is N/A or dies
-					 */
-					goto again;
-				}
+				/* already listening via the specified IO: do nothing */
+				return 0;
 			}
 		}
 	}
+
+	try {
+
+		std::shared_ptr<InternalSend> listener;
+
+		{
+			Glib::Threads::Mutex::Lock lm (AudioEngine::instance()->process_lock ());
+			listener.reset (new InternalSend (_session, _pannable, _mute_master, std::dynamic_pointer_cast<ARDOUR::Route>(shared_from_this()), route, Delivery::Foldback));
+		}
+
+		listener->panner_shell()->set_linked_to_route (false);
+		listener->set_pre_fader (!post_fader);
+		add_processor (listener, before);
+
+	} catch (failed_constructor& err) {
+		return -1;
+	}
+	_session.FBSendsChanged ();
+
+	return 0;
+}
+
+void
+Route::remove_monitor_send ()
+{
+	/* caller needs to hold process lock */
+	if (!_monitor_send) {
+		return;
+	}
+	ProcessorStreams err;
+	remove_processor (_monitor_send, &err, false);
+	_monitor_send.reset ();
 }
 
 void
@@ -3261,52 +3615,6 @@ Route::set_comment (string cmt, void *src)
 	_comment = cmt;
 	comment_changed ();
 	_session.set_dirty ();
-}
-
-bool
-Route::add_fed_by (boost::shared_ptr<Route> other, bool via_sends_only)
-{
-	FeedRecord fr (other, via_sends_only);
-
-	pair<FedBy::iterator,bool> result =  _fed_by.insert (fr);
-
-	if (!result.second) {
-
-		/* already a record for "other" - make sure sends-only information is correct */
-		if (!via_sends_only && result.first->sends_only) {
-			FeedRecord* frp = const_cast<FeedRecord*>(&(*result.first));
-			frp->sends_only = false;
-		}
-	}
-
-	return result.second;
-}
-
-void
-Route::clear_fed_by ()
-{
-	_fed_by.clear ();
-}
-
-bool
-Route::feeds (boost::shared_ptr<Route> other, bool* via_sends_only)
-{
-	const FedBy& fed_by (other->fed_by());
-
-	for (FedBy::const_iterator f = fed_by.begin(); f != fed_by.end(); ++f) {
-		boost::shared_ptr<Route> sr = f->r.lock();
-
-		if (sr && (sr.get() == this)) {
-
-			if (via_sends_only) {
-				*via_sends_only = f->sends_only;
-			}
-
-			return true;
-		}
-	}
-
-	return false;
 }
 
 IOVector
@@ -3322,8 +3630,8 @@ Route::all_inputs () const
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	for (ProcessorList::const_iterator r = _processors.begin(); r != _processors.end(); ++r) {
 
-		boost::shared_ptr<IOProcessor> iop = boost::dynamic_pointer_cast<IOProcessor>(*r);
-		boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert>(*r);
+		std::shared_ptr<IOProcessor> iop = std::dynamic_pointer_cast<IOProcessor>(*r);
+		std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert>(*r);
 		if (pi != 0) {
 			assert (iop == 0);
 			iop = pi->sidechain();
@@ -3343,7 +3651,7 @@ Route::all_outputs () const
 	// _output is included via Delivery
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	for (ProcessorList::const_iterator r = _processors.begin(); r != _processors.end(); ++r) {
-		boost::shared_ptr<IOProcessor> iop = boost::dynamic_pointer_cast<IOProcessor>(*r);
+		std::shared_ptr<IOProcessor> iop = std::dynamic_pointer_cast<IOProcessor>(*r);
 		if (iop != 0 && iop->output()) {
 			ios.push_back (iop->output());
 		}
@@ -3352,11 +3660,16 @@ Route::all_outputs () const
 }
 
 bool
-Route::direct_feeds_according_to_reality (boost::shared_ptr<Route> other, bool* via_send_only)
+Route::direct_feeds_according_to_reality (std::shared_ptr<GraphNode> node, bool* via_send_only)
 {
-	DEBUG_TRACE (DEBUG::Graph, string_compose ("Feeds? %1\n", _name));
-	if (other->all_inputs().fed_by (_output)) {
-		DEBUG_TRACE (DEBUG::Graph, string_compose ("\tdirect FEEDS %2\n", other->name()));
+	std::shared_ptr<Route> other (std::dynamic_pointer_cast<Route> (node));
+	assert (other);
+
+	IOVector const& other_inputs (other->all_inputs());
+
+	DEBUG_TRACE (DEBUG::Graph, string_compose ("Feeds from %1 (-> %2)?\n", _name, other->name()));
+	if (other_inputs.fed_by (_output)) {
+		DEBUG_TRACE (DEBUG::Graph, string_compose ("\tdirect FEEDS to %1\n", other->name()));
 		if (via_send_only) {
 			*via_send_only = false;
 		}
@@ -3366,23 +3679,31 @@ Route::direct_feeds_according_to_reality (boost::shared_ptr<Route> other, bool* 
 
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 
+	/* our surround send always feeds the surround master */
+	if (other->is_surround_master () && _surround_send) {
+		if (via_send_only) {
+			*via_send_only = true;
+		}
+		return true;
+	}
+
 	for (ProcessorList::iterator r = _processors.begin(); r != _processors.end(); ++r) {
 
-		boost::shared_ptr<IOProcessor> iop = boost::dynamic_pointer_cast<IOProcessor>(*r);
-		boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert>(*r);
+		std::shared_ptr<IOProcessor> iop = std::dynamic_pointer_cast<IOProcessor>(*r);
+		std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert>(*r);
 		if (pi != 0) {
 			assert (iop == 0);
 			iop = pi->sidechain();
 		}
 
 		if (iop != 0) {
-			boost::shared_ptr<const IO> iop_out = iop->output();
+			std::shared_ptr<const IO> iop_out = iop->output();
 			if (other.get() == this && iop_out && iop->input() && iop_out->connected_to (iop->input())) {
 				// TODO this needs a delaylines in the Insert to align connections (!)
 				DEBUG_TRACE (DEBUG::Graph,  string_compose ("\tIOP %1 does feed its own return (%2)\n", iop->name(), other->name()));
 				continue;
 			}
-			if ((iop_out && other->all_inputs().fed_by (iop_out)) || iop->feeds (other)) {
+			if (iop->feeds (other) || (iop_out && other_inputs.fed_by (iop_out))) {
 				DEBUG_TRACE (DEBUG::Graph,  string_compose ("\tIOP %1 does feed %2\n", iop->name(), other->name()));
 				if (via_send_only) {
 					*via_send_only = true;
@@ -3391,10 +3712,7 @@ Route::direct_feeds_according_to_reality (boost::shared_ptr<Route> other, bool* 
 			} else {
 				DEBUG_TRACE (DEBUG::Graph,  string_compose ("\tIOP %1 does NOT feed %2\n", iop->name(), other->name()));
 			}
-		} else {
-			DEBUG_TRACE (DEBUG::Graph,  string_compose ("\tPROC %1 is not an IOP\n", (*r)->name()));
 		}
-
 	}
 
 	DEBUG_TRACE (DEBUG::Graph,  string_compose ("\tdoes NOT feed %1\n", other->name()));
@@ -3402,15 +3720,78 @@ Route::direct_feeds_according_to_reality (boost::shared_ptr<Route> other, bool* 
 }
 
 bool
-Route::direct_feeds_according_to_graph (boost::shared_ptr<Route> other, bool* via_send_only)
+Route::direct_feeds_according_to_graph (std::shared_ptr<Route> other, bool* via_send_only)
 {
-	return _session._current_route_graph.has (boost::dynamic_pointer_cast<Route> (shared_from_this ()), other, via_send_only);
+	return _session._current_route_graph.has (std::dynamic_pointer_cast<Route> (shared_from_this ()), other, via_send_only);
 }
 
 bool
-Route::feeds_according_to_graph (boost::shared_ptr<Route> other)
+Route::feeds (std::shared_ptr<Route> other)
 {
-	return _session._current_route_graph.feeds (boost::dynamic_pointer_cast<Route> (shared_from_this ()), other);
+	return _session._current_route_graph.feeds (std::dynamic_pointer_cast<Route> (shared_from_this ()), other);
+}
+
+std::set<std::shared_ptr<Route>>
+Route::signal_sources (bool via_sends_only)
+{
+	std::set<std::shared_ptr<Route>> rv;
+	for (auto const& i : _session._current_route_graph.to (std::dynamic_pointer_cast<Route> (shared_from_this ()), via_sends_only)) {
+		std::shared_ptr<Route> r = std::dynamic_pointer_cast<Route> (i);
+		if (r) {
+			rv.insert (r);
+		}
+	}
+	return rv;
+}
+
+bool
+Route::output_effectively_connected () const
+{
+	_connection_cache.clear ();
+	return output_effectively_connected_real ();
+}
+
+bool
+Route::output_effectively_connected_real () const
+{
+	if (!_output->connected ()) {
+		return false;
+	}
+
+	if (is_master() || is_monitor ()) {
+		return _output->connected ();
+	}
+
+	if (_output->physically_connected ()) {
+		return true;
+	}
+
+	/* now follow connections downstream */
+	std::shared_ptr<RouteList const> routes = _session.get_routes ();
+	for (auto const& i : *routes) {
+		Route* rp = i.get();
+		if (rp == this) {
+			continue;
+		}
+		if (!i->input()->connected_to (_output)) {
+			continue;
+		}
+		if (_connection_cache.find (rp) != _connection_cache.end ()) {
+			return _connection_cache[rp];
+		}
+		/* First mark node a traversed to prevent endless recursion.
+		 * Otherwise graph loops A -> B -> A will cause a stack overflow.
+		 */
+		_connection_cache[rp] = false;
+
+		/* recurse downstream, check connected route */
+		bool rv = i->output_effectively_connected_real ();
+		_connection_cache[rp] = rv;
+		if (rv) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /** Called from the (non-realtime) butler thread when the transport is stopped */
@@ -3432,8 +3813,24 @@ Route::non_realtime_transport_stop (samplepos_t now, bool flush)
 }
 
 void
+Route::realtime_handle_transport_stopped ()
+{
+	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
+
+	/* currently only by Plugin, queue note-off events */
+	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
+		(*i)->realtime_handle_transport_stopped ();
+	}
+}
+
+
+void
 Route::input_change_handler (IOChange change, void * /*src*/)
 {
+	if (_session.loading ()) {
+		return;
+	}
+
 	if ((change.type & IOChange::ConfigurationChanged)) {
 		/* This is called with the process lock held if change
 		   contains ConfigurationChanged
@@ -3442,22 +3839,24 @@ Route::input_change_handler (IOChange change, void * /*src*/)
 		io_changed (); /* EMIT SIGNAL */
 	}
 
+	if (_initial_io_setup) {
+		return;
+	}
+
 	if (_solo_control->soloed_by_others_upstream() || _solo_isolate_control->solo_isolated_by_upstream()) {
 		int sbou = 0;
 		int ibou = 0;
-		boost::shared_ptr<RouteList> routes = _session.get_routes ();
+		std::shared_ptr<RouteList const> routes = _session.get_routes ();
 		if (_input->connected()) {
-			for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-				if ((*i).get() == this || (*i)->is_master() || (*i)->is_monitor() || (*i)->is_auditioner()) {
+			for (auto const& i : *routes) {
+				if (i.get() == this || i->is_master() || i->is_monitor() || i->is_auditioner()) {
 					continue;
 				}
-				bool sends_only;
-				bool does_feed = (*i)->direct_feeds_according_to_reality (boost::dynamic_pointer_cast<Route> (shared_from_this()), &sends_only);
-				if (does_feed && !sends_only) {
-					if ((*i)->soloed()) {
+				if (i->direct_feeds_according_to_reality (std::dynamic_pointer_cast<Route> (shared_from_this()))) {
+					if (i->soloed()) {
 						++sbou;
 					}
-					if ((*i)->solo_isolate_control()->solo_isolated()) {
+					if (i->solo_isolate_control()->solo_isolated()) {
 						++ibou;
 					}
 				}
@@ -3492,18 +3891,17 @@ Route::input_change_handler (IOChange change, void * /*src*/)
 
 		// Session::route_solo_changed  does not propagate indirect solo-changes
 		// propagate downstream to tracks
-		for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-			if ((*i).get() == this || (*i)->is_master() || (*i)->is_monitor() || (*i)->is_auditioner()) {
+		for (auto const& i : *routes) {
+			if (i.get() == this || i->is_master() || i->is_monitor() || i->is_auditioner()) {
 				continue;
 			}
-			bool sends_only;
-			bool does_feed = feeds (*i, &sends_only);
-			if (delta <= 0 && does_feed && !sends_only) {
-				(*i)->solo_control()->mod_solo_by_others_upstream (delta);
+			bool does_feed = feeds (i);
+			if (delta <= 0 && does_feed) {
+				i->solo_control()->mod_solo_by_others_upstream (delta);
 			}
 
-			if (idelta < 0 && does_feed && !sends_only) {
-				(*i)->solo_isolate_control()->mod_solo_isolated_by_upstream (-1);
+			if (idelta < 0 && does_feed) {
+				i->solo_isolate_control()->mod_solo_isolated_by_upstream (-1);
 			}
 		}
 	}
@@ -3529,6 +3927,10 @@ Route::output_change_handler (IOChange change, void * /*src*/)
 		io_changed (); /* EMIT SIGNAL */
 	}
 
+	if (_session.loading ()) {
+		return;
+	}
+
 	if ((change.type & IOChange::ConnectionsChanged)) {
 
 		/* do this ONLY if connections have changed. Configuration
@@ -3543,16 +3945,14 @@ Route::output_change_handler (IOChange change, void * /*src*/)
 			 * ideally the input_change_handler() of the other route
 			 * would propagate the change to us.
 			 */
-			boost::shared_ptr<RouteList> routes = _session.get_routes ();
+			std::shared_ptr<RouteList const> routes = _session.get_routes ();
 			if (_output->connected()) {
-				for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-					if ((*i).get() == this || (*i)->is_master() || (*i)->is_monitor() || (*i)->is_auditioner()) {
+				for (auto const& i : *routes) {
+					if (i.get() == this || i->is_master() || i->is_monitor() || i->is_auditioner()) {
 						continue;
 					}
-					bool sends_only;
-					bool does_feed = direct_feeds_according_to_reality (*i, &sends_only);
-					if (does_feed && !sends_only) {
-						if ((*i)->soloed()) {
+					if (direct_feeds_according_to_reality (i)) {
+						if (i->soloed()) {
 							++sbod;
 							break;
 						}
@@ -3566,15 +3966,13 @@ Route::output_change_handler (IOChange change, void * /*src*/)
 				_solo_control->mod_solo_by_others_downstream (delta);
 				// Session::route_solo_changed() does not propagate indirect solo-changes
 				// propagate upstream to tracks
-				boost::shared_ptr<Route> shared_this = boost::dynamic_pointer_cast<Route> (shared_from_this());
-				for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-					if ((*i).get() == this || !can_solo()) {
+				std::shared_ptr<Route> shared_this = std::dynamic_pointer_cast<Route> (shared_from_this());
+				for (auto const& i : *routes) {
+					if (i.get() == this || !can_solo()) {
 						continue;
 					}
-					bool sends_only;
-					bool does_feed = (*i)->feeds (shared_this, &sends_only);
-					if (delta != 0 && does_feed && !sends_only) {
-						(*i)->solo_control()->mod_solo_by_others_downstream (delta);
+					if (delta != 0 && i->feeds (shared_this)) {
+						i->solo_control()->mod_solo_by_others_downstream (delta);
 					}
 				}
 
@@ -3607,11 +4005,11 @@ void
 Route::flush_processor_buffers_locked (samplecnt_t nframes)
 {
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		boost::shared_ptr<Delivery> d = boost::dynamic_pointer_cast<Delivery> (*i);
+		std::shared_ptr<Delivery> d = std::dynamic_pointer_cast<Delivery> (*i);
 		if (d) {
 			d->flush_buffers (nframes);
 		} else {
-			boost::shared_ptr<PortInsert> p = boost::dynamic_pointer_cast<PortInsert> (*i);
+			std::shared_ptr<PortInsert> p = std::dynamic_pointer_cast<PortInsert> (*i);
 			if (p) {
 				p->flush_buffers (nframes);
 			}
@@ -3641,7 +4039,7 @@ Route::playback_latency (bool incl_downstream) const
 	if (incl_downstream) {
 		rv += _output->connected_latency (true);
 	} else {
-		rv += _output->latency ();
+		rv += _output_latency;
 	}
 	return rv;
 }
@@ -3654,8 +4052,13 @@ Route::latency_preroll (pframes_t nframes, samplepos_t& start_sample, samplepos_
 		return nframes;
 	}
 	if (!_disk_reader) {
-		start_sample -= latency_preroll;
-		end_sample   -= latency_preroll;
+		if (_session.transport_speed (true) < 0) {
+			start_sample += latency_preroll;
+			end_sample   += latency_preroll;
+		} else {
+			start_sample -= latency_preroll;
+			end_sample   -= latency_preroll;
+		}
 		return nframes;
 	}
 
@@ -3664,13 +4067,18 @@ Route::latency_preroll (pframes_t nframes, samplepos_t& start_sample, samplepos_
 		return 0;
 	}
 
-	start_sample -= latency_preroll;
-	end_sample -= latency_preroll;
+	if (_session.transport_speed (true) < 0) {
+		start_sample += latency_preroll;
+		end_sample   += latency_preroll;
+	} else {
+		start_sample -= latency_preroll;
+		end_sample -= latency_preroll;
+	}
 	return nframes;
 }
 
 int
-Route::roll (pframes_t nframes, samplepos_t start_sample, samplepos_t end_sample, int declick, bool& need_butler)
+Route::roll (pframes_t nframes, samplepos_t start_sample, samplepos_t end_sample, bool& need_butler)
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock, Glib::Threads::TRY_LOCK);
 
@@ -3688,7 +4096,7 @@ Route::roll (pframes_t nframes, samplepos_t start_sample, samplepos_t end_sample
 		return 0;
 	}
 
-	run_route (start_sample, end_sample, nframes, declick, (!_disk_writer || !_disk_writer->record_enabled()) && _session.transport_rolling(), true);
+	run_route (start_sample, end_sample, nframes, (!_disk_writer || !_disk_writer->record_enabled()) && _session.transport_rolling(), true);
 
 	if ((_disk_reader && _disk_reader->need_butler()) || (_disk_writer && _disk_writer->need_butler())) {
 		need_butler = true;
@@ -3735,16 +4143,19 @@ Route::no_roll_unlocked (pframes_t nframes, samplepos_t start_sample, samplepos_
 		*/
 	}
 
-	run_route (start_sample, end_sample, nframes, 0, false, false);
+	run_route (start_sample, end_sample, nframes, false, false);
 	return 0;
 }
 
-int
-Route::silent_roll (pframes_t nframes, samplepos_t /*start_sample*/, samplepos_t /*end_sample*/, bool& /* need_butler */)
+void
+Route::update_send_delaylines ()
 {
-	silence (nframes);
-	flush_processor_buffers_locked (nframes);
-	return 0;
+	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
+	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
+		if (std::shared_ptr<LatentSend> snd = std::dynamic_pointer_cast<LatentSend> (*i)) {
+			snd->update_delaylines (true);
+		}
+	}
 }
 
 #ifdef __clang__
@@ -3770,16 +4181,29 @@ Route::apply_processor_changes_rt ()
 
 	bool changed = false;
 
-	if (g_atomic_int_get (&_pending_process_reorder)) {
+	if (_pending_process_reorder.load ()) {
 		Glib::Threads::RWLock::WriterLock pwl (_processor_lock, Glib::Threads::TRY_LOCK);
 		if (pwl.locked()) {
+			_pending_process_reorder.store (0);
+			_pending_listen_change.store (0);
 			apply_processor_order (_pending_processor_order);
+			_pending_processor_order.clear ();
 			setup_invisible_processors ();
 			changed = true;
-			g_atomic_int_set (&_pending_process_reorder, 0);
 			emissions |= EmitRtProcessorChange;
 		}
 	}
+
+	if (_pending_listen_change.load ()) {
+		Glib::Threads::RWLock::WriterLock pwl (_processor_lock, Glib::Threads::TRY_LOCK);
+		if (pwl.locked()) {
+			_pending_listen_change.store (0);
+			setup_invisible_processors ();
+			changed = true;
+			emissions |= EmitRtProcessorChange;
+		}
+	}
+
 	if (changed) {
 		set_processor_positions ();
 		/* update processor input/output latency
@@ -3787,8 +4211,17 @@ Route::apply_processor_changes_rt ()
 		 */
 		update_signal_latency (true);
 	}
+
+	if (_pending_surround_send.load ()) {
+		Glib::Threads::RWLock::WriterLock pwl (_processor_lock, Glib::Threads::TRY_LOCK);
+		if (pwl.locked()) {
+			_pending_surround_send.store (0);
+			emissions |= EmitSendReturnChange;
+		}
+	}
+
 	if (emissions != 0) {
-		g_atomic_int_set (&_pending_signals, emissions);
+		_pending_signals.store (emissions);
 		return true;
 	}
 	return (!selfdestruct_sequence.empty ());
@@ -3797,7 +4230,7 @@ Route::apply_processor_changes_rt ()
 void
 Route::emit_pending_signals ()
 {
-	int sig = g_atomic_int_and (&_pending_signals, 0);
+	int sig = _pending_signals.fetch_and (0);
 	if (sig & EmitMeterChanged) {
 		_meter->emit_configuration_changed();
 		meter_change (); /* EMIT SIGNAL */
@@ -3810,18 +4243,21 @@ Route::emit_pending_signals ()
 	if (sig & EmitRtProcessorChange) {
 		processors_changed (RouteProcessorChange (RouteProcessorChange::RealTimeChange)); /* EMIT SIGNAL */
 	}
+	if (sig & EmitSendReturnChange) {
+		processors_changed (RouteProcessorChange (RouteProcessorChange::SendReturnChange, false)); /* EMIT SIGNAL */
+	}
 
 	/* this would be a job for the butler.
 	 * Conceptually we should not take processe/processor locks here.
 	 * OTOH its more efficient (less overhead for summoning the butler and
 	 * telling her what do do) and signal emission is called
 	 * directly after the process callback, which decreases the chance
-	 * of x-runs when taking the locks.
+	 * of xruns when taking the locks.
 	 */
 	while (!selfdestruct_sequence.empty ()) {
 		Glib::Threads::Mutex::Lock lx (selfdestruct_lock);
 		if (selfdestruct_sequence.empty ()) { break; } // re-check with lock
-		boost::shared_ptr<Processor> proc = selfdestruct_sequence.back ().lock ();
+		std::shared_ptr<Processor> proc = selfdestruct_sequence.back ().lock ();
 		selfdestruct_sequence.pop_back ();
 		lx.release ();
 		if (proc) {
@@ -3831,23 +4267,25 @@ Route::emit_pending_signals ()
 }
 
 void
-Route::set_meter_point (MeterPoint p, bool force)
+Route::set_meter_point (MeterPoint p)
 {
-	if (_pending_meter_point == p && !force) {
+	if (_pending_meter_point == p) {
 		return;
 	}
 
-	if (force || !AudioEngine::instance()->running()) {
-		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
-		Glib::Threads::RWLock::WriterLock lm (_processor_lock);
-		_pending_meter_point = p;
+	if (!AudioEngine::instance()->running()) {
+		bool meter_visibly_changed = false;
+		{
+			Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
+			Glib::Threads::RWLock::WriterLock lm (_processor_lock);
+			_pending_meter_point = p;
+			if (set_meter_point_unlocked ()) {
+				meter_visibly_changed = true;
+			}
+		}
 		_meter->emit_configuration_changed();
 		meter_change (); /* EMIT SIGNAL */
-		if (set_meter_point_unlocked()) {
-			processors_changed (RouteProcessorChange (RouteProcessorChange::MeterPointChange, true)); /* EMIT SIGNAL */
-		} else {
-			processors_changed (RouteProcessorChange (RouteProcessorChange::MeterPointChange, false)); /* EMIT SIGNAL */
-		}
+		processors_changed (RouteProcessorChange (RouteProcessorChange::MeterPointChange, meter_visibly_changed)); /* EMIT SIGNAL */
 	} else {
 		_pending_meter_point = p;
 	}
@@ -3885,7 +4323,7 @@ Route::set_meter_point_unlocked ()
 		_meter->set_display_to_user (true);
 
 		/* If we have a previous position for the custom meter, try to put it there */
-		boost::shared_ptr<Processor> after = _processor_after_last_custom_meter.lock ();
+		std::shared_ptr<Processor> after = _processor_after_last_custom_meter.lock ();
 		if (after) {
 			ProcessorList::iterator i = find (_processors.begin(), _processors.end(), after);
 			if (i != _processors.end ()) {
@@ -3931,6 +4369,41 @@ Route::set_meter_point_unlocked ()
 void
 Route::listen_position_changed ()
 {
+	if (!_monitor_send) {
+		return;
+	}
+	/* check if re-order can be done in realtime */
+	ChanCount c;
+
+	switch (Config->get_listen_position ()) {
+		case PreFaderListen:
+			switch (Config->get_pfl_position ()) {
+				case PFLFromBeforeProcessors:
+					c = input_streams ();
+					break;
+				case PFLFromAfterProcessors:
+					c = _amp->input_streams ();
+					break;
+			}
+			break;
+		case AfterFaderListen:
+			switch (Config->get_afl_position ()) {
+				case AFLFromBeforeProcessors:
+					c = _amp->output_streams ();
+					break;
+				case AFLFromAfterProcessors:
+					c = _main_outs->input_streams ();
+					break;
+			}
+			break;
+	}
+
+	if (c == _monitor_send->input_streams () && AudioEngine::instance()->running()) {
+		Glib::Threads::RWLock::ReaderLock lm (_processor_lock); // XXX is this needed?
+		_pending_listen_change.store (1);
+		return;
+	}
+
 	{
 		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
 		Glib::Threads::RWLock::WriterLock lm (_processor_lock);
@@ -3948,67 +4421,99 @@ Route::listen_position_changed ()
 	_session.set_dirty ();
 }
 
-boost::shared_ptr<CapturingProcessor>
+std::shared_ptr<CapturingProcessor>
 Route::add_export_point()
 {
-	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
-	if (!_capturing_processor) {
-		lm.release();
-		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
-		Glib::Threads::RWLock::WriterLock lw (_processor_lock);
+	assert (!_capturing_processor);
 
-		/* Align all tracks for stem-export w/o processing.
-		 * Compensate for all plugins between the this route's disk-reader
-		 * and the common final downstream output (ie alignment point for playback).
-		 */
-		_capturing_processor.reset (new CapturingProcessor (_session, playback_latency (true)));
-		configure_processors_unlocked (0, &lw);
-		_capturing_processor->activate ();
-	}
+	Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
+	Glib::Threads::RWLock::WriterLock lw (_processor_lock);
+
+	/* Align all tracks for stem-export w/o processing.
+	 * Compensate for all plugins between the this route's disk-reader
+	 * and the common final downstream output (ie alignment point for playback).
+	 */
+	_capturing_processor.reset (new CapturingProcessor (_session, playback_latency (true)));
+	configure_processors_unlocked (0, &lw);
+	_capturing_processor->activate ();
 
 	return _capturing_processor;
 }
 
 samplecnt_t
-Route::update_signal_latency (bool apply_to_delayline)
+Route::update_signal_latency (bool apply_to_delayline, bool* delayline_update_needed)
 {
-	// TODO: bail out if !active() and set/assume _signal_latency = 0,
-	// here or in Session::* ? -> also zero send latencies,
-	// and make sure that re-enabling a route updates things again...
+	if (!active()) {
+		_signal_latency = 0;
+		/* mark all send are inactive, set internal-return "delay-out" to zero. */
+		Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
+		for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
+			if (std::shared_ptr<LatentSend> snd = std::dynamic_pointer_cast<LatentSend> (*i)) {
+				snd->set_delay_in (0);
+			}
+			if (std::shared_ptr<InternalReturn> rtn = std::dynamic_pointer_cast<InternalReturn> (*i)) {
+				rtn->set_playback_offset (0);
+			}
+			if (std::shared_ptr<SurroundReturn> rtn = std::dynamic_pointer_cast<SurroundReturn> (*i)) {
+				rtn->set_playback_offset (0);
+			}
+			// TODO sidechain inputs?!
+		}
+		return 0;
+	}
 
-	samplecnt_t capt_lat_in = _input->connected_latency (false);
+	samplecnt_t capt_lat_in  = _input->connected_latency (false);
 	samplecnt_t play_lat_out = _output->connected_latency (true);
+	samplecnt_t in_latency   = _input->latency ();
+
+	/* When the track's output is not connected, align it to master-bus
+	 * (as if it would be connected to master-in).
+	 * Effectively we want to configure all latent-sends to not introduce any latency.
+	 * Since the output is not used, Send::_thru_delay is not relevant, and
+	 * Send->effective_latency () should return zero.
+	 */
+	if (is_master() || is_monitor () || output_effectively_connected ()) {
+		_output_latency = _output->latency ();
+	} else if (_session.master_out ()) {
+		/* We cannot use `_session.master_out()->input()->latency()` because that would return capture latency.
+		 * Also in case of Mixbus, the master-bus does not have any inputs.
+		 * So we propagate playback latency from master-out as Route::update_port_latencies() would do.
+		 */
+		_output_latency = _session.master_out()->output ()->latency () + _session.master_out()->signal_latency ();
+	} else {
+		_output_latency = 0;
+	}
 
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 
 	samplecnt_t l_in  = 0;
-	samplecnt_t l_out = _output->user_latency();
+	samplecnt_t l_out = 0;
 	for (ProcessorList::reverse_iterator i = _processors.rbegin(); i != _processors.rend(); ++i) {
-		if (boost::shared_ptr<Send> snd = boost::dynamic_pointer_cast<Send> (*i)) {
-			snd->set_delay_in (l_out + _output->latency());
+		if (std::shared_ptr<LatentSend> snd = std::dynamic_pointer_cast<LatentSend> (*i)) {
+			snd->set_delay_in (l_out + _output_latency);
 		}
 
-		if (boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert> (*i)) {
-			if (boost::shared_ptr<IO> pio = pi->sidechain_input ()) {
-				samplecnt_t lat = l_out + _output->latency();
+		if (std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert> (*i)) {
+			if (std::shared_ptr<IO> pio = pi->sidechain_input ()) {
+				samplecnt_t lat = l_out + _output_latency;
 				pio->set_private_port_latencies (lat, true);
 				pio->set_public_port_latencies (lat, true);
 			}
 		}
 		(*i)->set_output_latency (l_out);
-		if ((*i)->active ()) {
-			l_out += (*i)->signal_latency ();
+		if ((*i)->active ()) { // XXX
+			l_out += (*i)->effective_latency ();
 		}
 	}
 
-	DEBUG_TRACE (DEBUG::Latency, string_compose ("%1: internal signal latency = %2\n", _name, l_out));
+	DEBUG_TRACE (DEBUG::LatencyRoute, string_compose ("%1: internal signal latency = %2\n", _name, l_out));
 
 	_signal_latency = l_out;
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
 
 		/* set sidechain, send and insert port latencies */
-		if (boost::shared_ptr<PortInsert> pi = boost::dynamic_pointer_cast<PortInsert> (*i)) {
+		if (std::shared_ptr<PortInsert> pi = std::dynamic_pointer_cast<PortInsert> (*i)) {
 			if (pi->input ()) {
 				/* propagate playback latency from output to input */
 				pi->input ()->set_private_port_latencies (play_lat_out + l_in, true);
@@ -4018,20 +4523,33 @@ Route::update_signal_latency (bool apply_to_delayline)
 				pi->output ()->set_private_port_latencies (capt_lat_in + l_in, false);
 			}
 
-		} else if (boost::shared_ptr<Send> snd = boost::dynamic_pointer_cast<Send> (*i)) {
+		} else if (std::shared_ptr<Send> snd = std::dynamic_pointer_cast<Send> (*i)) {
 			if (snd->output ()) {
 				/* set capture latency */
 				snd->output ()->set_private_port_latencies (capt_lat_in + l_in, false);
 				/* take send-target's playback latency into account */
-				snd->set_delay_out (snd->output ()->connected_latency (true));
+				const samplecnt_t snd_lat = snd->output ()->connected_latency (true);
+				if (apply_to_delayline) {
+					/* DelayLine::set_delay requires process-lock */
+					snd->set_delay_out (snd_lat);
+				} else if (delayline_update_needed && snd->get_delay_out () != snd_lat) {
+					*delayline_update_needed = true;
+				}
 			}
+		} else if (!apply_to_delayline && (std::dynamic_pointer_cast<InternalReturn> (*i) || std::dynamic_pointer_cast<SurroundReturn> (*i))) {
+			/* InternalReturn::set_playback_offset() calls set_delay_out(), requires process lock */
+			const samplecnt_t poff = _signal_latency + _output_latency;
+			if (delayline_update_needed && (*i)->playback_offset () != poff) {
+				*delayline_update_needed = true;
+			}
+		} else {
+			(*i)->set_playback_offset (_signal_latency + _output_latency);
 		}
 
 		(*i)->set_input_latency (l_in);
-		(*i)->set_playback_offset (_signal_latency + _output->latency ());
-		(*i)->set_capture_offset (_input->latency ());
+		(*i)->set_capture_offset (in_latency);
 		if ((*i)->active ()) {
-			l_in += (*i)->signal_latency ();
+			l_in += (*i)->effective_latency ();
 		}
 	}
 
@@ -4040,54 +4558,55 @@ Route::update_signal_latency (bool apply_to_delayline)
 	if (apply_to_delayline) {
 		/* see also Session::post_playback_latency() */
 		apply_latency_compensation ();
-	}
-
-	if (_signal_latency != l_out) {
-		signal_latency_changed (); /* EMIT SIGNAL */
+	} else if (delayline_update_needed && _delayline) {
+		samplecnt_t play_lat_in = _input->connected_latency (true);
+		samplecnt_t latcomp = play_lat_in - play_lat_out - _signal_latency;
+		if (latcomp < 0) {
+			latcomp = 0;
+		}
+		if (_delayline->delay () != latcomp) {
+			*delayline_update_needed = true;
+		}
 	}
 
 	return _signal_latency;
 }
 
 void
-Route::set_user_latency (samplecnt_t nframes)
-{
-	_output->set_user_latency (nframes);
-	_session.update_latency_compensation ();
-}
-
-void
 Route::apply_latency_compensation ()
 {
-	if (_delayline) {
-		samplecnt_t old = _delayline->delay ();
+	if (!_delayline) {
+		return;
+	}
 
-		samplecnt_t play_lat_in = _input->connected_latency (true);
-		samplecnt_t play_lat_out = _output->connected_latency (true);
-		samplecnt_t latcomp = play_lat_in - play_lat_out - _signal_latency;
+	samplecnt_t play_lat_in = _input->connected_latency (true);
+	samplecnt_t play_lat_out = _output->connected_latency (true);
+	samplecnt_t latcomp = play_lat_in - play_lat_out - _signal_latency;
 
 #if 0 // DEBUG
-		samplecnt_t capt_lat_in = _input->connected_latency (false);
-		samplecnt_t capt_lat_out = _output->connected_latency (false);
-		samplecnt_t latcomp_capt = capt_lat_out - capt_lat_in - _signal_latency;
+	samplecnt_t capt_lat_in = _input->connected_latency (false);
+	samplecnt_t capt_lat_out = _output->connected_latency (false);
+	samplecnt_t latcomp_capt = capt_lat_out - capt_lat_in - _signal_latency;
 
-		cout << "ROUTE " << name() << " delay for " << latcomp << " (c: " << latcomp_capt << ")" << endl;
+	cout << "ROUTE " << name() << " delay for " << latcomp << " (c: " << latcomp_capt << ")" << endl;
 #endif
 
-		_delayline->set_delay (latcomp > 0 ? latcomp : 0);
-
-		if (old !=  _delayline->delay ()) {
-			signal_latency_updated (); /* EMIT SIGNAL */
-		}
+	if (_delayline->set_delay (latcomp > 0 ? latcomp : 0)) {
+		DEBUG_TRACE (DEBUG::LatencyRoute, string_compose ("%1: delay changed to %2\n", _name, latcomp));
+		/* public port latency update is needed,
+		 * Session::update_latency() calls this->set_public_port_latencies()
+		 */
 	}
 }
 
 void
 Route::set_block_size (pframes_t nframes)
 {
+	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
 		(*i)->set_block_size (nframes);
 	}
+	lm.release ();
 
 	_session.ensure_buffers (n_process_buffers ());
 }
@@ -4095,23 +4614,9 @@ Route::set_block_size (pframes_t nframes)
 void
 Route::protect_automation ()
 {
-	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i)
+	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
+	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
 		(*i)->protect_automation();
-}
-
-/** @param declick 1 to set a pending declick fade-in,
- *                -1 to set a pending declick fade-out
- */
-void
-Route::set_pending_declick (int declick)
-{
-	if (_declickable) {
-		/* this call is not allowed to turn off a pending declick */
-		if (declick) {
-			_pending_declick = declick;
-		}
-	} else {
-		_pending_declick = 0;
 	}
 }
 
@@ -4123,72 +4628,75 @@ Route::set_pending_declick (int declick)
  */
 
 void
-Route::shift (samplepos_t pos, samplecnt_t samples)
+Route::shift (timepos_t const & pos, timecnt_t const & distance)
 {
-	/* gain automation */
-	{
-		boost::shared_ptr<AutomationControl> gc = _amp->gain_control();
-
-		XMLNode &before = gc->alist()->get_state ();
-		gc->alist()->shift (pos, samples);
-		XMLNode &after = gc->alist()->get_state ();
-		_session.add_command (new MementoCommand<AutomationList> (*gc->alist().get(), &before, &after));
-	}
-
-	/* gain automation */
-	{
-		boost::shared_ptr<AutomationControl> gc = _trim->gain_control();
-
-		XMLNode &before = gc->alist()->get_state ();
-		gc->alist()->shift (pos, samples);
-		XMLNode &after = gc->alist()->get_state ();
-		_session.add_command (new MementoCommand<AutomationList> (*gc->alist().get(), &before, &after));
-	}
-
-	// TODO mute automation ??
-
-	/* pan automation */
-	if (_pannable) {
-		ControlSet::Controls& c (_pannable->controls());
-
-		for (ControlSet::Controls::const_iterator ci = c.begin(); ci != c.end(); ++ci) {
-			boost::shared_ptr<AutomationControl> pc = boost::dynamic_pointer_cast<AutomationControl> (ci->second);
-			if (pc) {
-				boost::shared_ptr<AutomationList> al = pc->alist();
-				XMLNode& before = al->get_state ();
-				al->shift (pos, samples);
-				XMLNode& after = al->get_state ();
-				_session.add_command (new MementoCommand<AutomationList> (*al.get(), &before, &after));
-			}
+	ControllableSet acs;
+	automatables (acs);
+	for (auto& ec : acs) {
+		std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl> (ec);
+		if (!ac) {
+			continue;
 		}
-	}
-
-	/* redirect automation */
-	{
-		Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
-		for (ProcessorList::iterator i = _processors.begin (); i != _processors.end (); ++i) {
-
-			set<Evoral::Parameter> parameters = (*i)->what_can_be_automated();
-
-			for (set<Evoral::Parameter>::const_iterator p = parameters.begin (); p != parameters.end (); ++p) {
-				boost::shared_ptr<AutomationControl> ac = (*i)->automation_control (*p);
-				if (ac) {
-					boost::shared_ptr<AutomationList> al = ac->alist();
-					XMLNode &before = al->get_state ();
-					al->shift (pos, samples);
-					XMLNode &after = al->get_state ();
-					_session.add_command (new MementoCommand<AutomationList> (*al.get(), &before, &after));
-				}
-			}
+		std::shared_ptr<AutomationList> al = ac->alist();
+		if (!al || al->empty ()) {
+			continue;
 		}
+
+		XMLNode &before = al->get_state ();
+		al->shift (pos, timecnt_t (distance));
+		XMLNode& after = al->get_state ();
+		_session.add_command (new MementoCommand<AutomationList> (*al.get(), &before, &after));
 	}
 }
 
 void
-Route::set_plugin_state_dir (boost::weak_ptr<Processor> p, const std::string& d)
+Route::cut_copy_section (timepos_t const& start, timepos_t const& end, timepos_t const& to, SectionOperation const op)
 {
-	boost::shared_ptr<Processor> processor (p.lock ());
-	boost::shared_ptr<PluginInsert> pi  = boost::dynamic_pointer_cast<PluginInsert> (processor);
+	ControllableSet acs;
+	automatables (acs);
+	for (auto& ec : acs) {
+		std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl> (ec);
+		if (!ac) {
+			continue;
+		}
+		std::shared_ptr<AutomationList> al = ac->alist();
+		if (!al || al->empty ()) {
+			continue;
+		}
+
+		XMLNode &before = al->get_state ();
+		std::shared_ptr<Evoral::ControlList> cl;
+		if (op == CopyPasteSection) {
+			cl = al->copy (start, end);
+		} else if (op == CutPasteSection) {
+			cl = al->cut (start, end);
+		} else if (op == DeleteSection) {
+			al->clear (start, end);
+		}
+
+		if (op == CutPasteSection || op == DeleteSection) {
+			/* remove time (negative distance), ripple */
+			al->shift (start, end.distance (start));
+		}
+
+		if (op != DeleteSection) {
+			/* make space at the inserion point */
+			al->shift (to, start.distance (end));
+		}
+		if (op == CopyPasteSection || op == CutPasteSection) {
+			al->paste (*cl, to);
+		}
+
+		XMLNode &after = al->get_state ();
+		_session.add_command (new MementoCommand<AutomationList> (*al.get(), &before, &after));
+	}
+}
+
+void
+Route::set_plugin_state_dir (std::weak_ptr<Processor> p, const std::string& d)
+{
+	std::shared_ptr<Processor> processor (p.lock ());
+	std::shared_ptr<PluginInsert> pi  = std::dynamic_pointer_cast<PluginInsert> (processor);
 	if (!pi) {
 		return;
 	}
@@ -4201,7 +4709,7 @@ Route::save_as_template (const string& path, const string& name, const string& d
 	std::string state_dir = path.substr (0, path.find_last_of ('.')); // strip template_suffix
 	PBD::Unwinder<std::string> uw (_session._template_state_dir, state_dir);
 
-	XMLNode& node (state (false));
+	XMLNode& node (state (true));
 	node.set_property (X_("name"), name);
 
 	node.remove_nodes (X_("description"));
@@ -4235,10 +4743,23 @@ Route::set_name (const string& str)
 		return true;
 	}
 
-	string name = Route::ensure_track_or_route_name (str, _session);
-	SessionObject::set_name (name);
+	string newname = Route::ensure_track_or_route_name (str);
 
-	bool ret = (_input->set_name(name) && _output->set_name(name));
+	if (newname == name()) {
+		return true;
+	}
+
+	SessionObject::set_name (newname);
+
+	for (uint32_t n = 0 ; ; ++n) {
+		std::shared_ptr<PluginInsert> pi = std::static_pointer_cast<PluginInsert> (nth_plugin (n));
+		if (!pi) {
+			break;
+		}
+		pi->update_sidechain_name ();
+	}
+
+	bool ret = (_input->set_name(newname) && _output->set_name(newname));
 
 	if (ret) {
 		/* rename the main outs. Leave other IO processors
@@ -4248,7 +4769,7 @@ Route::set_name (const string& str)
 		 */
 
 		if (_main_outs) {
-			if (_main_outs->set_name (name)) {
+			if (!_main_outs->set_name (newname)) {
 				/* XXX returning false here is stupid because
 				   we already changed the route name.
 				*/
@@ -4265,7 +4786,7 @@ Route::set_name (const string& str)
  *  @param name New name.
  */
 void
-Route::set_name_in_state (XMLNode& node, string const & name, bool rename_playlist)
+Route::set_name_in_state (XMLNode& node, string const & name)
 {
 	node.set_property (X_("name"), name);
 
@@ -4282,34 +4803,26 @@ Route::set_name_in_state (XMLNode& node, string const & name, bool rename_playli
 			if ((*i)->get_property (X_("role"), str) && str == X_("Main")) {
 				(*i)->set_property (X_("name"), name);
 			}
-
-		} else if ((*i)->name() == X_("Diskstream")) {
-
-			if (rename_playlist) {
-				(*i)->set_property (X_("playlist"), name + ".1");
-			}
-			(*i)->set_property (X_("name"), name);
-
 		}
 	}
 }
 
-boost::shared_ptr<Send>
-Route::internal_send_for (boost::shared_ptr<const Route> target) const
+std::shared_ptr<Send>
+Route::internal_send_for (std::shared_ptr<const Route> target) const
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		boost::shared_ptr<InternalSend> send;
+		std::shared_ptr<InternalSend> send;
 
-		if ((send = boost::dynamic_pointer_cast<InternalSend>(*i)) != 0) {
+		if ((send = std::dynamic_pointer_cast<InternalSend>(*i)) != 0) {
 			if (send->target_route() == target) {
 				return send;
 			}
 		}
 	}
 
-	return boost::shared_ptr<Send>();
+	return std::shared_ptr<Send>();
 }
 
 void
@@ -4335,7 +4848,7 @@ Route::set_active (bool yn, void* src)
 	}
 
 	if (_route_group && src != _route_group && _route_group->is_active() && _route_group->is_route_active()) {
-		_route_group->foreach_route (boost::bind (&Route::set_active, _1, yn, _route_group));
+		_route_group->foreach_route (std::bind (&Route::set_active, _1, yn, _route_group));
 		return;
 	}
 
@@ -4344,54 +4857,89 @@ Route::set_active (bool yn, void* src)
 		_input->set_active (yn);
 		_output->set_active (yn);
 		flush_processors ();
+		if (_active || _signal_latency > 0) {
+			processor_latency_changed (); /* EMIT SIGNAL */
+		}
 		active_changed (); // EMIT SIGNAL
 		_session.set_dirty ();
 	}
 }
 
-boost::shared_ptr<Pannable>
+std::shared_ptr<Pannable>
 Route::pannable() const
 {
 	return _pannable;
 }
 
-boost::shared_ptr<Panner>
+std::shared_ptr<Panner>
 Route::panner() const
 {
 	/* may be null ! */
 	return _main_outs->panner_shell()->panner();
 }
 
-boost::shared_ptr<PannerShell>
+std::shared_ptr<PannerShell>
 Route::panner_shell() const
 {
 	return _main_outs->panner_shell();
 }
 
-boost::shared_ptr<GainControl>
+std::shared_ptr<GainControl>
 Route::gain_control() const
 {
 	return _gain_control;
 }
 
-boost::shared_ptr<GainControl>
+std::shared_ptr<GainControl>
 Route::trim_control() const
 {
 	return _trim_control;
 }
 
-boost::shared_ptr<PhaseControl>
+std::shared_ptr<GainControl>
+Route::volume_control() const
+{
+	return _volume_control;
+}
+
+std::shared_ptr<PhaseControl>
 Route::phase_control() const
 {
 	return _phase_control;
 }
 
-boost::shared_ptr<AutomationControl>
+void
+Route::set_volume_applies_to_output (bool en)
+{
+	if (!is_master () || _volume_applies_to_output == en) {
+		return;
+	}
+	if (en) {
+		_volume->deactivate ();
+		_volume->set_display_to_user (false);
+		main_outs()->set_gain_control (_volume_control);
+		{
+			/* remove hidden processor */
+			Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
+			configure_processors (NULL);
+		}
+		processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+	} else {
+		_volume->set_display_to_user (true);
+		add_processor (_volume, PostFader, NULL, true);
+		_volume->activate ();
+		main_outs()->set_gain_control (std::shared_ptr<GainControl> ());
+	}
+	_volume_applies_to_output = en;
+	_session.set_dirty ();
+}
+
+std::shared_ptr<AutomationControl>
 Route::get_control (const Evoral::Parameter& param)
 {
 	/* either we own the control or .... */
 
-	boost::shared_ptr<AutomationControl> c = boost::dynamic_pointer_cast<AutomationControl>(control (param));
+	std::shared_ptr<AutomationControl> c = std::dynamic_pointer_cast<AutomationControl>(control (param));
 
 	if (!c) {
 
@@ -4399,7 +4947,7 @@ Route::get_control (const Evoral::Parameter& param)
 
 		Glib::Threads::RWLock::ReaderLock rm (_processor_lock);
 		for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-			if ((c = boost::dynamic_pointer_cast<AutomationControl>((*i)->control (param))) != 0) {
+			if ((c = std::dynamic_pointer_cast<AutomationControl>((*i)->control (param))) != 0) {
 				break;
 			}
 		}
@@ -4409,43 +4957,43 @@ Route::get_control (const Evoral::Parameter& param)
 
 		/* nobody does so we'll make a new one */
 
-		c = boost::dynamic_pointer_cast<AutomationControl>(control_factory(param));
+		c = std::dynamic_pointer_cast<AutomationControl>(control_factory(param));
 		add_control(c);
 	}
 
 	return c;
 }
 
-boost::shared_ptr<Processor>
+std::shared_ptr<Processor>
 Route::nth_plugin (uint32_t n) const
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	ProcessorList::const_iterator i;
 
 	for (i = _processors.begin(); i != _processors.end(); ++i) {
-		if (boost::dynamic_pointer_cast<PluginInsert> (*i)) {
+		if (std::dynamic_pointer_cast<PluginInsert> (*i)) {
 			if (n-- == 0) {
 				return *i;
 			}
 		}
 	}
 
-	return boost::shared_ptr<Processor> ();
+	return std::shared_ptr<Processor> ();
 }
 
-boost::shared_ptr<Processor>
+std::shared_ptr<Processor>
 Route::nth_send (uint32_t n) const
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	ProcessorList::const_iterator i;
 
 	for (i = _processors.begin(); i != _processors.end(); ++i) {
-		if (boost::dynamic_pointer_cast<Send> (*i)) {
+		if (std::dynamic_pointer_cast<Send> (*i)) {
 
-			if ((*i)->name().find (_("Monitor")) == 0) {
+			if ((*i) == _monitor_send) {
 				/* send to monitor section is not considered
-				   to be an accessible send.
-				*/
+				 * to be an accessible send.
+				 */
 				continue;
 			}
 
@@ -4455,7 +5003,7 @@ Route::nth_send (uint32_t n) const
 		}
 	}
 
-	return boost::shared_ptr<Processor> ();
+	return std::shared_ptr<Processor> ();
 }
 
 bool
@@ -4465,9 +5013,8 @@ Route::has_io_processor_named (const string& name)
 	ProcessorList::iterator i;
 
 	for (i = _processors.begin(); i != _processors.end(); ++i) {
-		if (boost::dynamic_pointer_cast<Send> (*i) ||
-		    boost::dynamic_pointer_cast<PortInsert> (*i)) {
-			if ((*i)->name() == name) {
+		if (std::dynamic_pointer_cast<IOProcessor> (*i)) {
+			if (0 == PBD::natcmp ((*i)->name().c_str(), name.c_str())) {
 				return true;
 			}
 		}
@@ -4491,7 +5038,7 @@ Route::set_processor_positions ()
 }
 
 /** Called when there is a proposed change to the input port count */
-bool
+int
 Route::input_port_count_changing (ChanCount to)
 {
 	list<pair<ChanCount, ChanCount> > c = try_configure_processors (to, 0);
@@ -4499,15 +5046,15 @@ Route::input_port_count_changing (ChanCount to)
 		/* The processors cannot be configured with the new input arrangement, so
 		   block the change.
 		*/
-		return true;
+		return 1;
 	}
 
 	/* The change is ok */
-	return false;
+	return 0;
 }
 
 /** Called when there is a proposed change to the output port count */
-bool
+int
 Route::output_port_count_changing (ChanCount to)
 {
 	if (_strict_io && !_in_configure_processors) {
@@ -4515,11 +5062,11 @@ Route::output_port_count_changing (ChanCount to)
 	}
 	for (DataType::iterator t = DataType::begin(); t != DataType::end(); ++t) {
 		if (processor_out_streams.get(*t) > to.get(*t)) {
-			return true;
+			return 1;
 		}
 	}
 	/* The change is ok */
-	return false;
+	return 0;
 }
 
 list<string>
@@ -4534,7 +5081,7 @@ Route::unknown_processors () const
 
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		if (boost::dynamic_pointer_cast<UnknownProcessor const> (*i)) {
+		if (std::dynamic_pointer_cast<UnknownProcessor const> (*i)) {
 			p.push_back ((*i)->name ());
 		}
 	}
@@ -4551,6 +5098,7 @@ Route::update_port_latencies (PortSet& from, PortSet& to, bool playback, samplec
 	*/
 
 	LatencyRange all_connections;
+	bool connected = false;
 
 	if (from.empty()) {
 		all_connections.min = 0;
@@ -4560,18 +5108,42 @@ Route::update_port_latencies (PortSet& from, PortSet& to, bool playback, samplec
 		all_connections.max = 0;
 
 		/* iterate over all "from" ports and determine the latency range for all of their
-		   connections to the "outside" (outside of this Route).
-		*/
+		 * connections to the "outside" (outside of this Route).
+		 */
 
 		for (PortSet::iterator p = from.begin(); p != from.end(); ++p) {
 
-			LatencyRange range;
+			if (!p->connected ()) {
+				/* ignore latency of unconnected ports, not not assume "0", they can float freely */
+				continue;
+			}
 
+			LatencyRange range;
 			p->get_connected_latency_range (range, playback);
 
 			all_connections.min = min (all_connections.min, range.min);
 			all_connections.max = max (all_connections.max, range.max);
+			connected = true;
 		}
+
+		if (all_connections.min == ~((pframes_t) 0)) {
+			all_connections.min = 0;
+		}
+	}
+
+	/* if the output is not connected, its latency is not relevant,
+	 * however stem-export uses the private latency of the port as alignment.
+	 * see PortExportChannel::common_port_playback_latency()
+	 * and PortExportChannel::prepare_export()
+	 *
+	 * So for correct alignment we use the Delivery's playback latency.
+	 */
+	/* routes without latency delayline (master, monitor) always use the
+	 * actual connected latency.
+	 */
+	if (playback && _main_outs && !connected && _delayline) {
+		all_connections.min = _main_outs->playback_offset () - _main_outs->input_latency ();
+		all_connections.max = _main_outs->playback_offset () - _main_outs->input_latency ();
 	}
 
 	/* set the "from" port latencies to the max/min range of all their connections */
@@ -4579,6 +5151,8 @@ Route::update_port_latencies (PortSet& from, PortSet& to, bool playback, samplec
 	for (PortSet::iterator p = from.begin(); p != from.end(); ++p) {
 		p->set_private_latency_range (all_connections, playback);
 	}
+
+	DEBUG_TRACE (DEBUG::LatencyRoute, string_compose ("%1: priv. port L(%2) = (%3, %4) + %5\n", _name, playback ? "playback" : "capture", all_connections.min, all_connections.max, our_latency));
 
 	/* set the ports "in the direction of the flow" to the same value as above plus our own signal latency */
 
@@ -4611,33 +5185,34 @@ Route::set_private_port_latencies (bool playback) const
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
 
 		if ((*i)->active ()) {
-			own_latency += (*i)->signal_latency ();
+			own_latency += (*i)->effective_latency ();
 		}
 	}
 
 	if (playback) {
 		/* playback: propagate latency from "outside the route" to outputs to inputs */
-		return update_port_latencies (_output->ports (), _input->ports (), true, own_latency);
+		return update_port_latencies (*_output->ports (), *_input->ports (), true, own_latency);
 	} else {
 		/* capture: propagate latency from "outside the route" to inputs to outputs */
-		return update_port_latencies (_input->ports (), _output->ports (), false, own_latency);
+		return update_port_latencies (*_input->ports (), *_output->ports (), false, own_latency);
 	}
 }
 
 void
-Route::set_public_port_latencies (samplecnt_t value, bool playback) const
+Route::set_public_port_latencies (samplecnt_t value, bool playback, bool with_latcomp) const
 {
 	/* publish private latencies */
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		boost::shared_ptr<IOProcessor> iop = boost::dynamic_pointer_cast<IOProcessor>(*i);
+		std::shared_ptr<IOProcessor> iop = std::dynamic_pointer_cast<IOProcessor>(*i);
 		if (!iop) {
 			continue;
 		}
 		if (iop->input ()) {
+			assert (iop->input () != _input); // no delivery for Input
 			iop->input ()->set_public_port_latencies (iop->input()->latency(), true);
 		}
-		if (iop->output ()) {
+		if (iop->output () && iop->output () != _output) {
 			iop->output ()->set_public_port_latencies (iop->output()->latency(), false);
 		}
 	}
@@ -4645,8 +5220,20 @@ Route::set_public_port_latencies (samplecnt_t value, bool playback) const
 	/* this is called to set the JACK-visible port latencies, which take
 	 * latency compensation into account.
 	 */
-	_input->set_public_port_latencies (value, playback);
-	_output->set_public_port_latencies (value, playback);
+	if (playback) {
+		_output->set_public_port_latency_from_connections ();
+		if (_delayline && with_latcomp) {
+			value += _delayline->delay ();
+		}
+		_input->set_public_port_latencies (value, true);
+	} else {
+		_input->set_public_port_latency_from_connections ();
+		if (_delayline && with_latcomp) {
+			value += _delayline->delay ();
+		}
+		_output->set_public_port_latencies (value, false);
+	}
+
 }
 
 /** Put the invisible processors in the right place in _processors.
@@ -4674,14 +5261,28 @@ Route::setup_invisible_processors ()
 	 */
 
 	ProcessorList new_processors;
-	ProcessorList::iterator dr;
-	ProcessorList::iterator dw;
+	ProcessorList foldback_sends;
 
 	/* find visible processors */
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
+		std::shared_ptr<Send> auxsnd = std::dynamic_pointer_cast<Send> (*i);
+
+		if (std::dynamic_pointer_cast<SurroundSend> (*i)) {
+			continue;
+		}
+
+#ifdef HAVE_BEATBOX
+		/* XXX temporary hack while we decide on visibility */
+		if (std::dynamic_pointer_cast<BeatBox> (*i)) {
+			continue;
+		}
+#endif
 		if ((*i)->display_to_user ()) {
 			new_processors.push_back (*i);
+		}
+		else if (auxsnd && auxsnd->is_foldback ()) {
+			foldback_sends.push_back (*i);
 		}
 	}
 
@@ -4690,15 +5291,11 @@ Route::setup_invisible_processors ()
 	ProcessorList::iterator amp = find (new_processors.begin(), new_processors.end(), _amp);
 
 	if (amp == new_processors.end ()) {
-		error << string_compose (_("Amp/Fader on Route '%1' went AWOL. Re-added."), name()) << endmsg;
+		error << string_compose (_("Amp/Fader on track/bus '%1' was missing."), name()) << endmsg;
 		new_processors.push_front (_amp);
 		amp = find (new_processors.begin(), new_processors.end(), _amp);
 	}
 
-	/* and the processor after the amp */
-
-	ProcessorList::iterator after_amp = amp;
-	++after_amp;
 
 	/* Pre-fader METER */
 
@@ -4708,6 +5305,11 @@ Route::setup_invisible_processors ()
 		new_processors.insert (amp, _meter);
 	}
 
+	/* SURROUND SEND */
+	if (_surround_send) {
+		new_processors.push_back (_surround_send);
+	}
+
 	/* MAIN OUTS */
 
 	assert (_main_outs);
@@ -4715,7 +5317,6 @@ Route::setup_invisible_processors ()
 	new_processors.push_back (_main_outs);
 
 	/* iterator for the main outs */
-
 	ProcessorList::iterator main = new_processors.end();
 	--main;
 
@@ -4723,20 +5324,30 @@ Route::setup_invisible_processors ()
 
 	if (_meter && (_meter_point == MeterOutput || _meter_point == MeterPostFader)) {
 		assert (!_meter->display_to_user ());
-
 		/* add the processor just before or just after the main outs */
-
 		ProcessorList::iterator meter_point = main;
-
 		if (_meter_point == MeterOutput) {
 			++meter_point;
 		}
 		new_processors.insert (meter_point, _meter);
 	}
 
+	/* Foldback Sends */
+
+	for (ProcessorList::iterator i = foldback_sends.begin(); i != foldback_sends.end(); ++i) {
+		if ((*i)->get_pre_fader ()) {
+			new_processors.insert (amp, (*i));
+		} else {
+			new_processors.insert (main, (*i));
+		}
+	}
+
 	/* MONITOR SEND */
 
 	if (_monitor_send && !is_monitor ()) {
+		ProcessorList::iterator after_amp = amp;
+		++after_amp;
+
 		assert (!_monitor_send->display_to_user ());
 		switch (Config->get_listen_position ()) {
 		case PreFaderListen:
@@ -4756,7 +5367,7 @@ Route::setup_invisible_processors ()
 				new_processors.insert (after_amp, _monitor_send);
 				break;
 			case AFLFromAfterProcessors:
-				new_processors.insert (new_processors.end(), _monitor_send);
+				new_processors.insert (main, _monitor_send);
 				break;
 			}
 			_monitor_send->set_can_pan (true);
@@ -4781,6 +5392,15 @@ Route::setup_invisible_processors ()
 		trim = new_processors.begin();
 	}
 
+#ifdef HAVE_BEATBOX
+	/* BEATBOX (for MIDI) */
+
+	if (_beatbox) {
+		ProcessorList::iterator insert_pos = trim;
+		++insert_pos;
+		new_processors.insert (insert_pos, _beatbox);
+	}
+#endif
 	/* INTERNAL RETURN */
 
 	/* doing this here means that any monitor control will come after
@@ -4790,6 +5410,15 @@ Route::setup_invisible_processors ()
 	if (_intreturn) {
 		assert (!_intreturn->display_to_user ());
 		new_processors.push_front (_intreturn);
+	}
+
+	/* SURROUND RETURN */
+	if (_surround_return) {
+		assert (_surround_return && is_surround_master ());
+		new_processors.push_front (_monitor_control);
+
+		assert (!_surround_return->display_to_user ());
+		new_processors.push_front (_surround_return);
 	}
 
 	/* DISK READER & WRITER (for Track objects) */
@@ -4831,7 +5460,7 @@ Route::setup_invisible_processors ()
 		}
 	}
 
-	/* ensure dist-writer is before disk-reader */
+	/* ensure disk-writer is before disk-reader */
 	if (_disk_reader && _disk_writer) {
 		ProcessorList::iterator reader_pos = find (new_processors.begin(), new_processors.end(), _disk_reader);
 		ProcessorList::iterator writer_pos = find (new_processors.begin(), new_processors.end(), _disk_writer);
@@ -4840,42 +5469,49 @@ Route::setup_invisible_processors ()
 		if (std::distance (new_processors.begin(), reader_pos) < std::distance (new_processors.begin(), writer_pos)) {
 			new_processors.erase (reader_pos);
 			assert (writer_pos == find (new_processors.begin(), new_processors.end(), _disk_writer));
-			new_processors.insert (++writer_pos, _disk_reader);
+			reader_pos = new_processors.insert (++writer_pos, _disk_reader);
+		}
+	}
+
+	/* Polarity Invert */
+	if (_polarity->active ()) {
+		ProcessorList::iterator reader_pos = find (new_processors.begin(), new_processors.end(), _disk_reader);
+		ProcessorList::iterator polarity_pos;
+		if (reader_pos != new_processors.end()) {
+			/* insert after disk-reader */
+			polarity_pos = new_processors.insert (++reader_pos, _polarity);
+		} else {
+			ProcessorList::iterator return_pos = find (new_processors.begin(), new_processors.end(), _intreturn);
+			/* insert after return */
+			if (return_pos != new_processors.end()) {
+				polarity_pos = new_processors.insert (++return_pos, _polarity);
+			} else {
+				new_processors.push_front (_polarity);
+				polarity_pos = new_processors.begin();
+			}
+		}
+
+		if (_triggerbox && (_disk_io_point != DiskIOCustom)) {
+			/* BEFORE polarity */
+			new_processors.insert (polarity_pos, _triggerbox);
 		}
 	}
 
 	/* EXPORT PROCESSOR */
 	if (_capturing_processor) {
 		assert (!_capturing_processor->display_to_user ());
-		ProcessorList::iterator reader_pos = find (new_processors.begin(), new_processors.end(), _disk_reader);
-		if (reader_pos != new_processors.end()) {
+		ProcessorList::iterator capture_pos;
+		if (_triggerbox && (capture_pos = find (new_processors.begin(), new_processors.end(), _triggerbox)) != new_processors.end ()) {
+			/* insert after triggerbox (which is just after disk-reader) */
+			new_processors.insert (++capture_pos, _capturing_processor);
+		} else if ((capture_pos = find (new_processors.begin(), new_processors.end(), _disk_reader)) != new_processors.end ()) {
 			/* insert after disk-reader */
-			new_processors.insert (++reader_pos, _capturing_processor);
+			new_processors.insert (++capture_pos, _capturing_processor);
+		} else if ((capture_pos = find (new_processors.begin(), new_processors.end(), _intreturn)) != new_processors.end ()) {
+			/* insert after return (busses) */
+				new_processors.insert (++capture_pos, _capturing_processor);
 		} else {
-			ProcessorList::iterator return_pos = find (new_processors.begin(), new_processors.end(), _intreturn);
-			/* insert after return */
-			if (return_pos != new_processors.end()) {
-				new_processors.insert (++return_pos, _capturing_processor);
-			} else {
-				new_processors.push_front (_capturing_processor);
-			}
-		}
-	}
-
-	/* Polarity Invert */
-	if (_polarity) {
-		ProcessorList::iterator reader_pos = find (new_processors.begin(), new_processors.end(), _disk_reader);
-		if (reader_pos != new_processors.end()) {
-			/* insert after disk-reader */
-			new_processors.insert (++reader_pos, _polarity);
-		} else {
-			ProcessorList::iterator return_pos = find (new_processors.begin(), new_processors.end(), _intreturn);
-			/* insert after return */
-			if (return_pos != new_processors.end()) {
-				new_processors.insert (++return_pos, _polarity);
-			} else {
-				new_processors.push_front (_polarity);
-			}
+			new_processors.push_front (_capturing_processor);
 		}
 	}
 
@@ -4901,7 +5537,7 @@ Route::setup_invisible_processors ()
 		}
 	}
 
-	if (!is_master() && !is_monitor() && !is_auditioner()) {
+	if (!is_singleton () && !is_auditioner()) {
 		ProcessorList::iterator reader_pos = find (new_processors.begin(), new_processors.end(), _disk_reader);
 		if (reader_pos != new_processors.end()) {
 			/* insert before disk-reader */
@@ -4914,14 +5550,14 @@ Route::setup_invisible_processors ()
 	_processors = new_processors;
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		if (!(*i)->display_to_user () && !(*i)->enabled () && (*i) != _monitor_send) {
+		if (!(*i)->display_to_user () && !(*i)->enabled () && (*i) != _monitor_send && (*i) != _surround_send) {
 			(*i)->enable (true);
 		}
 	}
 
 	DEBUG_TRACE (DEBUG::Processors, string_compose ("%1: setup_invisible_processors\n", _name));
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		DEBUG_TRACE (DEBUG::Processors, string_compose ("\t%1\n", (*i)->name ()));
+		DEBUG_TRACE (DEBUG::Processors, string_compose ("\t%1\n", (*i)->display_name ()));
 	}
 }
 
@@ -4934,7 +5570,7 @@ Route::unpan ()
 	_pannable.reset ();
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		boost::shared_ptr<Delivery> d = boost::dynamic_pointer_cast<Delivery>(*i);
+		std::shared_ptr<Delivery> d = std::dynamic_pointer_cast<Delivery>(*i);
 		if (d) {
 			d->unpan ();
 		}
@@ -4969,7 +5605,7 @@ Route::maybe_note_meter_position ()
 			_processor_after_last_custom_meter = *i;
 			break;
 		}
-		if (boost::dynamic_pointer_cast<PeakMeter> (*i)) {
+		if (std::dynamic_pointer_cast<PeakMeter> (*i)) {
 			if (!seen_trim) {
 				_processor_after_last_custom_meter = _trim;
 			} else {
@@ -4984,7 +5620,7 @@ Route::maybe_note_meter_position ()
 	assert(_processor_after_last_custom_meter.lock());
 }
 
-boost::shared_ptr<Processor>
+std::shared_ptr<Processor>
 Route::processor_by_id (PBD::ID id) const
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
@@ -4994,52 +5630,64 @@ Route::processor_by_id (PBD::ID id) const
 		}
 	}
 
-	return boost::shared_ptr<Processor> ();
+	return std::shared_ptr<Processor> ();
 }
 
-/** @return what we should be metering; either the data coming from the input
- *  IO or the data that is flowing through the route.
- */
-MeterState
-Route::metering_state () const
+bool
+Route::can_freeze_processor (std::shared_ptr<Processor> p, bool allow_routing) const
 {
-	return MeteringRoute;
+	/* ignore inactive processors and obviously ignore the main
+	 * outs since everything has them and we don't care.
+	 */
+	if (!p->active()) {
+		return true;
+	}
+
+	if (p != _main_outs && p->does_routing()) {
+		return allow_routing;
+	}
+
+	if (std::dynamic_pointer_cast<PortInsert>(p)) {
+		return false;
+	}
+
+	std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert>(p);
+	if (pi && pi->has_sidechain () && pi->sidechain_input () && pi->sidechain_input ()->connected()) {
+		return false;
+	}
+
+	return true;
 }
 
 bool
 Route::has_external_redirects () const
 {
+	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-
-		/* ignore inactive processors and obviously ignore the main
-		 * outs since everything has them and we don't care.
-		 */
-
-		if ((*i)->active() && (*i) != _main_outs && (*i)->does_routing()) {
-			return true;;
+		if (!can_freeze_processor (*i)) {
+			return true;
 		}
 	}
-
 	return false;
 }
 
-boost::shared_ptr<Processor>
+std::shared_ptr<Processor>
 Route::the_instrument () const
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
 	return the_instrument_unlocked ();
 }
 
-boost::shared_ptr<Processor>
+std::shared_ptr<Processor>
 Route::the_instrument_unlocked () const
 {
 	for (ProcessorList::const_iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert>(*i);
+		std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert>(*i);
 		if (pi && pi->plugin ()->get_info ()->is_instrument ()) {
 			return (*i);
 		}
 	}
-	return boost::shared_ptr<Processor>();
+	return std::shared_ptr<Processor>();
 }
 
 bool
@@ -5074,7 +5722,7 @@ Route::non_realtime_locate (samplepos_t pos)
 }
 
 void
-Route::fill_buffers_with_input (BufferSet& bufs, boost::shared_ptr<IO> io, pframes_t nframes)
+Route::fill_buffers_with_input (BufferSet& bufs, std::shared_ptr<IO> io, pframes_t nframes)
 {
 	size_t n_buffers;
 	size_t i;
@@ -5089,7 +5737,7 @@ Route::fill_buffers_with_input (BufferSet& bufs, boost::shared_ptr<IO> io, pfram
 
 	for (i = 0; i < n_buffers; ++i) {
 
-		boost::shared_ptr<MidiPort> source_port = io->midi (i);
+		std::shared_ptr<MidiPort> source_port = io->midi (i);
 		MidiBuffer& buf (bufs.get_midi (i));
 
 		if (source_port) {
@@ -5116,7 +5764,7 @@ Route::fill_buffers_with_input (BufferSet& bufs, boost::shared_ptr<IO> io, pfram
 		 * in a round-robin fashion
 		 */
 
-		boost::shared_ptr<AudioPort> source_port = io->audio (i);
+		std::shared_ptr<AudioPort> source_port = io->audio (i);
 		AudioBuffer& buf (bufs.get_audio (i%n_buffers));
 
 		if (i < n_buffers) {
@@ -5162,642 +5810,171 @@ Route::fill_buffers_with_input (BufferSet& bufs, boost::shared_ptr<IO> io, pfram
 	}
 }
 
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::pan_azimuth_control() const
 {
-#ifdef MIXBUS
-# undef MIXBUS_PORTS_H
-# include "../../gtk2_ardour/mixbus_ports.h"
-	boost::shared_ptr<ARDOUR::PluginInsert> plug = ch_post();
-	if (!plug) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (plug->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, port_channel_post_pan)));
-#else
 	if (!_pannable || !panner()) {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 	return _pannable->pan_azimuth_control;
-#endif
 }
 
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::pan_elevation_control() const
 {
 	if (Profile->get_mixbus() || !_pannable || !panner()) {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 
-	set<Evoral::Parameter> c = panner()->what_can_be_automated ();
+	set<Evoral::Parameter> c = pannable()->what_can_be_automated ();
 
 	if (c.find (PanElevationAutomation) != c.end()) {
 		return _pannable->pan_elevation_control;
 	} else {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 }
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::pan_width_control() const
 {
-#ifdef MIXBUS
-	if (mixbus() && _ch_pre) {
-		//mono blend
-		return boost::dynamic_pointer_cast<ARDOUR::AutomationControl>(_ch_pre->control(Evoral::Parameter(PluginAutomation, 0, 5)));
-	}
-#endif
 	if (Profile->get_mixbus() || !_pannable || !panner()) {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 
-	set<Evoral::Parameter> c = panner()->what_can_be_automated ();
+	set<Evoral::Parameter> c = pannable()->what_can_be_automated ();
 
 	if (c.find (PanWidthAutomation) != c.end()) {
 		return _pannable->pan_width_control;
 	} else {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 }
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::pan_frontback_control() const
 {
 	if (Profile->get_mixbus() || !_pannable || !panner()) {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 
-	set<Evoral::Parameter> c = panner()->what_can_be_automated ();
+	set<Evoral::Parameter> c = pannable()->what_can_be_automated ();
 
 	if (c.find (PanFrontBackAutomation) != c.end()) {
 		return _pannable->pan_frontback_control;
 	} else {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 }
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::pan_lfe_control() const
 {
 	if (Profile->get_mixbus() || !_pannable || !panner()) {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
 
-	set<Evoral::Parameter> c = panner()->what_can_be_automated ();
+	set<Evoral::Parameter> c = pannable()->what_can_be_automated ();
 
 	if (c.find (PanLFEAutomation) != c.end()) {
 		return _pannable->pan_lfe_control;
 	} else {
-		return boost::shared_ptr<AutomationControl>();
+		return std::shared_ptr<AutomationControl>();
 	}
+}
+
+void
+Route::add_well_known_ctrl (WellKnownCtrl which)
+{
+	_well_known_map[which].push_back (std::weak_ptr<ARDOUR::AutomationControl> ());
+}
+
+void
+Route::add_well_known_ctrl (WellKnownCtrl which, std::shared_ptr<PluginInsert> pi, int param)
+{
+	_well_known_map[which].push_back (std::dynamic_pointer_cast<ARDOUR::AutomationControl> (pi->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, param))));
+}
+
+std::shared_ptr<AutomationControl>
+Route::mapped_control (enum WellKnownCtrl which, uint32_t band) const
+{
+	auto it = _well_known_map.find (which);
+	if (it == _well_known_map.end () || it->second.size () <= band) {
+		return std::shared_ptr<AutomationControl> ();
+	}
+	return it->second[band].lock();
+}
+
+std::shared_ptr<ReadOnlyControl>
+Route::mapped_output (enum WellKnownData which) const
+{
+	return std::shared_ptr<ReadOnlyControl>();
 }
 
 uint32_t
 Route::eq_band_cnt () const
 {
-	if (Profile->get_mixbus()) {
-#ifdef MIXBUS32C
-		if (is_master() || mixbus()) {
-			return 3;
-		} else {
-			return 4;
-		}
-#else
-		return 3;
-#endif
-	} else {
-		/* Ardour has no well-known EQ object */
-		return 0;
-	}
-}
-
-boost::shared_ptr<AutomationControl>
-Route::eq_gain_controllable (uint32_t band) const
-{
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> eq = ch_eq();
-
-	if (!eq) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	uint32_t port_number;
-	if (is_master() || mixbus()) {
-		switch (band) {
-			case 0: port_number = 4; break;
-			case 1: port_number = 3; break;
-			case 2: port_number = 2; break;
-			default:
-				return boost::shared_ptr<AutomationControl>();
-		}
-	} else {
-#ifdef MIXBUS32C
-		switch (band) {
-			case 0: port_number = 14; break;
-			case 1: port_number = 12; break;
-			case 2: port_number = 10; break;
-			case 3: port_number =  8; break;
-			default:
-				return boost::shared_ptr<AutomationControl>();
-		}
-#else
-		switch (band) {
-			case 0: port_number = 8; break;
-			case 1: port_number = 6; break;
-			case 2: port_number = 4; break;
-			default:
-				return boost::shared_ptr<AutomationControl>();
-		}
-#endif
-	}
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, port_number)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-boost::shared_ptr<AutomationControl>
-Route::eq_freq_controllable (uint32_t band) const
-{
-#ifdef MIXBUS
-	if (mixbus() || is_master()) {
-		/* no frequency controls for mixbusses or master */
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	boost::shared_ptr<PluginInsert> eq = ch_eq();
-
-	if (!eq) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	uint32_t port_number;
-#ifdef MIXBUS32C
-	switch (band) {
-		case 0: port_number = 13; break; // lo
-		case 1: port_number = 11; break; // lo mid
-		case 2: port_number = 9; break; // hi mid
-		case 3: port_number = 7; break; // hi
-		default:
-			return boost::shared_ptr<AutomationControl>();
-	}
-#else
-	switch (band) {
-		case 0: port_number = 7; break;
-		case 1: port_number = 5; break;
-		case 2: port_number = 3; break;
-		default:
-			return boost::shared_ptr<AutomationControl>();
-	}
-#endif
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, port_number)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-
-boost::shared_ptr<AutomationControl>
-Route::eq_q_controllable (uint32_t band) const
-{
-	return boost::shared_ptr<AutomationControl>();
-}
-
-boost::shared_ptr<AutomationControl>
-Route::eq_shape_controllable (uint32_t band) const
-{
-#ifdef MIXBUS32C
-	boost::shared_ptr<PluginInsert> eq = ch_eq();
-	if (is_master() || mixbus() || !eq) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-	switch (band) {
-		case 0:
-			return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 4))); // lo bell
-			break;
-		case 3:
-			return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 3))); // hi bell
-			break;
-		default:
-			break;
-	}
-#endif
-	return boost::shared_ptr<AutomationControl>();
-}
-
-boost::shared_ptr<AutomationControl>
-Route::eq_enable_controllable () const
-{
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> eq = ch_eq();
-
-	if (!eq) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 1)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-
-boost::shared_ptr<AutomationControl>
-Route::filter_freq_controllable (bool hpf) const
-{
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> eq = ch_eq();
-
-	if (is_master() || mixbus() || !eq) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-	if (hpf) {
-#ifdef MIXBUS32C
-		return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 5))); // HPF freq
-#else
-		return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 2)));
-#endif
-	} else {
-#ifdef MIXBUS32C
-		return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 6))); // LPF freq
-#else
-		return boost::shared_ptr<AutomationControl>();
-#endif
-	}
-
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-
-boost::shared_ptr<AutomationControl>
-Route::filter_slope_controllable (bool) const
-{
-	return boost::shared_ptr<AutomationControl>();
-}
-
-boost::shared_ptr<AutomationControl>
-Route::filter_enable_controllable (bool) const
-{
-#ifdef MIXBUS32C
-	boost::shared_ptr<PluginInsert> eq = ch_eq();
-
-	if (is_master() || mixbus() || !eq) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (eq->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 2)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-
-boost::shared_ptr<AutomationControl>
-Route::tape_drive_controllable () const
-{
-#ifdef MIXBUS
-
-	if ( _ch_pre && (is_master() || mixbus()) ) {
-		return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (_ch_pre->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 4)));
-	}
-#endif
-
-	return boost::shared_ptr<AutomationControl>();
+	/* Ardour has no well-known EQ object */
+	return 0;
 }
 
 string
 Route::eq_band_name (uint32_t band) const
 {
-#ifdef MIXBUS32C
-	if (is_master() || mixbus()) {
-#endif
-	if (Profile->get_mixbus()) {
-		switch (band) {
-			case 0: return _("lo");
-			case 1: return _("mid");
-			case 2: return _("hi");
-			default: return string();
-		}
-	} else {
-		return string ();
-	}
-#ifdef MIXBUS32C
-	} else {
-		switch (band) {
-			case 0: return _("lo");
-			case 1: return _("lo mid");
-			case 2: return _("hi mid");
-			case 3: return _("hi");
-			default: return string();
-		}
-	}
-#endif
+	return string ();
 }
 
-boost::shared_ptr<AutomationControl>
-Route::comp_enable_controllable () const
+std::shared_ptr<AutomationControl>
+Route::send_pan_azimuth_controllable (uint32_t n) const
 {
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> comp = ch_comp();
-
-	if (!comp) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (comp->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 1)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
+	return std::shared_ptr<AutomationControl>();
 }
-boost::shared_ptr<AutomationControl>
-Route::comp_threshold_controllable () const
+
+std::shared_ptr<AutomationControl>
+Route::send_level_controllable (uint32_t n, bool locked) const
 {
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> comp = ch_comp();
-
-	if (!comp) {
-		return boost::shared_ptr<AutomationControl>();
+	if (locked) {
+		/* calling thread has a WriterLock (_processor_lock)
+		 * we cannot call nth_send()
+		 */
+		return std::shared_ptr<AutomationControl>();
 	}
 
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (comp->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 2)));
-
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-boost::shared_ptr<AutomationControl>
-Route::comp_speed_controllable () const
-{
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> comp = ch_comp();
-
-	if (!comp) {
-		return boost::shared_ptr<AutomationControl>();
+	std::shared_ptr<Send> s = std::dynamic_pointer_cast<Send>(nth_send (n));
+	if (s) {
+		return s->gain_control ();
 	}
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (comp->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 3)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-boost::shared_ptr<AutomationControl>
-Route::comp_mode_controllable () const
-{
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> comp = ch_comp();
-
-	if (!comp) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (comp->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 4)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-boost::shared_ptr<AutomationControl>
-Route::comp_makeup_controllable () const
-{
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> comp = ch_comp();
-
-	if (!comp) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (comp->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, 5)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
-}
-boost::shared_ptr<ReadOnlyControl>
-Route::comp_redux_controllable () const
-{
-#ifdef MIXBUS
-	boost::shared_ptr<PluginInsert> comp = ch_comp();
-
-	if (!comp) {
-		return boost::shared_ptr<ReadOnlyControl>();
-	}
-	if (is_master()) {
-		return comp->control_output (2);
-	} else {
-		return comp->control_output (6);
-	}
-
-#else
-	return boost::shared_ptr<ReadOnlyControl>();
-#endif
+	return std::shared_ptr<AutomationControl>();
 }
 
-string
-Route::comp_mode_name (uint32_t mode) const
-{
-#ifdef MIXBUS
-	switch (mode) {
-	case 0:
-		return _("Leveler");
-	case 1:
-		return _("Compressor");
-	case 2:
-		return _("Limiter");
-	case 3:
-		return mixbus() ? _("Sidechain") : _("Limiter");
-	}
-
-	return _("???");
-#else
-	return _("???");
-#endif
-}
-
-string
-Route::comp_speed_name (uint32_t mode) const
-{
-#ifdef MIXBUS
-	switch (mode) {
-	case 0:
-		return _("Attk");
-	case 1:
-		return _("Ratio");
-	case 2:
-	case 3:
-		return _("Rels");
-	}
-	return _("???");
-#else
-	return _("???");
-#endif
-}
-
-boost::shared_ptr<AutomationControl>
-Route::send_pan_azi_controllable (uint32_t n) const
-{
-#ifdef  MIXBUS
-# undef MIXBUS_PORTS_H
-# include "../../gtk2_ardour/mixbus_ports.h"
-	boost::shared_ptr<ARDOUR::PluginInsert> plug = ch_post();
-	if (plug && !mixbus()) {
-		uint32_t port_id = 0;
-		switch (n) {
-# ifdef MIXBUS32C
-			case  0: port_id = port_channel_post_aux0_pan; break;  //32c mb "pan" controls use zero-based names, unlike levels. ugh
-			case  1: port_id = port_channel_post_aux1_pan; break;
-			case  2: port_id = port_channel_post_aux2_pan; break;
-			case  3: port_id = port_channel_post_aux3_pan; break;
-			case  4: port_id = port_channel_post_aux4_pan; break;
-			case  5: port_id = port_channel_post_aux5_pan; break;
-			case  6: port_id = port_channel_post_aux6_pan; break;
-			case  7: port_id = port_channel_post_aux7_pan; break;
-			case  8: port_id = port_channel_post_aux8_pan; break;
-			case  9: port_id = port_channel_post_aux9_pan; break;
-			case 10: port_id = port_channel_post_aux10_pan; break;
-			case 11: port_id = port_channel_post_aux11_pan; break;
-# endif
-			default:
-				break;
-		}
-
-		if (port_id > 0) {
-			return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (plug->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, port_id)));
-		}
-	}
-#endif
-	
-	return boost::shared_ptr<AutomationControl>();
-}
-
-boost::shared_ptr<AutomationControl>
-Route::send_level_controllable (uint32_t n) const
-{
-#ifdef  MIXBUS
-# undef MIXBUS_PORTS_H
-# include "../../gtk2_ardour/mixbus_ports.h"
-	boost::shared_ptr<ARDOUR::PluginInsert> plug = ch_post();
-	if (plug && !mixbus()) {
-		uint32_t port_id = 0;
-		switch (n) {
-			case  0: port_id = port_channel_post_aux1_level; break;
-			case  1: port_id = port_channel_post_aux2_level; break;
-			case  2: port_id = port_channel_post_aux3_level; break;
-			case  3: port_id = port_channel_post_aux4_level; break;
-			case  4: port_id = port_channel_post_aux5_level; break;
-			case  5: port_id = port_channel_post_aux6_level; break;
-			case  6: port_id = port_channel_post_aux7_level; break;
-			case  7: port_id = port_channel_post_aux8_level; break;
-# ifdef MIXBUS32C
-			case  8: port_id = port_channel_post_aux9_level; break;
-			case  9: port_id = port_channel_post_aux10_level; break;
-			case 10: port_id = port_channel_post_aux11_level; break;
-			case 11: port_id = port_channel_post_aux12_level; break;
-# endif
-			default:
-				break;
-		}
-
-		if (port_id > 0) {
-			return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (plug->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, port_id)));
-		}
-# ifdef MIXBUS32C
-		assert (n > 11);
-		n -= 12;
-# else
-		assert (n > 7);
-		n -= 8;
-# endif
-	}
-#endif
-	boost::shared_ptr<Send> s = boost::dynamic_pointer_cast<Send>(nth_send (n));
-	if (!s) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-	return s->gain_control ();
-}
-
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::send_enable_controllable (uint32_t n) const
 {
-#ifdef  MIXBUS
-# undef MIXBUS_PORTS_H
-# include "../../gtk2_ardour/mixbus_ports.h"
-	boost::shared_ptr<ARDOUR::PluginInsert> plug = ch_post();
-	if (plug && !mixbus()) {
-		uint32_t port_id = 0;
-		switch (n) {
-			case  0: port_id = port_channel_post_aux1_asgn; break;
-			case  1: port_id = port_channel_post_aux2_asgn; break;
-			case  2: port_id = port_channel_post_aux3_asgn; break;
-			case  3: port_id = port_channel_post_aux4_asgn; break;
-			case  4: port_id = port_channel_post_aux5_asgn; break;
-			case  5: port_id = port_channel_post_aux6_asgn; break;
-			case  6: port_id = port_channel_post_aux7_asgn; break;
-			case  7: port_id = port_channel_post_aux8_asgn; break;
-# ifdef MIXBUS32C
-			case  8: port_id = port_channel_post_aux9_asgn; break;
-			case  9: port_id = port_channel_post_aux10_asgn; break;
-			case 10: port_id = port_channel_post_aux11_asgn; break;
-			case 11: port_id = port_channel_post_aux12_asgn; break;
-# endif
-			default:
-				break;
-		}
-
-		if (port_id > 0) {
-			return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (plug->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, port_id)));
-		}
-# ifdef MIXBUS32C
-		assert (n > 11);
-		n -= 12;
-# else
-		assert (n > 7);
-		n -= 8;
-# endif
-	}
-#endif
 	/* although Ardour sends have enable/disable as part of the Processor
 	 * API, it is not exposed as a controllable.
 	 *
 	 * XXX: we should fix this (make it click-free, automatable enable-control)
 	 */
-	return boost::shared_ptr<AutomationControl>();
+	return std::shared_ptr<AutomationControl>();
+}
+
+std::shared_ptr<AutomationControl>
+Route::send_pan_azimuth_enable_controllable (uint32_t n) const
+{
+	return std::shared_ptr<AutomationControl>();
 }
 
 string
 Route::send_name (uint32_t n) const
 {
-#ifdef MIXBUS
-	boost::shared_ptr<ARDOUR::PluginInsert> plug = ch_post();
-	if (plug && !mixbus()) {
-# ifdef MIXBUS32C
-		if (n < 12) {
-			return _session.get_mixbus (n)->name();
-		}
-		n -= 12;
-#else
-		if (n < 8) {
-			return _session.get_mixbus (n)->name();
-		}
-		n -= 8;
-# endif
-	}
-#endif
-	boost::shared_ptr<Processor> p = nth_send (n);
+	std::shared_ptr<Processor> p = nth_send (n);
 	if (p) {
 		return p->name();
-	} else {
-		return string();
 	}
+	return string();
 }
 
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::master_send_enable_controllable () const
 {
-#ifdef  MIXBUS
-	boost::shared_ptr<ARDOUR::PluginInsert> plug = ch_post();
-	if (!plug) {
-		return boost::shared_ptr<AutomationControl>();
-	}
-# undef MIXBUS_PORTS_H
-# include "../../gtk2_ardour/mixbus_ports.h"
-	return boost::dynamic_pointer_cast<ARDOUR::AutomationControl> (plug->control (Evoral::Parameter (ARDOUR::PluginAutomation, 0, port_channel_post_mstr_assign)));
-#else
-	return boost::shared_ptr<AutomationControl>();
-#endif
+	return std::shared_ptr<AutomationControl>();
 }
 
 bool
@@ -5811,7 +5988,7 @@ Route::slaved () const
 }
 
 bool
-Route::slaved_to (boost::shared_ptr<VCA> vca) const
+Route::slaved_to (std::shared_ptr<VCA> vca) const
 {
 	if (!vca || !_gain_control) {
 		return false;
@@ -5838,13 +6015,19 @@ Route::clear_all_solo_state ()
 	_solo_control->clear_all_solo_state ();
 }
 
-boost::shared_ptr<AutomationControl>
+std::shared_ptr<AutomationControl>
 Route::automation_control_recurse (PBD::ID const & id) const
 {
-	boost::shared_ptr<AutomationControl> ac = Automatable::automation_control (id);
+	std::shared_ptr<AutomationControl> ac = Automatable::automation_control (id);
 
 	if (ac) {
 		return ac;
+	}
+
+	if  (_pannable) {
+		if ((ac = _pannable->automation_control (id))) {
+			return ac;
+		}
 	}
 
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
@@ -5855,13 +6038,26 @@ Route::automation_control_recurse (PBD::ID const & id) const
 		}
 	}
 
-	return boost::shared_ptr<AutomationControl> ();
+	return std::shared_ptr<AutomationControl> ();
 }
 
-SlavableControlList
+void
+Route::automatables (PBD::ControllableSet& s) const
+{
+	Automatable::automatables (s);
+	if  (_pannable) {
+		_pannable->automatables (s);
+	}
+	Glib::Threads::RWLock::ReaderLock lm (_processor_lock);
+	for (auto const& i : _processors) {
+		i->automatables (s);
+	}
+}
+
+SlavableAutomationControlList
 Route::slavables () const
 {
-	SlavableControlList rv;
+	SlavableAutomationControlList rv;
 	rv.push_back (_gain_control);
 	rv.push_back (_mute_control);
 	rv.push_back (_solo_control);
@@ -5869,11 +6065,22 @@ Route::slavables () const
 }
 
 void
+Route::set_meter_type (MeterType t)
+{
+	_meter->set_meter_type (t);
+	_session.set_dirty ();
+}
+
+MeterType
+Route::meter_type () const
+{
+	return _meter->meter_type ();
+}
+
+void
 Route::set_disk_io_point (DiskIOPoint diop)
 {
 	bool display = false;
-
-	cerr << "set disk io to " << enum_2_string (diop) << endl;
 
 	switch (diop) {
 	case DiskIOCustom:
@@ -5891,16 +6098,26 @@ Route::set_disk_io_point (DiskIOPoint diop)
 		_disk_reader->set_display_to_user (display);
 	}
 
+	if (_triggerbox) {
+		_triggerbox->set_display_to_user (display);
+	}
+
 	const bool changed = (diop != _disk_io_point);
 
 	_disk_io_point = diop;
+
+	if (_initial_io_setup) {
+		return;
+	}
 
 	if (changed) {
 		Glib::Threads::Mutex::Lock lx (AudioEngine::instance()->process_lock ());
 		configure_processors (0);
 	}
 
-	processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+	if (changed) {
+		processors_changed (RouteProcessorChange ()); /* EMIT SIGNAL */
+	}
 }
 
 void
@@ -5913,69 +6130,20 @@ Route::set_loop (Location* l)
 	}
 }
 
-#ifdef USE_TRACKS_CODE_FEATURES
-
-/* This is the Tracks version of Track::monitoring_state().
- *
- * Ardour developers: try to flag or fix issues if parts of the libardour API
- * change in ways that invalidate this
- */
-
-MonitorState
-Route::monitoring_state () const
-{
-	/* Explicit requests */
-
-	if (_monitoring != MonitorInput) {
-		return MonitoringInput;
-	}
-
-	if (_monitoring & MonitorDisk) {
-		return MonitoringDisk;
-	}
-
-	/* This is an implementation of the truth table in doc/monitor_modes.pdf;
-	   I don't think it's ever going to be too pretty too look at.
-	*/
-
-	// GZ: NOT USED IN TRACKS
-	//bool const auto_input = _session.config.get_auto_input ();
-	//bool const software_monitor = Config->get_monitoring_model() == SoftwareMonitoring;
-	//bool const tape_machine_mode = Config->get_tape_machine_mode ();
-
-	bool const roll = _session.transport_rolling ();
-	bool const track_rec = _diskstream->record_enabled ();
-	bool session_rec = _session.actively_recording ();
-
-	if (track_rec) {
-
-		if (!session_rec && roll) {
-			return MonitoringDisk;
-		} else {
-			return MonitoringInput;
-		}
-
-	} else {
-
-		if (roll) {
-			return MonitoringDisk;
-		}
-	}
-
-	return MonitoringSilence;
+static inline MonitorState
+operator| (const MonitorState& a, const MonitorState& b) {
+	return static_cast<MonitorState> (static_cast <int>(a) | static_cast<int> (b));
 }
 
-#else
-
-/* This is the Ardour/Mixbus version of Track::monitoring_state().
- *
- * Tracks developers: do NOT modify this method under any circumstances.
- */
+static inline MonitorState
+operator& (const MonitorState& a, const MonitorState& b) {
+	return static_cast<MonitorState> (static_cast <int>(a) & static_cast<int> (b));
+}
 
 MonitorState
 Route::monitoring_state () const
 {
-	if (!_disk_reader) {
+	if (!_disk_reader || !_monitoring_control) {
 		return MonitoringInput;
 	}
 
@@ -5984,10 +6152,10 @@ Route::monitoring_state () const
 
 	if (m != MonitorAuto) {
 
-		MonitorState ms ((MonitorState) 0);
+		MonitorState ms = MonitoringSilence;
 
 		if (m & MonitorInput) {
-			ms = MonitoringInput;
+			ms = MonitorState (ms | MonitoringInput);
 		}
 
 		if (m & MonitorDisk) {
@@ -5997,17 +6165,166 @@ Route::monitoring_state () const
 		return ms;
 	}
 
+	/* When TriggerBox is not empty, do not implicitly monitor Disk */
+	bool const tod = _session.config.get_triggerbox_overrides_disk_monitoring ();
+	MonitorState auto_monitor_disk = !tod || (_triggerbox && _triggerbox->empty ()) ? MonitoringDisk : MonitoringSilence;
+	MonitorState auto_monitor_mask = !tod || (_triggerbox && _triggerbox->empty ()) ? MonitoringCue : MonitoringInput;
+
 	switch (_session.config.get_session_monitoring ()) {
 		case MonitorDisk:
-			return MonitoringDisk;
+			return auto_monitor_disk;
 			break;
 		case MonitorInput:
 			return MonitoringInput;
 			break;
+		case MonitorCue:
+			return MonitoringCue;
 		default:
+			/* MonitorAuto */
 			break;
 	}
 
-	return get_auto_monitoring_state();
+	/* This is an implementation of the truth table at https://manual.ardour.org/appendix/monitor-modes/
+	 * I don't think it's ever going to be too pretty too look at.
+	 */
+
+	bool session_rec       = _session.get_record_enabled ();
+	bool const roll        = _session.transport_state_rolling ();
+	bool const auto_input  = _session.config.get_auto_input ();
+	bool const clip_rec    = _triggerbox && _triggerbox->record_enabled() == Recording && !session_rec;
+	bool const track_rec   = _disk_writer->record_enabled ();
+
+	bool const auto_input_does_talkback = Config->get_auto_input_does_talkback ();
+
+	/* I suspect that just use actively_recording() is good enough all the
+	 * time, but just to keep the semantics the same as they were before
+	 * sept 26th 2012, we differentiate between the cases where punch is
+	 * enabled and those where it is not.
+	 *
+	 * rg: sept 30 2017: Above is not the case: punch-in/out location is
+	 * global session playhead position.
+	 * When this method is called from process_output_buffers() we need
+	 * to use delay-compensated route's process-position.
+	 *
+	 * NB. Disk reader/writer may also be offset by a same amount of time.
+	 *
+	 * Also keep in mind that _session.transport_rolling() is false during
+	 * pre-roll but the disk already produces output.
+	 *
+	 * TODO: FIXME
+	 */
+
+	if ((_session.config.get_punch_in() || _session.config.get_punch_out()) && 0 != _session.locations()->auto_punch_location ()) {
+		session_rec = _session.actively_recording ();
+	}
+
+	if (track_rec || clip_rec) {
+
+		/* either record to the timeline or into a clip */
+		assert (track_rec != clip_rec);
+
+		if (clip_rec) {
+			/* actively recording into a slot */
+			return get_input_monitoring_state (true, auto_input_does_talkback) & auto_monitor_mask;
+		}
+
+		if (!roll) {
+			/*  9, 10, 25, 26 -> MonitoringInput; 41, 42, 57, 58 -> HW passthrough
+			 * 13, 14, 29, 30 -> MonitoringInput; 46, 47, 61, 62 -> HW passthrough */
+			return get_input_monitoring_state (true, false) & auto_monitor_mask;
+		}
+
+		if (!session_rec) {
+			if (auto_input) {
+				/* 11, 27, 43, 59 -> MonitoringDisk */
+				return auto_monitor_disk | get_input_monitoring_state (false, false);
+			} else {
+				/* 12, 28 -> MonitoringInput;  44, 60 -> HW passthru */
+				return get_input_monitoring_state (true, false) & auto_monitor_mask;
+			}
+		}
+
+		/* actively recording
+		 * 15, 16, 31, 32 -> MonitoringInput, 47, 48, 63, 64 -> HW passthrough */
+		const samplecnt_t prtl = _session.preroll_record_trim_len ();
+		if (session_rec && roll && prtl > 0 && _disk_writer->get_captured_samples () < prtl) {
+			/* CUE monitor during pre-roll */
+			return auto_monitor_disk | (get_input_monitoring_state (true, false) & auto_monitor_mask);
+		}
+		return get_input_monitoring_state (true, false) & auto_monitor_mask;
+
+	} else {
+
+		if (auto_input_does_talkback) {
+			/* 1 - 8 ; 33 - 40 */
+			if (!roll && auto_input) {
+				/* 1, 5 -> MonitoringInput */
+				return get_input_monitoring_state (false, true) & auto_monitor_mask;
+			} else {
+				return auto_monitor_disk | get_input_monitoring_state (false, false);
+			}
+
+		} else {
+			/* tape-machine-mode
+			 * 17 - 24; 49 - 56 -> MonitoringDisk */
+			return auto_monitor_disk | get_input_monitoring_state (false, false);
+		}
+	}
+
+	abort(); /* NOTREACHED */
+	return MonitoringSilence;
 }
-#endif
+
+void
+Route::tempo_map_changed ()
+{
+	if (_triggerbox) {
+		_triggerbox->tempo_map_changed ();
+	}
+}
+
+void
+Route::enable_surround_send ()
+{
+	if (is_main_bus ()) {
+		/* no surround sends for you */
+		return;
+	}
+
+	/* Caller must hold process lock */
+	assert (!AudioEngine::instance()->process_lock().trylock());
+
+	/* make sure we have one */
+	if (!_surround_send) {
+		_surround_send.reset (new SurroundSend (_session, _mute_master));
+		_surround_send->set_owner (this);
+		_surround_send->activate ();
+	}
+
+	Glib::Threads::RWLock::WriterLock lm (_processor_lock);
+	configure_processors_unlocked (0, &lm);
+	/* We cannot emit `processors_changed` while holing the `process lock`
+	 * This can lead to deadlock in ARDOUR::Session::route_processors_changed
+	 */
+	_pending_surround_send.store (1);
+}
+
+void
+Route::remove_surround_send ()
+{
+	/* Caller must hold process lock */
+	assert (!AudioEngine::instance()->process_lock().trylock());
+
+	if (!_surround_send) {
+		return;
+	}
+
+	_surround_send.reset ();
+
+	Glib::Threads::RWLock::WriterLock lm (_processor_lock);
+	configure_processors_unlocked (0, &lm);
+	/* We cannot emit `processors_changed` while holing the `process lock`
+	 * This can lead to deadlock in ARDOUR::Session::route_processors_changed
+	 */
+	_pending_surround_send.store (1);
+}

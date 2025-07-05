@@ -1,20 +1,19 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "pbd/failed_constructor.h"
@@ -40,7 +39,6 @@ FluidSynth::FluidSynth (float samplerate, int polyphony)
 	}
 
 	fluid_settings_setnum (_settings, "synth.sample-rate", samplerate);
-	fluid_settings_setint (_settings, "synth.parallel-render", 1);
 	fluid_settings_setint (_settings, "synth.threadsafe-api", 0);
 
 	_synth = new_fluid_synth (_settings);
@@ -71,24 +69,23 @@ FluidSynth::load_sf2 (const std::string& fn)
 	}
 
 	size_t count;
-	fluid_preset_t preset;
+	fluid_preset_t* preset;
 
-	sfont->iteration_start (sfont);
-	for (count = 0; sfont->iteration_next (sfont, &preset) != 0; ++count) {
+	fluid_sfont_iteration_start (sfont);
+	for (count = 0; (preset = fluid_sfont_iteration_next (sfont)) != 0; ++count) {
 		if (count < 16) {
-			fluid_synth_program_select (_synth, count, _synth_id, preset.get_banknum (&preset), preset.get_num (&preset));
+			fluid_synth_program_select (_synth, count, _synth_id, fluid_preset_get_banknum (preset), fluid_preset_get_num (preset));
 		}
 		_presets.push_back (BankProgram (
-					preset.get_name (&preset),
-					preset.get_banknum (&preset),
-					preset.get_num (&preset)));
+					fluid_preset_get_name (preset),
+					fluid_preset_get_banknum (preset),
+					fluid_preset_get_num (preset)));
 	}
-
 	if (count == 0) {
 		return false;
 	}
 
-	/* boostrap synth engine. The first call re-initializes the chorus
+	/* bootstrap synth engine. The first call re-initializes the chorus
 	 * (fluid_rvoice_mixer_set_samplerate) which is not rt-safe.
 	 */
 	float l[1024];

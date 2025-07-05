@@ -1,35 +1,35 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2010 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2017-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __export_format_selector_h__
-#define __export_format_selector_h__
-
+#include <memory>
 #include <string>
-#include <sigc++/signal.h>
-#include <boost/shared_ptr.hpp>
 
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/combobox.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/treemodel.h>
+#include <sigc++/signal.h>
+
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/combobox.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/treemodel.h>
 
 #include "ardour/export_profile_manager.h"
 #include "ardour/session_handle.h"
@@ -43,7 +43,7 @@ class ExportFormatSelector : public Gtk::HBox, public ARDOUR::SessionHandlePtr
 {
 private:
 
-	typedef boost::shared_ptr<ARDOUR::ExportFormatSpecification> FormatPtr;
+	typedef std::shared_ptr<ARDOUR::ExportFormatSpecification> FormatPtr;
 	typedef std::list<FormatPtr> FormatList;
 
 public:
@@ -57,6 +57,7 @@ public:
 	sigc::signal<void, FormatPtr> FormatEdited;
 	sigc::signal<void, FormatPtr> FormatRemoved;
 	sigc::signal<FormatPtr, FormatPtr> NewFormat;
+	sigc::signal<void, FormatPtr> FormatReverted;
 
 	/* Compatibility with other elements */
 
@@ -73,7 +74,7 @@ private:
 
 	ARDOUR::ExportProfileManager::FormatStatePtr state;
 
-	/*** GUI componenets ***/
+	/*** GUI components ***/
 
 	struct FormatCols : public Gtk::TreeModelColumnRecord
 	{
@@ -92,4 +93,3 @@ private:
 	Gtk::Button new_button;
 };
 
-#endif /* __export_format_selector_h__ */

@@ -2,7 +2,7 @@
 
 # we assuem this script is <ardour-src>/tools/x-win/compile.sh
 pushd "`/usr/bin/dirname \"$0\"`" > /dev/null; this_script_dir="`pwd`"; popd > /dev/null
-cd $this_script_dir/../..
+cd "$this_script_dir/../.."
 test -f gtk2_ardour/wscript || exit 1
 
 : ${XARCH=i686} # or x86_64
@@ -25,16 +25,16 @@ fi
 
 if test -z "${ARDOURCFG}"; then
 	if test -f ${PREFIX}/include/pa_asio.h; then
-		ARDOURCFG="--windows-vst --with-backends=jack,dummy,wavesaudio"
+		ARDOURCFG="--with-backends=jack,dummy,portaudio"
 	else
-		ARDOURCFG="--windows-vst --with-backends=jack,dummy"
+		ARDOURCFG="--with-backends=jack,dummy"
 	fi
 fi
 
 if [ "$(id -u)" = "0" ]; then
 	apt-get -qq -y install build-essential \
 		${DEBIANPKGS} \
-		git autoconf automake libtool pkg-config yasm python
+		git autoconf automake libtool pkg-config yasm python3 python-is-python3
 
 	#fixup mingw64 ccache for now
 	if test -d /usr/lib/ccache -a -f /usr/bin/ccache; then
@@ -66,9 +66,10 @@ export DLLTOOL=${XPREFIX}-dlltool
 if grep -q optimize <<<"$ARDOURCFG"; then
 	OPT=""
 else
-	#debug-build luabindings.cc, has > 60k symbols.
+	# debug-build luabindings.cc, has > 60k symbols.
 	# -Wa,-mbig-obj has an unreasonable long build-time
-	# -Og to the rescue.
+	# so libs/ardour/wscript only uses it for luabindings.cc.
+	# session.cc is also big, -Og to the rescue.
 	OPT=" -Og"
 fi
 
@@ -81,7 +82,8 @@ DEPSTACK_ROOT="$PREFIX" \
 	--dist-target=mingw \
 	--also-include=${PREFIX}/include \
 	$ARDOURCFG \
-	--prefix=${PREFIX}
+	--prefix=${PREFIX} \
+	--libdir=${PREFIX}/lib
 
 ./waf ${CONCURRENCY}
 

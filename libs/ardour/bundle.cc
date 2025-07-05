@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 2002 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 
@@ -54,7 +57,7 @@ Bundle::Bundle (std::string const & n, bool i)
 
 }
 
-Bundle::Bundle (boost::shared_ptr<Bundle> other)
+Bundle::Bundle (std::shared_ptr<Bundle> other)
 	: _channel (other->_channel),
 	  _name (other->_name),
 	  _ports_are_inputs (other->_ports_are_inputs),
@@ -300,7 +303,7 @@ Bundle::set_channel_name (uint32_t ch, std::string const & n)
  *  and are named "<other_bundle_name> <other_channel_name>".
  */
 void
-Bundle::add_channels_from_bundle (boost::shared_ptr<Bundle> other)
+Bundle::add_channels_from_bundle (std::shared_ptr<Bundle> other)
 {
 	uint32_t const ch = n_total();
 
@@ -326,7 +329,7 @@ Bundle::add_channels_from_bundle (boost::shared_ptr<Bundle> other)
  *              or require that the ChanCounts match exactly (default false).
  */
 void
-Bundle::connect (boost::shared_ptr<Bundle> other, AudioEngine & engine,
+Bundle::connect (std::shared_ptr<Bundle> other, AudioEngine & engine,
                  bool allow_partial)
 {
 	ChanCount our_count = nchannels();
@@ -359,7 +362,7 @@ Bundle::connect (boost::shared_ptr<Bundle> other, AudioEngine & engine,
 }
 
 void
-Bundle::disconnect (boost::shared_ptr<Bundle> other, AudioEngine & engine)
+Bundle::disconnect (std::shared_ptr<Bundle> other, AudioEngine & engine)
 {
 	ChanCount our_count = nchannels();
 	ChanCount other_count = other->nchannels();
@@ -448,7 +451,7 @@ Bundle::emit_changed (Change c)
  * @param exclusive: if true, additionally check if the bundle is connected
  *                   only to |other|, and return false if not. */
 bool
-Bundle::connected_to (boost::shared_ptr<Bundle> other, AudioEngine & engine,
+Bundle::connected_to (std::shared_ptr<Bundle> other, AudioEngine & engine,
                       DataType type, bool exclusive)
 {
 	if (_ports_are_inputs == other->_ports_are_inputs)
@@ -475,13 +478,13 @@ Bundle::connected_to (boost::shared_ptr<Bundle> other, AudioEngine & engine,
 		Bundle::PortList const & other_ports =
 			other->channel_ports (other->type_channel_to_overall(type, i));
 
-		for (Bundle::PortList::const_iterator j = our_ports.begin();
-		                                      j != our_ports.end(); ++j) {
-			boost::shared_ptr<Port> p = engine.get_port_by_name(*j);
+		for (Bundle::PortList::const_iterator j = our_ports.begin(); j != our_ports.end(); ++j) {
+
+			std::shared_ptr<Port> p = engine.get_port_by_name(*j);
 
 			for (Bundle::PortList::const_iterator k = other_ports.begin();
 			                                   k != other_ports.end(); ++k) {
-				boost::shared_ptr<Port> q = engine.get_port_by_name(*k);
+				std::shared_ptr<Port> q = engine.get_port_by_name(*k);
 
 				if (!p && !q) {
 					return false;
@@ -561,7 +564,7 @@ Bundle::set_name (string const & n)
  *  @return true if b has the same number of channels as this bundle, and those channels have corresponding ports.
  */
 bool
-Bundle::has_same_ports (boost::shared_ptr<Bundle> b) const
+Bundle::has_same_ports (std::shared_ptr<Bundle> b) const
 {
 	ChanCount our_count = nchannels();
 	ChanCount other_count = b->nchannels();
@@ -673,10 +676,12 @@ Bundle::overall_channel_to_type (DataType t, uint32_t c) const
 
 	Glib::Threads::Mutex::Lock lm (_channel_mutex);
 
+	assert (_channel.size () > c);
+
 	uint32_t s = 0;
 
 	vector<Channel>::const_iterator i = _channel.begin ();
-	for (uint32_t j = 0; j < c; ++j) {
+	for (uint32_t j = 0; j < c && i != _channel.end (); ++j) {
 		if (i->type == t) {
 			++s;
 		}

@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2011 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2012-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 #include "pbd/compose.h"
@@ -29,7 +30,7 @@
 #include "ardour/session.h"
 
 #include "audio_clock.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "control_point.h"
 #include "editor.h"
 #include "region_view.h"
@@ -137,7 +138,7 @@ TimeInfoBox::TimeInfoBox (std::string state_node_name, bool with_punch)
 	Editor::instance().get_selection().TimeChanged.connect (sigc::mem_fun (*this, &TimeInfoBox::selection_changed));
 	Editor::instance().get_selection().RegionsChanged.connect (sigc::mem_fun (*this, &TimeInfoBox::selection_changed));
 
-	Editor::instance().MouseModeChanged.connect (editor_connections, invalidator(*this), boost::bind (&TimeInfoBox::track_mouse_mode, this), gui_context());
+	Editor::instance().MouseModeChanged.connect (editor_connections, invalidator(*this), std::bind (&TimeInfoBox::track_mouse_mode, this), gui_context());
 }
 
 TimeInfoBox::~TimeInfoBox ()
@@ -165,7 +166,7 @@ TimeInfoBox::clock_button_release_event (GdkEventButton* ev, AudioClock* src)
 
 	if (ev->button == 1) {
 		if (!src->off()) {
-			_session->request_locate (src->current_time ());
+			_session->request_locate (src->last_when ().samples());
 		}
 		return true;
 	}
@@ -205,18 +206,20 @@ TimeInfoBox::set_session (Session* s)
 {
 	SessionHandlePtr::set_session (s);
 
-	selection_start->set_session (s);
-	selection_end->set_session (s);
-	selection_length->set_session (s);
+	if (s) {
+		selection_start->set_session (s);
+		selection_end->set_session (s);
+		selection_length->set_session (s);
+	}
 
 	if (!with_punch_clock) {
 		return;
 	}
 
-	punch_start->set_session (s);
-	punch_end->set_session (s);
-
 	if (s) {
+		punch_start->set_session (s);
+		punch_end->set_session (s);
+
 		Location* punch = s->locations()->auto_punch_location ();
 
 		if (punch) {
@@ -226,29 +229,29 @@ TimeInfoBox::set_session (Session* s)
 		punch_changed (punch);
 
 		_session->auto_punch_location_changed.connect (_session_connections, MISSING_INVALIDATOR,
-				boost::bind (&TimeInfoBox::punch_location_changed, this, _1), gui_context());
+				std::bind (&TimeInfoBox::punch_location_changed, this, _1), gui_context());
 	}
 }
 
 void
 TimeInfoBox::region_selection_changed ()
 {
-	samplepos_t s, e;
+	timepos_t s, e;
 	Selection& selection (Editor::instance().get_selection());
-	s = selection.regions.start();
-	e = selection.regions.end_sample();
+	s = selection.regions.start_time();
+	e = selection.regions.end_time();
 	selection_start->set_off (false);
 	selection_end->set_off (false);
 	selection_length->set_off (false);
 	selection_start->set (s);
 	selection_end->set (e);
-	selection_length->set (e, false, s);
+	selection_length->set_duration (s.distance (e).increment(), true);
 }
 
 void
 TimeInfoBox::selection_changed ()
 {
-	samplepos_t s, e;
+	timepos_t s, e;
 	Selection& selection (Editor::instance().get_selection());
 
 	region_property_connections.drop_connections();
@@ -265,27 +268,24 @@ TimeInfoBox::selection_changed ()
 	case Editing::MouseObject:
 		if (selection.regions.empty()) {
 			if (selection.points.empty()) {
-				Glib::RefPtr<Action> act = ActionManager::get_action ("MouseMode", "set-mouse-mode-object-range");
-				Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic (act);
-
-				if (tact && tact->get_active() && !selection.time.empty()) {
+				if (!selection.time.empty()) {
 					/* show selected range */
 					selection_start->set_off (false);
 					selection_end->set_off (false);
 					selection_length->set_off (false);
-					selection_start->set (selection.time.start());
-					selection_end->set (selection.time.end_sample());
-					selection_length->set (selection.time.end_sample(), false, selection.time.start());
+					selection_start->set (selection.time.start_time());
+					selection_end->set (selection.time.end_time().decrement());
+					selection_length->set_duration (selection.time.start_time().distance (selection.time.end_time()));
 				} else {
 					selection_start->set_off (true);
 					selection_end->set_off (true);
 					selection_length->set_off (true);
 				}
 			} else {
-				s = max_samplepos;
-				e = 0;
-				for (PointSelection::iterator i = selection.points.begin(); i != selection.points.end(); ++i) {
-					samplepos_t const p = (*i)->line().session_position ((*i)->model ());
+				s = timepos_t::max (selection.points.front()->line().the_list()->time_domain());
+				e = timepos_t::zero (s.time_domain());
+				for (auto const & pt : selection.points) {
+					const timepos_t p = pt->line().session_position ((*pt->model ())->when);
 					s = min (s, p);
 					e = max (e, p);
 				}
@@ -293,21 +293,21 @@ TimeInfoBox::selection_changed ()
 				selection_end->set_off (false);
 				selection_length->set_off (false);
 				selection_start->set (s);
-				selection_end->set (e);
-				selection_length->set (e, false, s);
+				selection_end->set (e.decrement());
+				selection_length->set_duration (s.distance (e), false);
 			}
 		} else {
 			/* this is more efficient than tracking changes per region in large selections */
-			std::set<boost::shared_ptr<ARDOUR::Playlist> > playlists;
+			PlaylistSet playlists;
 			for (RegionSelection::iterator s = selection.regions.begin(); s != selection.regions.end(); ++s) {
-				boost::shared_ptr<Playlist> pl = (*s)->region()->playlist();
+				std::shared_ptr<Playlist> pl = (*s)->region()->playlist();
 				if (pl) {
 					playlists.insert (pl);
 				}
 			}
-			for (std::set<boost::shared_ptr<ARDOUR::Playlist> >::iterator ps = playlists.begin(); ps != playlists.end(); ++ps) {
+			for (PlaylistSet::iterator ps = playlists.begin(); ps != playlists.end(); ++ps) {
 				(*ps)->ContentsChanged.connect (region_property_connections, invalidator (*this),
-								boost::bind (&TimeInfoBox::region_selection_changed, this), gui_context());
+								std::bind (&TimeInfoBox::region_selection_changed, this), gui_context());
 			}
 			region_selection_changed ();
 		}
@@ -315,19 +315,18 @@ TimeInfoBox::selection_changed ()
 
 	case Editing::MouseRange:
 		if (selection.time.empty()) {
-			Glib::RefPtr<Action> act = ActionManager::get_action ("MouseMode", "set-mouse-mode-object-range");
-			Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic (act);
+			Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action (X_("Editor"), "set-mouse-mode-object-range");
 
-			if (tact && tact->get_active() &&  !selection.regions.empty()) {
+			if (tact->get_active() &&  !selection.regions.empty()) {
 				/* show selected regions */
-				s = selection.regions.start();
-				e = selection.regions.end_sample();
+				s = selection.regions.start_time();
+				e = selection.regions.end_time();
 				selection_start->set_off (false);
 				selection_end->set_off (false);
 				selection_length->set_off (false);
 				selection_start->set (s);
-				selection_end->set (e);
-				selection_length->set (e, false, s);
+				selection_end->set (e.decrement());
+				selection_length->set_duration(s.distance (e));
 			} else {
 				selection_start->set_off (true);
 				selection_end->set_off (true);
@@ -337,9 +336,9 @@ TimeInfoBox::selection_changed ()
 			selection_start->set_off (false);
 			selection_end->set_off (false);
 			selection_length->set_off (false);
-			selection_start->set (selection.time.start());
-			selection_end->set (selection.time.end_sample());
-			selection_length->set (selection.time.end_sample(), false, selection.time.start());
+			selection_start->set (selection.time.start_time());
+			selection_end->set (selection.time.end_time().decrement());
+			selection_length->set_duration (selection.time.length());
 		}
 		break;
 
@@ -365,8 +364,8 @@ TimeInfoBox::watch_punch (Location* punch)
 	assert (with_punch_clock);
 	punch_connections.drop_connections ();
 
-	punch->start_changed.connect (punch_connections, MISSING_INVALIDATOR, boost::bind (&TimeInfoBox::punch_changed, this, _1), gui_context());
-	punch->end_changed.connect (punch_connections, MISSING_INVALIDATOR, boost::bind (&TimeInfoBox::punch_changed, this, _1), gui_context());
+	punch->start_changed.connect (punch_connections, MISSING_INVALIDATOR, std::bind (&TimeInfoBox::punch_changed, this, _1), gui_context());
+	punch->end_changed.connect (punch_connections, MISSING_INVALIDATOR, std::bind (&TimeInfoBox::punch_changed, this, _1), gui_context());
 
 	punch_changed (punch);
 }

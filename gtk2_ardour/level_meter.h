@@ -1,42 +1,41 @@
 /*
-    Copyright (C) 2002 Paul Davis
+ * Copyright (C) 2008-2014 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_gtk_track_meter_h__
-#define __ardour_gtk_track_meter_h__
+#pragma once
 
 #include <vector>
 
-#include <gtkmm/box.h>
-#include <gtkmm/adjustment.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/button.h>
-#include <gtkmm/table.h>
-#include <gtkmm/drawingarea.h>
+#include <ytkmm/box.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/button.h>
+#include <ytkmm/table.h>
+#include <ytkmm/drawingarea.h>
 
 #include "ardour/types.h"
 #include "ardour/chan_count.h"
 #include "ardour/session_handle.h"
 
 #include "widgets/fastmeter.h"
-#include "widgets/focus_entry.h"
-#include "widgets/slider_controller.h"
 
 #include "enums.h"
 
@@ -66,13 +65,9 @@ public:
 	void setup_meters (int len=0, int width=3, int thin=2);
 	void set_max_audio_meter_count (uint32_t cnt = 0);
 
-	void set_meter_type (ARDOUR::MeterType);
-	ARDOUR::MeterType meter_type () { return _meter_type; }
-
 	/** Emitted in the GUI thread when a button is pressed over the meter */
-	PBD::Signal1<bool, GdkEventButton *> ButtonPress;
-	PBD::Signal1<bool, GdkEventButton *> ButtonRelease;
-	PBD::Signal1<void, ARDOUR::MeterType> MeterTypeChanged;
+	PBD::Signal<bool(GdkEventButton *)> ButtonPress;
+	PBD::Signal<bool(GdkEventButton *)> ButtonRelease;
 
 protected:
 	virtual void mtr_pack(Gtk::Widget &w) = 0;
@@ -106,7 +101,6 @@ private:
 	guint16                thin_meter_width;
 	std::vector<MeterInfo> meters;
 	float                  max_peak;
-	ARDOUR::MeterType      _meter_type;
 	ARDOUR::MeterType      visible_meter_type;
 	uint32_t               midi_count;
 	uint32_t               meter_count;
@@ -150,5 +144,4 @@ protected:
 	void mtr_remove(Gtk::Widget &w);
 };
 
-#endif /* __ardour_gtk_track_meter_h__ */
 

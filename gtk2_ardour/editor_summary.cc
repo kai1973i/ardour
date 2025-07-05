@@ -1,30 +1,34 @@
 /*
-    Copyright (C) 2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2012-2013 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2012-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2017-2019 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/session.h"
 
-#include "canvas/debug.h"
+#include <ytkmm/menu.h>
+#include <ytkmm/menuitem.h>
 
-#include <gtkmm/menu.h>
-#include <gtkmm/menuitem.h>
-
-#include "time_axis_view.h"
+#include "context_menu_helper.h"
 #include "streamview.h"
 #include "editor_summary.h"
 #include "gui_thread.h"
@@ -47,7 +51,7 @@ using Gtkmm2ext::Keyboard;
 /** Construct an EditorSummary.
  *  @param e Editor to represent.
  */
-EditorSummary::EditorSummary (Editor* e)
+EditorSummary::EditorSummary (Editor& e)
 	: EditorComponent (e),
 	  _start (0),
 	  _end (1),
@@ -62,9 +66,9 @@ EditorSummary::EditorSummary (Editor* e)
 	  _image (0),
 	  _background_dirty (true)
 {
-	CairoWidget::use_nsglview ();
+	CairoWidget::use_nsglview (UIConfiguration::instance().get_nsgl_view_mode () == NSGLHiRes);
 	add_events (Gdk::POINTER_MOTION_MASK|Gdk::KEY_PRESS_MASK|Gdk::KEY_RELEASE_MASK|Gdk::ENTER_NOTIFY_MASK|Gdk::LEAVE_NOTIFY_MASK);
-	set_flags (get_flags() | Gtk::CAN_FOCUS);
+	set_can_focus ();
 
 	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &EditorSummary::parameter_changed));
 }
@@ -110,13 +114,17 @@ EditorSummary::set_session (Session* s)
 	 */
 
 	if (_session) {
-		Region::RegionPropertyChanged.connect (region_property_connection, invalidator (*this), boost::bind (&EditorSummary::set_background_dirty, this), gui_context());
-		PresentationInfo::Change.connect (route_ctrl_id_connection, invalidator (*this), boost::bind (&EditorSummary::set_background_dirty, this), gui_context());
-		_editor->playhead_cursor->PositionChanged.connect (position_connection, invalidator (*this), boost::bind (&EditorSummary::playhead_position_changed, this, _1), gui_context());
-		_session->StartTimeChanged.connect (_session_connections, invalidator (*this), boost::bind (&EditorSummary::set_background_dirty, this), gui_context());
-		_session->EndTimeChanged.connect (_session_connections, invalidator (*this), boost::bind (&EditorSummary::set_background_dirty, this), gui_context());
-		_editor->selection->RegionsChanged.connect (sigc::mem_fun(*this, &EditorSummary::set_background_dirty));
+		Region::RegionsPropertyChanged.connect (region_property_connection, invalidator (*this), std::bind (&EditorSummary::set_background_dirty, this), gui_context());
+		PresentationInfo::Change.connect (route_ctrl_id_connection, invalidator (*this), std::bind (&EditorSummary::set_background_dirty, this), gui_context());
+		_editor.playhead_cursor()->PositionChanged.connect (position_connection, invalidator (*this), std::bind (&EditorSummary::playhead_position_changed, this, _1), gui_context());
+		_session->StartTimeChanged.connect (_session_connections, invalidator (*this), std::bind (&EditorSummary::set_background_dirty, this), gui_context());
+		_session->EndTimeChanged.connect (_session_connections, invalidator (*this), std::bind (&EditorSummary::set_background_dirty, this), gui_context());
+		_editor.selection->RegionsChanged.connect (sigc::mem_fun(*this, &EditorSummary::set_background_dirty));
 	}
+
+	UIConfiguration::instance().ColorsChanged.connect (sigc::mem_fun (*this, &EditorSummary::set_colors));
+
+	set_colors();
 
 	_leftmost = max_samplepos;
 	_rightmost = 0;
@@ -138,9 +146,9 @@ EditorSummary::render_background_image ()
 
 	/* compute start and end points for the summary */
 
-	std::pair<samplepos_t, samplepos_t> ext = _editor->session_gui_extents();
-	double theoretical_start = ext.first;
-	double theoretical_end = ext.second;
+	std::pair<timepos_t, timepos_t> ext = _editor.session_gui_extents();
+	double theoretical_start = ext.first.samples();
+	double theoretical_end = ext.second.samples();
 
 	/* the summary should encompass the full extent of everywhere we've visited since the session was opened */
 	if (_leftmost < theoretical_start)
@@ -155,13 +163,13 @@ EditorSummary::render_background_image ()
 	/* calculate x scale */
 	if (_end != _start) {
 		_x_scale = static_cast<double> (get_width()) / (_end - _start);
- 	} else {
+	} else {
 		_x_scale = 1;
 	}
 
 	/* compute track height */
 	int N = 0;
-	for (TrackViewList::const_iterator i = _editor->track_views.begin(); i != _editor->track_views.end(); ++i) {
+	for (TrackViewList::const_iterator i = _editor.track_views.begin(); i != _editor.track_views.end(); ++i) {
 		if (!(*i)->hidden()) {
 			++N;
 		}
@@ -176,7 +184,7 @@ EditorSummary::render_background_image ()
 	/* render tracks and regions */
 
 	double y = 0;
-	for (TrackViewList::const_iterator i = _editor->track_views.begin(); i != _editor->track_views.end(); ++i) {
+	for (TrackViewList::const_iterator i = _editor.track_views.begin(); i != _editor.track_views.end(); ++i) {
 
 		if ((*i)->hidden()) {
 			continue;
@@ -237,12 +245,12 @@ EditorSummary::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle
 	}
 
 	/* maintain the leftmost and rightmost locations that we've ever reached */
-	samplecnt_t const leftmost = _editor->leftmost_sample ();
+	samplecnt_t const leftmost = _editor.leftmost_sample ();
 	if (leftmost < _leftmost) {
 		_leftmost = leftmost;
 		_background_dirty = true;
 	}
-	samplecnt_t const rightmost = leftmost + _editor->current_page_samples();
+	samplecnt_t const rightmost = leftmost + _editor.current_page_samples();
 	if (rightmost > _rightmost) {
 		_rightmost = rightmost;
 		_background_dirty = true;
@@ -267,12 +275,11 @@ EditorSummary::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle
 	 * the visual change.  This prevents a flicker.
 	 */
 
-	if (_editor->pending_visual_change.idle_handler_id < 0) {
+	if (_editor.pending_visual_change.idle_handler_id < 0) {
 		get_editor (&_view_rectangle_x, &_view_rectangle_y);
 	}
 
 	int32_t width = _view_rectangle_x.second - _view_rectangle_x.first;
-	std::min(8, width);
 	cairo_rectangle (cr, _view_rectangle_x.first, 0, width, get_height ());
 	cairo_set_source_rgba (cr, 1, 1, 1, 0.15);
 	cairo_fill (cr);
@@ -286,10 +293,11 @@ EditorSummary::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle
 	/* Playhead */
 
 	cairo_set_line_width (cr, 1);
-	/* XXX: colour should be set from configuration file */
-	cairo_set_source_rgba (cr, 1, 0, 0, 1);
 
-	const double ph= playhead_sample_to_position (_editor->playhead_cursor->current_sample());
+	double r,g,b,a;  Gtkmm2ext::color_to_rgba(_phead_color, r,g,b,a);
+	cairo_set_source_rgb (cr, r,g,b); // playhead color
+
+	const double ph= playhead_sample_to_position (_editor.playhead_cursor ()->current_sample());
 	cairo_move_to (cr, ph, 0);
 	cairo_line_to (cr, ph, get_height());
 	cairo_stroke (cr);
@@ -299,6 +307,14 @@ EditorSummary::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle
 
 }
 
+void
+EditorSummary::set_colors ()
+{
+	_phead_color = UIConfiguration::instance().color ("play head");
+}
+
+
+
 /** Render a region for the summary.
  *  @param r Region view.
  *  @param cr Cairo context.
@@ -307,17 +323,24 @@ EditorSummary::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle
 void
 EditorSummary::render_region (RegionView* r, cairo_t* cr, double y) const
 {
+	/*NOTE:  you can optimize this operation by coalescing adjacent regions into a single line stroke.
+	 * In a session with a single track ~1,000 regions, this reduced render time from 14ms to 11 ms.
+	 * However, you lose a lot of visual information.  The current method preserves a sense of separation between regions.
+	 * The current method shows the current selection (red regions), which needs to be preserved if this is optimized.
+	 * I think it's not worth it for now,  but we might choose to revisit this someday.
+	 */ 
+
 	uint32_t const c = r->get_fill_color ();
 	cairo_set_source_rgb (cr, UINT_RGBA_R (c) / 255.0, UINT_RGBA_G (c) / 255.0, UINT_RGBA_B (c) / 255.0);
 
-	if (r->region()->position() > _start) {
-		cairo_move_to (cr, (r->region()->position() - _start) * _x_scale, y);
+	if (r->region()->position_sample() > _start) {
+		cairo_move_to (cr, (r->region()->position_sample() - _start) * _x_scale, y);
 	} else {
 		cairo_move_to (cr, 0, y);
 	}
 
 	if ((r->region()->position() + r->region()->length()) > _start) {
-		cairo_line_to (cr, ((r->region()->position() - _start + r->region()->length())) * _x_scale, y);
+		cairo_line_to (cr, ((r->region()->position_sample() - _start + r->region()->length_samples())) * _x_scale, y);
 	} else {
 		cairo_line_to (cr, 0, y);
 	}
@@ -403,11 +426,14 @@ EditorSummary::on_key_press_event (GdkEventKey* key)
 {
 	gint x, y;
 	GtkAccelKey set_playhead_accel;
+
+	/* XXXX this is really ugly and should be using our own action maps and bindings */
+
 	if (gtk_accel_map_lookup_entry ("<Actions>/Editor/set-playhead", &set_playhead_accel)) {
 		if (key->keyval == set_playhead_accel.accel_key && (int) key->state == set_playhead_accel.accel_mods) {
 			if (_session) {
 				get_pointer (x, y);
-				_session->request_locate (_start + (samplepos_t) x / _x_scale, _session->transport_rolling());
+				_session->request_locate (_start + (samplepos_t) x / _x_scale);
 				return true;
 			}
 		}
@@ -421,6 +447,9 @@ EditorSummary::on_key_release_event (GdkEventKey* key)
 {
 
 	GtkAccelKey set_playhead_accel;
+
+	/* XXXX this is really ugly and should be using our own action maps and bindings */
+
 	if (gtk_accel_map_lookup_entry ("<Actions>/Editor/set-playhead", &set_playhead_accel)) {
 		if (key->keyval == set_playhead_accel.accel_key && (int) key->state == set_playhead_accel.accel_mods) {
 			return true;
@@ -437,11 +466,11 @@ EditorSummary::on_key_release_event (GdkEventKey* key)
 bool
 EditorSummary::on_button_press_event (GdkEventButton* ev)
 {
-	_old_follow_playhead = _editor->follow_playhead ();
+	_old_follow_playhead = _editor.follow_playhead ();
 
 	if (ev->button == 3) { // right-click:  show the reset menu action
 		using namespace Gtk::Menu_Helpers;
-		Gtk::Menu* m = manage (new Gtk::Menu);
+		Gtk::Menu* m = ARDOUR_UI_UTILS::shared_popup_menu ();
 		MenuList& items = m->items ();
 		items.push_back(MenuElem(_("Reset Summary to Extents"),
 			sigc::mem_fun(*this, &EditorSummary::reset_to_extents)));
@@ -467,8 +496,8 @@ EditorSummary::on_button_press_event (GdkEventButton* ev)
 
 		_zoom_trim_position = get_position (ev->x, ev->y);
 		_zoom_trim_dragging = true;
-		_editor->_dragging_playhead = true;
-		_editor->set_follow_playhead (false);
+		_editor._dragging_playhead = true;
+		_editor.set_follow_playhead (false);
 
 		if (suspending_editor_updates ()) {
 			get_editor (&_pending_editor_x, &_pending_editor_y);
@@ -491,8 +520,8 @@ EditorSummary::on_button_press_event (GdkEventButton* ev)
 		/* start a move+zoom drag */
 		get_editor (&_pending_editor_x, &_pending_editor_y);
 		_pending_editor_changed = false;
-		_editor->_dragging_playhead = true;
-		_editor->set_follow_playhead (false);
+		_editor._dragging_playhead = true;
+		_editor.set_follow_playhead (false);
 
 		_move_dragging = true;
 
@@ -502,7 +531,7 @@ EditorSummary::on_button_press_event (GdkEventButton* ev)
 		_last_dy = 0;
 		_last_y_delta = 0;
 
-		get_window()->set_cursor (*_editor->_cursors->expand_left_right);
+		get_window()->set_cursor (*_editor._cursors->expand_left_right);
 
 	}
 
@@ -538,17 +567,17 @@ EditorSummary::get_editor (pair<double, double>* x, pair<double, double>* y) con
 
 	/* Otherwise query the editor for its actual position */
 
-	x->first = (_editor->leftmost_sample () - _start) * _x_scale;
-	x->second = x->first + _editor->current_page_samples() * _x_scale;
+	x->first = (_editor.leftmost_sample () - _start) * _x_scale;
+	x->second = x->first + _editor.current_page_samples() * _x_scale;
 
 	if (y) {
-		y->first = editor_y_to_summary (_editor->vertical_adjustment.get_value ());
-		y->second = editor_y_to_summary (_editor->vertical_adjustment.get_value () + _editor->visible_canvas_height() - _editor->get_trackview_group()->canvas_origin().y);
+		y->first = editor_y_to_summary (_editor.vertical_adjustment.get_value ());
+		y->second = editor_y_to_summary (_editor.vertical_adjustment.get_value () + _editor.visible_canvas_height() - _editor.get_trackview_group()->canvas_origin().y);
 	}
 }
 
 /** Get an expression of the position of a point with respect to the view rectangle */
-EditorSummary::Position
+EditorSummary::SummaryPosition
 EditorSummary::get_position (double x, double y) const
 {
 	/* how close the mouse has to be to the edge of the view rectangle to be considered `on it',
@@ -580,26 +609,26 @@ EditorSummary::reset_to_extents()
 	_leftmost = max_samplepos;
 	_rightmost = 0;
 
-	_editor->temporal_zoom_extents ();
+	_editor.temporal_zoom_extents ();
 	set_background_dirty ();
 }
 
 
 void
-EditorSummary::set_cursor (Position p)
+EditorSummary::set_cursor (SummaryPosition p)
 {
 	switch (p) {
 	case LEFT:
-		get_window()->set_cursor (*_editor->_cursors->resize_left);
+		get_window()->set_cursor (*_editor._cursors->resize_left);
 		break;
 	case RIGHT:
-		get_window()->set_cursor (*_editor->_cursors->resize_right);
+		get_window()->set_cursor (*_editor._cursors->resize_right);
 		break;
 	case INSIDE:
-		get_window()->set_cursor (*_editor->_cursors->move);
+		get_window()->set_cursor (*_editor._cursors->move);
 		break;
 	case TO_LEFT_OR_RIGHT:
-		get_window()->set_cursor (*_editor->_cursors->move);
+		get_window()->set_cursor (*_editor._cursors->move);
 		break;
 	default:
 		assert (0);
@@ -620,7 +649,7 @@ EditorSummary::summary_zoom_step (int steps /* positive steps to zoom "out" , ne
 
 	/* for now, disallow really close zooming-in from the scroomer. (Currently it
 	 * causes the start-offset to 'walk' because of integer limitations.
-	 * To fix this, probably need to maintain float throught the get/set_editor() path.)
+	 * To fix this, probably need to maintain float through the get/set_editor() path.)
 	 */
 	if (steps<0) {
       if ((xn.second - xn.first) < 2)
@@ -726,8 +755,8 @@ EditorSummary::on_button_release_event (GdkEventButton*)
 
 	_move_dragging = false;
 	_zoom_trim_dragging = false;
-	_editor->_dragging_playhead = false;
-	_editor->set_follow_playhead (_old_follow_playhead, false);
+	_editor._dragging_playhead = false;
+	_editor.set_follow_playhead (_old_follow_playhead, false);
 
 	if (was_suspended && _pending_editor_changed) {
 		set_editor (_pending_editor_x);
@@ -761,25 +790,25 @@ EditorSummary::on_scroll_event (GdkEventScroll* ev)
 
 		case GDK_SCROLL_LEFT:
 			if (Keyboard::modifier_state_equals (ev->state, Keyboard::ScrollZoomHorizontalModifier)) {
-				_editor->temporal_zoom_step (false);
+				_editor.temporal_zoom_step (false);
 			} else if (Keyboard::modifier_state_contains (ev->state, Keyboard::SecondaryModifier)) {
 				x -= 64;
 			} else if (Keyboard::modifier_state_contains (ev->state, Keyboard::TertiaryModifier)) {
 				x -= 1;
 			} else {
-				_editor->scroll_left_half_page ();
+				_editor.scroll_left_half_page ();
 				return true;
 			}
 			break;
 		case GDK_SCROLL_RIGHT:
 			if (Keyboard::modifier_state_equals (ev->state, Keyboard::ScrollZoomHorizontalModifier)) {
-				_editor->temporal_zoom_step (true);
+				_editor.temporal_zoom_step (true);
 			} else if (Keyboard::modifier_state_contains (ev->state, Keyboard::SecondaryModifier)) {
 				x += 64;
 			} else if (Keyboard::modifier_state_contains (ev->state, Keyboard::TertiaryModifier)) {
 				x += 1;
 			} else {
-				_editor->scroll_right_half_page ();
+				_editor.scroll_right_half_page ();
 				return true;
 			}
 			break;
@@ -799,7 +828,7 @@ EditorSummary::on_scroll_event (GdkEventScroll* ev)
 void
 EditorSummary::set_editor (double const x)
 {
-	if (_editor->pending_visual_change.idle_handler_id >= 0 && _editor->pending_visual_change.being_handled == true) {
+	if (_editor.pending_visual_change.idle_handler_id >= 0 && _editor.pending_visual_change.being_handled == true) {
 
 		/* As a side-effect, the Editor's visual change idle handler processes
 		   pending GTK events.  Hence this motion notify handler can be called
@@ -825,7 +854,7 @@ EditorSummary::set_editor (double const x)
 void
 EditorSummary::set_editor (pair<double,double> const x)
 {
-	if (_editor->pending_visual_change.idle_handler_id >= 0) {
+	if (_editor.pending_visual_change.idle_handler_id >= 0) {
 		/* see comment in other set_editor () */
 		return;
 	}
@@ -853,7 +882,7 @@ EditorSummary::set_editor_x (double x)
 		_pending_editor_changed = true;
 		set_dirty ();
 	} else {
-		_editor->reset_x_origin (x / _x_scale + _start);
+		_editor.reset_x_origin (x / _x_scale + _start);
 	}
 }
 
@@ -877,15 +906,15 @@ EditorSummary::set_editor_x (pair<double, double> x)
 		_pending_editor_changed = true;
 		set_dirty ();
 	} else {
-		_editor->reset_x_origin (x.first / _x_scale + _start);
+		_editor.reset_x_origin (x.first / _x_scale + _start);
 
 		double const nx = (
 			((x.second - x.first) / _x_scale) /
-			_editor->sample_to_pixel (_editor->current_page_samples())
+			_editor.sample_to_pixel (_editor.current_page_samples())
 			);
 
-		if (nx != _editor->get_current_zoom ()) {
-			_editor->reset_zoom (nx);
+		if (nx != _editor.get_current_zoom ()) {
+			_editor.reset_zoom (nx);
 		}
 	}
 }
@@ -898,7 +927,7 @@ EditorSummary::playhead_position_changed (samplepos_t p)
 	if (_session && o != n) {
 		int a = max(2, min (o, n));
 		int b = max (o, n);
-		set_overlays_dirty_rect (a - 2, 0, b + 2, get_height ());
+		set_overlays_dirty_rect (a - 2, 0, b - a + 4, get_height ());
 	}
 }
 
@@ -906,7 +935,7 @@ double
 EditorSummary::editor_y_to_summary (double y) const
 {
 	double sy = 0;
-	for (TrackViewList::const_iterator i = _editor->track_views.begin (); i != _editor->track_views.end(); ++i) {
+	for (TrackViewList::const_iterator i = _editor.track_views.begin (); i != _editor.track_views.end(); ++i) {
 
 		if ((*i)->hidden()) {
 			continue;
@@ -930,10 +959,10 @@ EditorSummary::routes_added (list<RouteTimeAxisView*> const & r)
 {
 	for (list<RouteTimeAxisView*>::const_iterator i = r.begin(); i != r.end(); ++i) {
 		/* Connect to the relevant signal for the route so that we know when its colour has changed */
-		(*i)->route()->presentation_info().PropertyChanged.connect (*this, invalidator (*this), boost::bind (&EditorSummary::route_gui_changed, this, _1), gui_context ());
-		boost::shared_ptr<Track> tr = boost::dynamic_pointer_cast<Track> ((*i)->route ());
+		(*i)->route()->presentation_info().PropertyChanged.connect (*this, invalidator (*this), std::bind (&EditorSummary::route_gui_changed, this, _1), gui_context ());
+		std::shared_ptr<Track> tr = std::dynamic_pointer_cast<Track> ((*i)->route ());
 		if (tr) {
-			tr->PlaylistChanged.connect (*this, invalidator (*this), boost::bind (&EditorSummary::set_background_dirty, this), gui_context ());
+			tr->PlaylistChanged.connect (*this, invalidator (*this), std::bind (&EditorSummary::set_background_dirty, this), gui_context ());
 		}
 	}
 

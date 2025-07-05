@@ -1,27 +1,26 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <sstream>
 #include <cstring>
 #include <cerrno>
 
 #include <sigc++/sigc++.h>
-#include <boost/shared_array.hpp>
 
 #include "pbd/failed_constructor.h"
 
@@ -62,8 +61,8 @@ SurfacePort::SurfacePort (Surface& s)
 		throw failed_constructor();
 	}
 
-	_input_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(_async_in).get();
-	_output_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(_async_out).get();
+	_input_port = std::dynamic_pointer_cast<AsyncMIDIPort>(_async_in).get();
+	_output_port = std::dynamic_pointer_cast<AsyncMIDIPort>(_async_out).get();
 }
 
 SurfacePort::~SurfacePort()
@@ -85,7 +84,7 @@ SurfacePort::~SurfacePort()
 }
 
 XMLNode&
-SurfacePort::get_state ()
+SurfacePort::get_state () const
 {
 	XMLNode* node = new XMLNode (X_("Port"));
 
@@ -111,6 +110,7 @@ SurfacePort::set_state (const XMLNode& node, int version)
 	if ((child = node.child (X_("Input"))) != 0) {
 		XMLNode* portnode = child->child (Port::state_node_name.c_str());
 		if (portnode) {
+			portnode->remove_property ("name");
 			_async_in->set_state (*portnode, version);
 		}
 	}
@@ -118,6 +118,7 @@ SurfacePort::set_state (const XMLNode& node, int version)
 	if ((child = node.child (X_("Output"))) != 0) {
 		XMLNode* portnode = child->child (Port::state_node_name.c_str());
 		if (portnode) {
+			portnode->remove_property ("name");
 			_async_out->set_state (*portnode, version);
 		}
 	}

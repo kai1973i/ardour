@@ -1,21 +1,25 @@
 /*
-    Copyright (C) 2004-2011 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <inttypes.h>
 
@@ -33,12 +37,13 @@
 
 #include "pbd/cartesian.h"
 #include "pbd/convert.h"
+#include "pbd/enumwriter.h"
 #include "pbd/error.h"
 #include "pbd/failed_constructor.h"
+#include "pbd/stateful.h"
 #include "pbd/xml++.h"
-#include "pbd/enumwriter.h"
 
-#include "evoral/Curve.hpp"
+#include "evoral/Curve.h"
 
 #include "ardour/audio_buffer.h"
 #include "ardour/audioengine.h"
@@ -61,7 +66,7 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-PannerShell::PannerShell (string name, Session& s, boost::shared_ptr<Pannable> p, bool is_send)
+PannerShell::PannerShell (string name, Session& s, std::shared_ptr<Pannable> p, Temporal::TimeDomainProvider const & tdp, bool is_send)
 	: SessionObject (s, name)
 	, _pannable_route (p)
 	, _is_send (is_send)
@@ -73,8 +78,8 @@ PannerShell::PannerShell (string name, Session& s, boost::shared_ptr<Pannable> p
 	, _force_reselect (false)
 {
 	if (is_send) {
-		_pannable_internal.reset(new Pannable (s));
-		if (Config->get_link_send_and_route_panner() && !ARDOUR::Profile->get_mixbus()) {
+		_pannable_internal.reset(new Pannable (s, tdp));
+		if (Config->get_link_send_and_route_panner()) {
 			_panlinked = true;
 		} else {
 			_panlinked = false;
@@ -122,10 +127,13 @@ PannerShell::configure_io (ChanCount in, ChanCount out)
 		fatal << _("No panner found: check that panners are being discovered correctly during startup.") << endmsg;
 		abort(); /*NOTREACHED*/
 	}
+	if (Stateful::loading_state_version < 6000 && pi->descriptor.in == 2) {
+		_user_selected_panner_uri = pi->descriptor.panner_uri;
+	}
 
 	DEBUG_TRACE (DEBUG::Panning, string_compose (_("select panner: %1\n"), pi->descriptor.name.c_str()));
 
-	boost::shared_ptr<Speakers> speakers = _session.get_speakers ();
+	std::shared_ptr<Speakers> speakers = _session.get_speakers ();
 
 	if (nouts != speakers->size()) {
 		/* hmm, output count doesn't match session speaker count so
@@ -151,7 +159,7 @@ PannerShell::configure_io (ChanCount in, ChanCount out)
 }
 
 XMLNode&
-PannerShell::get_state ()
+PannerShell::get_state () const
 {
 	XMLNode* node = new XMLNode ("PannerShell");
 
@@ -179,9 +187,7 @@ PannerShell::set_state (const XMLNode& node, int version)
 	}
 
 	if (node.get_property (X_("linked-to-route"), yn)) {
-		if (!ARDOUR::Profile->get_mixbus()) {
-			_panlinked = yn;
-		}
+		_panlinked = yn;
 	}
 
 	node.get_property (X_("user-panner"), _user_selected_panner_uri);
@@ -194,8 +200,7 @@ PannerShell::set_state (const XMLNode& node, int version)
 			if ((*niter)->get_property (X_("uri"), str)) {
 				PannerInfo* p = PannerManager::instance().get_by_uri(str);
 				if (p) {
-					_panner.reset (p->descriptor.factory (
-								_is_send ? _pannable_internal : _pannable_route, _session.get_speakers ()));
+					_panner.reset (p->descriptor.factory (_is_send ? _pannable_internal : _pannable_route, _session.get_speakers ()));
 					_current_panner_uri = p->descriptor.panner_uri;
 					_panner_gui_uri = p->descriptor.gui_uri;
 					if (_is_send) {
@@ -378,11 +383,11 @@ PannerShell::run (BufferSet& inbufs, BufferSet& outbufs, samplepos_t start_sampl
 
 	// More than 1 output
 
-	AutoState as = _panner->automation_state ();
+	AutoState as = pannable ()->automation_state ();
 
 	// If we shouldn't play automation defer to distribute_no_automation
 
-	if (!((as & Play) || ((as & (Touch | Latch)) && !_panner->touching()))) {
+	if (!((as & Play) || ((as & (Touch | Latch)) && !pannable ()->touching ()))) {
 
 		distribute_no_automation (inbufs, outbufs, nframes, 1.0);
 
@@ -467,7 +472,7 @@ PannerShell::set_linked_to_route (bool onoff)
 	 */
 	if (pannable()) {
 		XMLNode state = pannable()->get_state();
-		pannable()->set_state(state, 3000);
+		pannable()->set_state (state, Stateful::loading_state_version);
 	}
 
 	_panlinked = onoff;

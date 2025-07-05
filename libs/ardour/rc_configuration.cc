@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 1999-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 1999-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2012-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <unistd.h>
 #include <cstdio> /* for snprintf, grrr */
@@ -24,18 +27,23 @@
 #include "pbd/gstdio_compat.h"
 #include <glibmm/miscutils.h>
 
+#include "pbd/convert.h"
 #include "pbd/xml++.h"
 #include "pbd/file_utils.h"
 #include "pbd/replace_all.h"
+
+#include "temporal/types_convert.h"
 
 #include "ardour/audioengine.h"
 #include "ardour/disk_reader.h"
 #include "ardour/disk_writer.h"
 #include "ardour/control_protocol_manager.h"
+#include "ardour/filename_extensions.h"
 #include "ardour/filesystem_paths.h"
 #include "ardour/port.h"
 #include "ardour/rc_configuration.h"
 #include "ardour/session_metadata.h"
+#include "ardour/transport_master_manager.h"
 #include "ardour/types_convert.h"
 
 #include "pbd/i18n.h"
@@ -62,16 +70,35 @@ RCConfiguration::RCConfiguration ()
 #undef  CONFIG_VARIABLE_SPECIAL
 #define CONFIG_VARIABLE(Type,var,name,value) var (name,value),
 #define CONFIG_VARIABLE_SPECIAL(Type,var,name,value,mutator) var (name,value,mutator),
-#include "ardour/rc_configuration_vars.h"
+#include "ardour/rc_configuration_vars.inc.h"
 #undef  CONFIG_VARIABLE
 #undef  CONFIG_VARIABLE_SPECIAL
 	_control_protocol_state (0)
+      , _transport_master_state (0)
 {
+
+/* Uncomment the following to get a list of all config variables */
+
+#if 0
+#undef  CONFIG_VARIABLE
+#undef  CONFIG_VARIABLE_SPECIAL
+#define CONFIG_VARIABLE(Type,var,name,value) _my_variables.insert (std::make_pair ((name), &(var)));
+#define CONFIG_VARIABLE_SPECIAL(Type,var,name,value,mutator) _my_variables.insert (std::make_pair ((name), &(var)));
+#include "ardour/rc_configuration_vars.inc.h"
+#undef  CONFIG_VARIABLE
+#undef  CONFIG_VARIABLE_SPECIAL
+
+	for (auto const & s : _my_variables) {
+		std::cerr << s.first << std::endl;
+	}
+#endif
+
 }
 
 RCConfiguration::~RCConfiguration ()
 {
 	delete _control_protocol_state;
+	delete _transport_master_state;
 }
 
 int
@@ -143,15 +170,24 @@ int
 RCConfiguration::save_state()
 {
 	const std::string rcfile = Glib::build_filename (user_config_directory(), user_config_file_name);
+	const std::string tmp = rcfile + temp_suffix;
 
-	// this test seems bogus?
-	if (!rcfile.empty()) {
-		XMLTree tree;
-		tree.set_root (&get_state());
-		if (!tree.write (rcfile.c_str())){
-			error << string_compose (_("Config file %1 not saved"), rcfile) << endmsg;
-			return -1;
+	XMLTree tree;
+	tree.set_root (&get_state());
+	if (!tree.write (tmp.c_str())){
+		error << string_compose (_("Config file %1 not saved"), rcfile) << endmsg;
+		if (g_remove (tmp.c_str()) != 0) {
+			error << string_compose(_("Could not remove temporary config file at path \"%1\" (%2)"), tmp, g_strerror (errno)) << endmsg;
 		}
+		return -1;
+	}
+
+	if (::g_rename (tmp.c_str(), rcfile.c_str()) != 0) {
+		error << string_compose (_("Could not rename temporary config file %1 to %2 (%3)"), tmp, rcfile, g_strerror(errno)) << endmsg;
+		if (g_remove (tmp.c_str()) != 0) {
+			error << string_compose(_("Could not remove temporary config file at path \"%1\" (%2)"), tmp, g_strerror (errno)) << endmsg;
+		}
+		return -1;
 	}
 
 	return 0;
@@ -171,13 +207,13 @@ RCConfiguration::instant_xml(const string& node_name)
 
 
 XMLNode&
-RCConfiguration::get_state ()
+RCConfiguration::get_state () const
 {
 	XMLNode* root;
 
 	root = new XMLNode("Ardour");
 
-	root->add_child_nocopy (get_variables ());
+	root->add_child_nocopy (get_variables (X_("Config")));
 
 	root->add_child_nocopy (SessionMetadata::Metadata()->get_user_state());
 
@@ -187,15 +223,19 @@ RCConfiguration::get_state ()
 
 	root->add_child_nocopy (ControlProtocolManager::instance().get_state());
 
+	if (TransportMasterManager::exists()) {
+		root->add_child_nocopy (TransportMasterManager::instance().get_state());
+	}
+
 	return *root;
 }
 
 XMLNode&
-RCConfiguration::get_variables ()
+RCConfiguration::get_variables (std::string const & node_name) const
 {
 	XMLNode* node;
 
-	node = new XMLNode ("Config");
+	node = new XMLNode (node_name);
 
 #undef  CONFIG_VARIABLE
 #undef  CONFIG_VARIABLE_SPECIAL
@@ -203,7 +243,7 @@ RCConfiguration::get_variables ()
 	var.add_to_node (*node);
 #define CONFIG_VARIABLE_SPECIAL(type,var,Name,value,mutator) \
 	var.add_to_node (*node);
-#include "ardour/rc_configuration_vars.h"
+#include "ardour/rc_configuration_vars.inc.h"
 #undef  CONFIG_VARIABLE
 #undef  CONFIG_VARIABLE_SPECIAL
 
@@ -233,6 +273,8 @@ RCConfiguration::set_state (const XMLNode& root, int version)
 			SessionMetadata::Metadata()->set_state (*node, version);
 		} else if (node->name() == ControlProtocolManager::state_node_name) {
 			_control_protocol_state = new XMLNode (*node);
+		} else if (node->name() == TransportMasterManager::state_node_name) {
+			_transport_master_state = new XMLNode (*node);
 		}
 	}
 
@@ -248,27 +290,28 @@ RCConfiguration::set_variables (const XMLNode& node)
 #undef  CONFIG_VARIABLE
 #undef  CONFIG_VARIABLE_SPECIAL
 #define CONFIG_VARIABLE(type,var,name,value) \
-	if (var.set_from_node (node)) { \
-		ParameterChanged (name);		  \
-	}
-#define CONFIG_VARIABLE_SPECIAL(type,var,name,value,mutator) \
-	if (var.set_from_node (node)) {    \
-		ParameterChanged (name);		     \
-	}
+  if (var.set_from_node (node)) {            \
+    ParameterChanged (name);                 \
+  }
 
-#include "ardour/rc_configuration_vars.h"
+#define CONFIG_VARIABLE_SPECIAL(type,var,name,value,mutator) \
+  if (var.set_from_node (node)) {                            \
+    ParameterChanged (name);                                 \
+  }
+
+#include "ardour/rc_configuration_vars.inc.h"
 #undef  CONFIG_VARIABLE
 #undef  CONFIG_VARIABLE_SPECIAL
 
 }
 void
-RCConfiguration::map_parameters (boost::function<void (std::string)>& functor)
+RCConfiguration::map_parameters (std::function<void (std::string)>& functor)
 {
 #undef  CONFIG_VARIABLE
 #undef  CONFIG_VARIABLE_SPECIAL
 #define CONFIG_VARIABLE(type,var,name,value)                 functor (name);
 #define CONFIG_VARIABLE_SPECIAL(type,var,name,value,mutator) functor (name);
-#include "ardour/rc_configuration_vars.h"
+#include "ardour/rc_configuration_vars.inc.h"
 #undef  CONFIG_VARIABLE
 #undef  CONFIG_VARIABLE_SPECIAL
 }

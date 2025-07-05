@@ -1,28 +1,32 @@
 /*
-    Copyright (C) 2002 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2008-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <climits>
 #include <string.h>
 
 #include <cairo.h>
-#include <gtkmm/menu.h>
+#include <ytkmm/menu.h>
 
 #include "gtkmm2ext/gtk_ui.h"
 
@@ -76,7 +80,7 @@ Panner2d::Target::set_text (const char* txt)
 	text = txt;
 }
 
-Panner2d::Panner2d (boost::shared_ptr<PannerShell> p, int32_t h)
+Panner2d::Panner2d (std::shared_ptr<PannerShell> p, int32_t h)
 : panner_shell (p)
 	, position (AngularVector (0.0, 0.0), "")
 	, width (0)
@@ -92,9 +96,9 @@ Panner2d::Panner2d (boost::shared_ptr<PannerShell> p, int32_t h)
 
 	UIConfiguration::instance().ColorsChanged.connect (sigc::mem_fun (*this, &Panner2d::color_handler));
 
-	panner_shell->Changed.connect (panshell_connections, invalidator (*this), boost::bind (&Panner2d::handle_state_change, this), gui_context());
+	panner_shell->Changed.connect (panshell_connections, invalidator (*this), std::bind (&Panner2d::handle_state_change, this), gui_context());
 
-	panner_shell->panner()->SignalPositionChanged.connect (panner_connections, invalidator(*this), boost::bind (&Panner2d::handle_position_change, this), gui_context());
+	panner_shell->panner()->SignalPositionChanged.connect (panner_connections, invalidator(*this), std::bind (&Panner2d::handle_position_change, this), gui_context());
 
 	drag_target = 0;
 	set_events (Gdk::BUTTON_PRESS_MASK|Gdk::BUTTON_RELEASE_MASK|Gdk::POINTER_MOTION_MASK);
@@ -129,6 +133,9 @@ Panner2d::set_colors ()
 	colors.signal_fill =         0x4884a9bf; // 0.282, 0.517, 0.662, 0.75
 	colors.speaker_fill =        0x4884a9ff; // 0.282, 0.517, 0.662, 1.0
 	colors.text =                0x84c5e1e6; // 0.517, 0.772, 0.882, 0.9
+
+	colors.send_bg  = UIConfiguration::instance().color ("send bg");
+	colors.send_pan = UIConfiguration::instance().color ("send pan");
 }
 
 void
@@ -250,9 +257,9 @@ Panner2d::handle_state_change ()
 		return;
 	}
 
-	panner_shell->panner()->SignalPositionChanged.connect (panner_connections, invalidator(*this), boost::bind (&Panner2d::handle_position_change, this), gui_context());
+	panner_shell->panner()->SignalPositionChanged.connect (panner_connections, invalidator(*this), std::bind (&Panner2d::handle_position_change, this), gui_context());
 
-	set<Evoral::Parameter> params = panner_shell->panner()->what_can_be_automated();
+	set<Evoral::Parameter> params = panner_shell->pannable()->what_can_be_automated();
 	set<Evoral::Parameter>::iterator p = params.find(PanElevationAutomation);
 	bool elev = have_elevation;
 	have_elevation = (p == params.end()) ? false : true;
@@ -471,10 +478,7 @@ Panner2d::on_expose_event (GdkEventExpose *event)
 
 	cairo_rectangle (cr, event->area.x, event->area.y, event->area.width, event->area.height);
 
-	uint32_t bg = colors.background;
-	if (_send_mode) {
-		bg = UIConfiguration::instance().color ("send bg");
-	}
+	uint32_t bg = _send_mode ? colors.send_bg : colors.background;
 
 	if (!panner_shell->bypassed()) {
 		CSSRGBA(bg);
@@ -594,7 +598,11 @@ Panner2d::on_expose_event (GdkEventExpose *event)
 
 					cairo_new_path (cr);
 					cairo_arc (cr, c.x, c.y, arc_radius, 0, 2.0 * M_PI);
-					CSSRGBA(colors.signal_fill);
+					if (_send_mode && !panner_shell->is_linked_to_route()) {
+						CSSRGBA(colors.send_pan);
+					} else {
+						CSSRGBA(colors.signal_fill);
+					}
 					cairo_fill_preserve (cr);
 					CSSRGBA(colors.signal_outline);
 					cairo_stroke (cr);
@@ -839,15 +847,15 @@ void
 Panner2d::cart_to_gtk (CartesianVector& c) const
 {
 	/* cartesian coordinate space:
-   	      center = 0.0
-	      dimension = 2.0 * 2.0
-	      increasing y moves up
-	      so max values along each axis are -1..+1
-
-	   GTK uses a coordinate space that is:
-  	      top left = 0.0
-	      dimension = (radius*2.0) * (radius*2.0)
-	      increasing y moves down
+	 *  center = 0.0
+	 *  dimension = 2.0 * 2.0
+	 *  increasing y moves up
+	 * so max values along each axis are -1..+1
+	 *
+	 * GTK uses a coordinate space that is:
+	 *  top left = 0.0
+	 *  dimension = (radius*2.0) * (radius*2.0)
+	 * increasing y moves down
 	*/
 	const double diameter = radius*2.0;
 
@@ -895,7 +903,7 @@ Panner2d::toggle_bypass ()
 	panner_shell->set_bypassed (!panner_shell->bypassed());
 }
 
-Panner2dWindow::Panner2dWindow (boost::shared_ptr<PannerShell> p, int32_t h, uint32_t inputs)
+Panner2dWindow::Panner2dWindow (std::shared_ptr<PannerShell> p, int32_t h, uint32_t inputs)
 	: ArdourWindow (_("Panner (2D)"))
 	, widget (p, h)
 	, bypass_button (_("Bypass"))
@@ -910,10 +918,10 @@ Panner2dWindow::Panner2dWindow (boost::shared_ptr<PannerShell> p, int32_t h, uin
 	bypass_button.signal_toggled().connect (sigc::mem_fun (*this, &Panner2dWindow::bypass_toggled));
 	width_spinner.signal_changed().connect (sigc::mem_fun (*this, &Panner2dWindow::width_changed));
 
-	p->Changed.connect (panshell_connections, invalidator (*this), boost::bind (&Panner2dWindow::set_bypassed, this), gui_context());
+	p->Changed.connect (panshell_connections, invalidator (*this), std::bind (&Panner2dWindow::set_bypassed, this), gui_context());
 	/* needed for the width-spinbox in the main window */
-	p->PannableChanged.connect (panshell_connections, invalidator (*this), boost::bind (&Panner2dWindow::pannable_handler, this), gui_context());
-	p->pannable()->pan_width_control->Changed.connect (panvalue_connections, invalidator(*this), boost::bind (&Panner2dWindow::set_width, this), gui_context());
+	p->PannableChanged.connect (panshell_connections, invalidator (*this), std::bind (&Panner2dWindow::pannable_handler, this), gui_context());
+	p->pannable()->pan_width_control->Changed.connect (panvalue_connections, invalidator(*this), std::bind (&Panner2dWindow::set_width, this), gui_context());
 
 
 	button_box.set_spacing (6);
@@ -924,8 +932,8 @@ Panner2dWindow::Panner2dWindow (boost::shared_ptr<PannerShell> p, int32_t h, uin
 	left_side.pack_start (button_box, false, false);
 
 	Gtk::Label* l = manage (new Label (
-				p->panner()->describe_parameter(PanWidthAutomation),
-				Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+				p->pannable()->describe_parameter(PanWidthAutomation),
+				Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	spinner_box.pack_start (*l, false, false);
 	spinner_box.pack_start (width_spinner, false, false);
 	left_side.pack_start (spinner_box, false, false);
@@ -980,7 +988,7 @@ void
 Panner2dWindow::pannable_handler ()
 {
 	panvalue_connections.drop_connections();
-	widget.get_panner_shell()->pannable()->pan_width_control->Changed.connect (panvalue_connections, invalidator(*this), boost::bind (&Panner2dWindow::set_width, this), gui_context());
+	widget.get_panner_shell()->pannable()->pan_width_control->Changed.connect (panvalue_connections, invalidator(*this), std::bind (&Panner2dWindow::set_width, this), gui_context());
 	set_width();
 }
 
@@ -993,7 +1001,7 @@ Panner2dWindow::set_bypassed ()
 		bypass_button.set_active(model);
 	}
 
-	set<Evoral::Parameter> params = widget.get_panner_shell()->panner()->what_can_be_automated();
+	set<Evoral::Parameter> params = widget.get_panner_shell()->pannable()->what_can_be_automated();
 	set<Evoral::Parameter>::iterator p = params.find(PanWidthAutomation);
 	if (p == params.end()) {
 		spinner_box.set_sensitive(false);

@@ -1,20 +1,25 @@
 /*
-    Copyright (C) 2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 
@@ -34,7 +39,6 @@ using namespace PBD;
  */
 RegionSelection::RegionSelection ()
 {
-	RegionView::RegionViewGoingAway.connect (death_connection, MISSING_INVALIDATOR, boost::bind (&RegionSelection::remove_it, this, _1), gui_context());
 }
 
 /** Copy constructor.
@@ -43,8 +47,6 @@ RegionSelection::RegionSelection ()
 RegionSelection::RegionSelection (const RegionSelection& other)
 	: std::list<RegionView*>()
 {
-	RegionView::RegionViewGoingAway.connect (death_connection, MISSING_INVALIDATOR, boost::bind (&RegionSelection::remove_it, this, _1), gui_context());
-
 	for (RegionSelection::const_iterator i = other.begin(); i != other.end(); ++i) {
 		add (*i);
 	}
@@ -87,7 +89,7 @@ bool RegionSelection::contains (RegionView* rv) const
 	return find (begin(), end(), rv) != end();
 }
 
-bool RegionSelection::contains (boost::shared_ptr<ARDOUR::Region> region) const
+bool RegionSelection::contains (std::shared_ptr<ARDOUR::Region> region) const
 {
 	for (const_iterator r = begin (); r != end (); ++r) {
 		if ((*r)->region () == region) {
@@ -129,15 +131,6 @@ RegionSelection::add (RegionView* rv)
 
 /** Remove a region from the selection.
  *  @param rv Region to remove.
- */
-void
-RegionSelection::remove_it (RegionView *rv)
-{
-	remove (rv);
-}
-
-/** Remove a region from the selection.
- *  @param rv Region to remove.
  *  @return true if the region was in the selection, false if not.
  */
 bool
@@ -155,6 +148,26 @@ RegionSelection::remove (RegionView* rv)
 	}
 
 	return false;
+}
+
+bool
+RegionSelection::remove (vector<RegionView*> rv)
+{
+	RegionSelection::iterator r;
+	bool removed_at_least_one = false;
+
+	for (vector<RegionView*>::iterator rx = rv.begin(); rx != rv.end(); ++rx) {
+		if ((r = find (begin(), end(), *rx)) != end()) {
+
+			// remove from layer sorted list
+			_bylayer.remove (*rx);
+			pending.remove ((*rx)->region()->id());
+			erase (r);
+			removed_at_least_one = true;
+		}
+	}
+
+	return removed_at_least_one;
 }
 
 /** Add a region to the list sorted by layer.
@@ -261,37 +274,47 @@ RegionSelection::involves (const TimeAxisView& tv) const
 	return false;
 }
 
-samplepos_t
-RegionSelection::start () const
+timepos_t
+RegionSelection::start_time () const
 {
-	samplepos_t s = max_samplepos;
+	if (empty()) {
+		return timepos_t ();
+	}
+
+	timepos_t s = timepos_t::max (front()->region()->position().time_domain());
+
 	for (RegionSelection::const_iterator i = begin(); i != end(); ++i) {
 		s = min (s, (*i)->region()->position ());
 	}
 
-	if (s == max_samplepos) {
-		return 0;
+	if (s == timepos_t::max (front()->region()->position().time_domain())) {
+	    return timepos_t ();
 	}
 
 	return s;
 }
 
-samplepos_t
-RegionSelection::end_sample () const
+timepos_t
+RegionSelection::end_time () const
 {
-	samplepos_t e = 0;
+	if (empty()) {
+		return timepos_t ();
+	}
+
+	timepos_t e (timepos_t::zero (front()->region()->position().time_domain()));
+
 	for (RegionSelection::const_iterator i = begin(); i != end(); ++i) {
-		e = max (e, (*i)->region()->last_sample ());
+		e = max (e, (*i)->region()->nt_last ());
 	}
 
 	return e;
 }
 
 /** @return the playlists that the regions in the selection are on */
-set<boost::shared_ptr<Playlist> >
+PlaylistSet
 RegionSelection::playlists () const
 {
-	set<boost::shared_ptr<Playlist> > pl;
+	PlaylistSet pl;
 	for (RegionSelection::const_iterator i = begin(); i != end(); ++i) {
 		pl.insert ((*i)->region()->playlist ());
 	}

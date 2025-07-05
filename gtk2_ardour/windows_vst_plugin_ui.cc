@@ -1,46 +1,46 @@
 /*
-    Copyright (C) 2004 Paul Davis
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm.h>
-#include <gtk/gtk.h>
-#include <gtk/gtksocket.h>
+#include <ytkmm/ytkmm.h>
+#include <ytk/ytk.h>
+#include <ytk/gtksocket.h>
 #include "gtkmm2ext/gui_thread.h"
 #include "fst.h"
-#include "ardour/plugin_insert.h"
+#include "ardour/plug_insert_base.h"
 #include "ardour/windows_vst_plugin.h"
 
 #include "windows_vst_plugin_ui.h"
 
 #ifdef PLATFORM_WINDOWS
-#include <gdk/gdkwin32.h>
+#include <ydk/gdkwin32.h>
 #elif defined __APPLE__
 // TODO
 #else
-#include <gdk/gdkx.h>
+#include <ydk/gdkx.h>
 #endif
 
 using namespace Gtk;
 using namespace ARDOUR;
 using namespace PBD;
 
-WindowsVSTPluginUI::WindowsVSTPluginUI (boost::shared_ptr<PluginInsert> pi, boost::shared_ptr<VSTPlugin> vp, GtkWidget *parent)
-	: VSTPluginUI (pi, vp)
+WindowsVSTPluginUI::WindowsVSTPluginUI (std::shared_ptr<PlugInsertBase> pib, std::shared_ptr<VSTPlugin> vp, GtkWidget *parent)
+	: VSTPluginUI (pib, vp)
 {
 
 #ifdef GDK_WINDOWING_WIN32
@@ -104,7 +104,7 @@ WindowsVSTPluginUI::package (Gtk::Window& win)
 	VSTPluginUI::package (win);
 	_vst->state()->gtk_window_parent = (void*) (&win);
 
-	_vst->VSTSizeWindow.connect (_resize_connection, invalidator (*this), boost::bind (&WindowsVSTPluginUI::resize_callback, this), gui_context());
+	_vst->VSTSizeWindow.connect (_resize_connection, invalidator (*this), std::bind (&WindowsVSTPluginUI::resize_callback, this), gui_context());
 
 	resize_callback ();
 
@@ -114,6 +114,10 @@ WindowsVSTPluginUI::package (Gtk::Window& win)
 void
 WindowsVSTPluginUI::forward_key_event (GdkEventKey* ev)
 {
+	if (dispatch_effeditkey (ev)) {
+		return;
+	}
+#ifndef PLATFORM_WINDOWS /* linux + wine ; libs/fst/vstwin.c */
 	if (ev->type != GDK_KEY_PRESS) {
 		return;
 	}
@@ -156,6 +160,7 @@ WindowsVSTPluginUI::forward_key_event (GdkEventKey* ev)
 	fst->n_pending_keys++;
 
 	pthread_mutex_unlock (&fst->lock);
+#endif
 }
 
 int
@@ -164,34 +169,9 @@ WindowsVSTPluginUI::get_XID ()
 	return _vst->state()->xid;
 }
 
-#ifdef GDK_WINDOWING_X11
-typedef int (*error_handler_t)( Display *, XErrorEvent *);
-static Display *the_gtk_display;
-static error_handler_t wine_error_handler;
-static error_handler_t gtk_error_handler;
-
-static int
-fst_xerror_handler (Display* disp, XErrorEvent* ev)
-{
-	if (disp == the_gtk_display) {
-		printf ("relaying error to gtk\n");
-		return gtk_error_handler (disp, ev);
-	} else {
-		printf( "relaying error to wine\n" );
-		return wine_error_handler (disp, ev);
-	}
-}
-#endif
-
 void
 windows_vst_gui_init (int *argc, char **argv[])
 {
 	gtk_init (argc, argv);
-
-#ifdef GDK_WINDOWING_X11
-	wine_error_handler = XSetErrorHandler (NULL);
-	the_gtk_display = gdk_x11_display_get_xdisplay (gdk_display_get_default());
-	gtk_error_handler = XSetErrorHandler (fst_xerror_handler);
-#endif
 }
 

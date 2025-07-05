@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Tim Mayberry <mojofunk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,20 +11,19 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef __libbackend_portaudio_pcmio_h__
 #define __libbackend_portaudio_pcmio_h__
 
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <vector>
 #include <string>
-#include <boost/shared_ptr.hpp>
-
-#include <stdint.h>
 
 #include <portaudio.h>
 
@@ -128,7 +127,9 @@ private: // Methods
 	PaErrorCode pre_stream_open(int device_input,
 	                          PaStreamParameters& inputParam,
 	                          int device_output,
-	                          PaStreamParameters& outputParam);
+	                          PaStreamParameters& outputParam,
+	                          uint32_t sample_rate,
+	                          uint32_t samples_per_period);
 
 	void reset_stream_dependents ();
 

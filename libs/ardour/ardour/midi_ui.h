@@ -1,32 +1,31 @@
 /*
-    Copyright (C) 2012 Paul Davis
+ * Copyright (C) 2009-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libardour_midi_ui_h__
-#define __libardour_midi_ui_h__
+#pragma once
 
 #include <list>
 
 #define ABSTRACT_UI_EXPORTS
 #include "pbd/abstract_ui.h"
 #include "pbd/signals.h"
-#include "pbd/stacktrace.h"
 
+#include "ardour/libardour_visibility.h"
 
 namespace ARDOUR {
 
@@ -34,7 +33,7 @@ class Session;
 class AsyncMIDIPort;
 
 /* this is mostly a placeholder because I suspect that at some
-   point we will want to add more members to accomodate
+   point we will want to add more members to accommodate
    certain types of requests to the MIDI UI
 */
 
@@ -62,7 +61,7 @@ class LIBARDOUR_API MidiControlUI : public AbstractUI<MidiUIRequest>
   private:
 	ARDOUR::Session& _session;
 
-	bool midi_input_handler (Glib::IOCondition, boost::weak_ptr<AsyncMIDIPort>);
+	bool midi_input_handler (Glib::IOCondition, std::weak_ptr<AsyncMIDIPort>);
 	void reset_ports ();
 	void clear_ports ();
 
@@ -71,4 +70,3 @@ class LIBARDOUR_API MidiControlUI : public AbstractUI<MidiUIRequest>
 
 }
 
-#endif /* __libardour_midi_ui_h__ */

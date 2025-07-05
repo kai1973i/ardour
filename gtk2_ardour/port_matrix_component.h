@@ -1,28 +1,27 @@
 /*
-    Copyright (C) 2002-2009 Paul Davis
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+#include <cstdint>
+#include <memory>
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __gtk_ardour_port_matrix_component_h__
-#define __gtk_ardour_port_matrix_component_h__
-
-#include <stdint.h>
-#include <gtkmm/eventbox.h>
-#include <boost/shared_ptr.hpp>
+#include <ytkmm/eventbox.h>
 
 class PortMatrix;
 class PortMatrixBody;
@@ -77,9 +76,7 @@ public:
 	}
 
 	/** @return grid spacing */
-	static uint32_t grid_spacing () {
-		return 24;
-	}
+	static uint32_t grid_spacing ();
 
 protected:
 
@@ -172,9 +169,9 @@ protected:
 
 	void set_source_rgb (cairo_t *, Gdk::Color const &);
 	void set_source_rgba (cairo_t *, Gdk::Color const &, double);
-	uint32_t group_size (boost::shared_ptr<const PortGroup>) const;
-	uint32_t channel_to_position (ARDOUR::BundleChannel, boost::shared_ptr<const PortGroup>) const;
-	virtual ARDOUR::BundleChannel position_to_channel (double, double, boost::shared_ptr<const PortGroup>) const;
+	uint32_t group_size (std::shared_ptr<const PortGroup>) const;
+	uint32_t channel_to_position (ARDOUR::BundleChannel, std::shared_ptr<const PortGroup>) const;
+	virtual ARDOUR::BundleChannel position_to_channel (double, double, std::shared_ptr<const PortGroup>) const;
 
 	/** Render the complete component to a cairo context. */
 	virtual void render (cairo_t *) = 0;
@@ -195,4 +192,3 @@ private:
 	bool _dimension_computation_required; ///< true if the dimensions are out of date
 };
 
-#endif

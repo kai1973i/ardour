@@ -1,39 +1,42 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017 Paul Davis <paul@linuxaudiosystems.com>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #ifndef _ardour_lua_api_h_
 #define _ardour_lua_api_h_
 
+#include <memory>
 #include <string>
+
 #include <lo/lo.h>
-#include <boost/shared_ptr.hpp>
+#include <rubberband/RubberBandStretcher.h>
 #include <vamp-hostsdk/Plugin.h>
 
-#include "evoral/Note.hpp"
+#include "evoral/Note.h"
 
 #include "ardour/libardour_visibility.h"
 
+#include "ardour/audioregion.h"
 #include "ardour/midi_model.h"
 #include "ardour/processor.h"
 #include "ardour/session.h"
 
 namespace ARDOUR {
-	class Readable;
+	class AudioReadable;
 }
 
 namespace ARDOUR { namespace LuaAPI {
@@ -51,19 +54,39 @@ namespace ARDOUR { namespace LuaAPI {
 	 */
 	int datatype_ctor_midi (lua_State *L);
 
+	/** add a new [external] Send to the given Route
+	 *
+	 * @param s Session Handle
+	 * @param r Route to add Send to
+	 * @param p add send before given processor (or \ref nil_processor to add at the end)
+	 */
+	std::shared_ptr<Processor> new_send (Session* s, std::shared_ptr<ARDOUR::Route> r, std::shared_ptr<ARDOUR::Processor> p);
+
 	/** Create a null processor shared pointer
 	 *
 	 * This is useful for Track:bounce() to indicate no processing.
 	 */
-	boost::shared_ptr<ARDOUR::Processor> nil_processor ();
+	std::shared_ptr<ARDOUR::Processor> nil_processor ();
 
 	/** create a new Lua Processor (Plugin)
 	 *
-	 * @param s Session Handle
-	 * @param p Identifier or Name of the Processor
+	 * @param s  Session Handle
+	 * @param p  Identifier or Name of the Processor
+	 * @param td Time domain (audio or beats) for any automation data
 	 * @returns Processor object (may be nil)
 	 */
-	boost::shared_ptr<ARDOUR::Processor> new_luaproc (ARDOUR::Session *s, const std::string& p);
+	std::shared_ptr<ARDOUR::Processor> new_luaproc_with_time_domain (ARDOUR::Session *s, const std::string& p, Temporal::TimeDomain td);
+
+	/* As above but uses default time domain for the session/application */
+	std::shared_ptr<ARDOUR::Processor> new_luaproc (ARDOUR::Session *s, const std::string& p);
+
+	/** List all installed plugins */
+	std::list<std::shared_ptr<ARDOUR::PluginInfo> > list_plugins ();
+
+	/** Write a list of untagged plugins to a file, so we can bulk-tag them 
+	 * @returns path to XML file or empty string on error
+	 */
+	std::string dump_untagged_plugins ();
 
 	/** search a Plugin
 	 *
@@ -71,16 +94,21 @@ namespace ARDOUR { namespace LuaAPI {
 	 * @param type Plugin Type
 	 * @returns PluginInfo or nil if not found
 	 */
-	boost::shared_ptr<ARDOUR::PluginInfo> new_plugin_info (const std::string& id, ARDOUR::PluginType type);
+	std::shared_ptr<ARDOUR::PluginInfo> new_plugin_info (const std::string& id, ARDOUR::PluginType type);
 
 	/** create a new Plugin Instance
 	 *
 	 * @param s Session Handle
 	 * @param id Plugin Name, ID or URI
 	 * @param type Plugin Type
+	 * @param preset name of plugin-preset to load, leave empty "" to not load any preset after instantiation
+	 * @param td     Time domain for any automation data
 	 * @returns Processor or nil
 	 */
-	boost::shared_ptr<ARDOUR::Processor> new_plugin (ARDOUR::Session *s, const std::string& id, ARDOUR::PluginType type, const std::string& preset = "");
+	std::shared_ptr<ARDOUR::Processor> new_plugin_with_time_domain (ARDOUR::Session *s, const std::string& id, ARDOUR::PluginType type, Temporal::TimeDomain td, const std::string& preset = "");
+
+	/* As above but uses default time domain for the session/application */
+	std::shared_ptr<ARDOUR::Processor> new_plugin (ARDOUR::Session *s, const std::string& id, ARDOUR::PluginType type, const std::string& preset = "");
 
 	/** set a plugin control-input parameter value
 	 *
@@ -89,7 +117,7 @@ namespace ARDOUR { namespace LuaAPI {
 	 * @param value value to set
 	 * @returns true on success, false on error or out-of-bounds value
 	 */
-	bool set_processor_param (boost::shared_ptr<ARDOUR::Processor> proc, uint32_t which, float val);
+	bool set_processor_param (std::shared_ptr<ARDOUR::Processor> proc, uint32_t which, float value);
 
 	/** get a plugin control parameter value
 	 *
@@ -98,7 +126,7 @@ namespace ARDOUR { namespace LuaAPI {
 	 * @param ok boolean variable contains true or false after call returned. to be checked by caller before using value.
 	 * @returns value
 	 */
-	float get_processor_param (boost::shared_ptr<Processor> proc, uint32_t which, bool &ok);
+	float get_processor_param (std::shared_ptr<Processor> proc, uint32_t which, bool &ok);
 
 	/** reset a processor to its default values (only works for plugins )
 	 *
@@ -107,30 +135,46 @@ namespace ARDOUR { namespace LuaAPI {
 	 * @param proc Plugin-Insert
 	 * @returns true on success, false when the processor is not a plugin
 	 */
-	bool reset_processor_to_default (boost::shared_ptr<Processor> proc);
+	bool reset_processor_to_default (std::shared_ptr<Processor> proc);
 
 	/** set a plugin control-input parameter value
 	 *
 	 * This is a wrapper around set_processor_param which looks up the Processor by plugin-insert.
 	 *
-	 * @param proc Plugin-Insert
+	 * @param pi Plugin-Insert
 	 * @param which control-input to set (starting at 0)
 	 * @param value value to set
 	 * @returns true on success, false on error or out-of-bounds value
 	 */
-	bool set_plugin_insert_param (boost::shared_ptr<ARDOUR::PluginInsert> pi, uint32_t which, float val);
+	bool set_plugin_insert_param (std::shared_ptr<ARDOUR::PluginInsert> pi, uint32_t which, float value);
 
 	/** get a plugin control parameter value
 	 *
-	 * @param proc Plugin-Insert
+	 * @param pi Plugin-Insert
 	 * @param which control port to query (starting at 0, including ports of type input and output)
 	 * @param ok boolean variable contains true or false after call returned. to be checked by caller before using value.
 	 * @returns value
 	 */
-	float get_plugin_insert_param (boost::shared_ptr<ARDOUR::PluginInsert> pi, uint32_t which, bool &ok);
+	float get_plugin_insert_param (std::shared_ptr<ARDOUR::PluginInsert> pi, uint32_t which, bool &ok);
+
+	/** set a plugin property (LV2 plugins only)
+	 *
+	 * @param pi Plugin-Insert
+	 * @param uri the identifier of the parameter
+	 * @param value the value to set (boolean, integer, float, string/path)
+	 * @returns true on success, false if the given plugin has no property with the given URI
+	 */
+	bool set_plugin_insert_property (std::shared_ptr<ARDOUR::PluginInsert> pi, std::string const& uri, luabridge::LuaRef value);
+
+	/** get a plugin property (LV2 plugins only)
+	 *
+	 * @param p two arguments: Plugin-Insert, URI of the property
+	 * @returns value, depending on datatype or nil if property is not found
+	 */
+	int get_plugin_insert_property (lua_State *p);
 
 	/**
-	 * A convenience function to get a Automation Lists and ParamaterDescriptor
+	 * A convenience function to get a Automation Lists and ParameterDescriptor
 	 * for a given plugin control.
 	 *
 	 * This is equivalent to the following lua code
@@ -151,9 +195,24 @@ namespace ARDOUR { namespace LuaAPI {
 	 * @code
 	 * local al, cl, pd = ARDOUR.LuaAPI.plugin_automation (route:nth_plugin (0), 3)
 	 * @endcode
-	 * @returns 3 parameters: AutomationList, ControlList, ParamaterDescriptor
+	 * @returns 3 parameters: AutomationList, ControlList, ParameterDescriptor
 	 */
 	int plugin_automation (lua_State *lua);
+
+	/*
+	 * A convenience function to get a scale-points from a ParameterDescriptor
+	 * @param p a ParameterDescriptor
+	 * @returns Lua Table with "name" -> value pairs
+	 */
+	int desc_scale_points (lua_State* p);
+
+	/* Replace all automation data for an AutomationContol from a Lua table
+	 * @param ac an AutomationControl
+	 * @param tbl Lua Table {[sample-time] = value}
+	 * @param thin thinning factor (-1; use default, 0: no thinning)
+	 * @returns true on success
+	 */
+	bool set_automation_data (std::shared_ptr<ARDOUR::AutomationControl> ac, luabridge::LuaRef tbl, double thin = -1);
 
 	/**
 	 * A convenience function for colorspace HSL to RGB conversion.
@@ -182,6 +241,10 @@ namespace ARDOUR { namespace LuaAPI {
 	 * @returns 4 parameters: red, green, blue, alpha (in range 0..1)
 	 */
 	int color_to_rgba (lua_State *lua);
+
+	/**
+	 */
+	std::string ascii_dtostr (const double d);
 
 	/**
 	 * Creates a filename from a series of elements using the correct separator for filenames.
@@ -217,6 +280,26 @@ namespace ARDOUR { namespace LuaAPI {
 	 */
 	int timecode_to_sample_lua (lua_State *L);
 
+	/** create a \ref SimpleExport Object
+	 * for the current session
+	 */
+	int simple_export (lua_State* L);
+
+	/**
+	 * Delay execution until next process cycle starts.
+	 * @param n_cycles process-cycles to wait for.
+	 *        0: means wait until next cycle-start, otherwise skip given number of cycles.
+	 * @param timeout_ms wait at most this many milliseconds
+	 * @return true on success,  false if timeout was reached or engine was not running
+	 */
+	bool wait_for_process_callback (size_t n_cycles, int64_t timeout_ms);
+
+	/** Crash Test Dummy */
+	void segfault ();
+
+	/** Return system environment variables (POSIX environ) */
+	std::vector<std::string> env ();
+
 	class Vamp {
 	/** Vamp Plugin Interface
 	 *
@@ -226,7 +309,7 @@ namespace ARDOUR { namespace LuaAPI {
 	 *
 	 * This interface allows to load a plugins and directly access it using the Vamp Plugin API.
 	 *
-	 * A convenience method is provided to analyze Ardour::Readable objects (Regions).
+	 * A convenience method is provided to analyze Ardour::AudioReadable objects (Regions).
 	 */
 		public:
 			Vamp (const std::string&, float sample_rate);
@@ -239,21 +322,21 @@ namespace ARDOUR { namespace LuaAPI {
 
 			::Vamp::Plugin* plugin () { return _plugin; }
 
-			/** high-level abstraction to process a single channel of the given Readable.
+			/** high-level abstraction to process a single channel of the given AudioReadable.
 			 *
 			 * If the plugin is not yet initialized, initialize() is called.
 			 *
-			 * if @cb is not nil, it is called with the immediate
+			 * if \p fn is not nil, it is called with the immediate
 			 * Vamp::Plugin::Features on every process call.
 			 *
 			 * @param r readable
 			 * @param channel channel to process
-			 * @param fn lua callback function
+			 * @param fn lua callback function or nil
 			 * @return 0 on success
 			 */
-			int analyze (boost::shared_ptr<ARDOUR::Readable> r, uint32_t channel, luabridge::LuaRef fn);
+			int analyze (std::shared_ptr<ARDOUR::AudioReadable> r, uint32_t channel, luabridge::LuaRef fn);
 
-			/** call plugin():reset() and clear intialization flag */
+			/** call plugin():reset() and clear initialization flag */
 			void reset ();
 
 			/** initialize the plugin for use with analyze().
@@ -292,17 +375,66 @@ namespace ARDOUR { namespace LuaAPI {
 		private:
 			::Vamp::Plugin* _plugin;
 			float           _sample_rate;
-			samplecnt_t      _bufsize;
-			samplecnt_t      _stepsize;
+			samplecnt_t     _bufsize;
+			samplecnt_t     _stepsize;
 			bool            _initialized;
 
 	};
 
-	boost::shared_ptr<Evoral::Note<Temporal::Beats> >
+	class Rubberband : public AudioReadable , public std::enable_shared_from_this<Rubberband>
+	{
+		public:
+			Rubberband (std::shared_ptr<AudioRegion>, bool percussive);
+			~Rubberband ();
+			bool set_strech_and_pitch (double stretch_ratio, double pitch_ratio);
+			bool set_mapping (luabridge::LuaRef tbl);
+			std::shared_ptr<AudioRegion> process (luabridge::LuaRef cb);
+			std::shared_ptr<AudioReadable> readable ();
+
+			/* audioreadable API */
+			samplecnt_t readable_length_samples () const { return _read_len; }
+			uint32_t n_channels () const { return _n_channels; }
+			samplecnt_t read (Sample*, samplepos_t pos, samplecnt_t cnt, int channel) const;
+
+		private:
+			Rubberband (Rubberband const&); // no copy construction
+			bool read_region (bool study);
+			bool retrieve (float**);
+			void cleanup (bool abort);
+			std::shared_ptr<AudioRegion> finalize ();
+
+			std::shared_ptr<AudioRegion> _region;
+
+			uint32_t    _n_channels;
+			samplecnt_t _read_len;
+			samplecnt_t _read_start;
+			samplecnt_t _read_offset;
+
+			std::vector<std::shared_ptr<AudioSource> > _asrc;
+
+			RubberBand::RubberBandStretcher _rbs;
+			std::map<size_t, size_t>        _mapping;
+
+			double _stretch_ratio;
+			double _pitch_ratio;
+
+			luabridge::LuaRef*            _cb;
+			std::shared_ptr<Rubberband> _self;
+			static const samplecnt_t      _bufsize;
+	};
+
+	std::shared_ptr<Evoral::Note<Temporal::Beats> >
 		new_noteptr (uint8_t, Temporal::Beats, Temporal::Beats, uint8_t, uint8_t);
 
-	std::list<boost::shared_ptr< Evoral::Note<Temporal::Beats> > >
-		note_list (boost::shared_ptr<ARDOUR::MidiModel>);
+	std::list<std::shared_ptr< Evoral::Note<Temporal::Beats> > >
+		note_list (std::shared_ptr<ARDOUR::MidiModel>);
+
+	std::list<std::shared_ptr< Evoral::Event<Temporal::Beats> > >
+		sysex_list (std::shared_ptr<ARDOUR::MidiModel>);
+
+	std::list<std::shared_ptr< Evoral::PatchChange<Temporal::Beats> > >
+		patch_change_list (std::shared_ptr<ARDOUR::MidiModel>);
+
 
 } } /* namespace */
 
@@ -358,41 +490,41 @@ namespace ARDOUR { namespace LuaOSC {
 }
 
 class LuaTableRef {
-	public:
-		LuaTableRef ();
-		~LuaTableRef ();
+public:
+	LuaTableRef ();
+	~LuaTableRef ();
 
-		int get (lua_State* L);
-		int set (lua_State* L);
+	int get (lua_State* L);
+	int set (lua_State* L);
 
-	private:
-		struct LuaTableEntry {
-			LuaTableEntry (int kt, int vt)
-				: keytype (kt)
-				, valuetype (vt)
-			{ }
+private:
+	struct LuaTableEntry {
+		LuaTableEntry (int kt, int vt)
+			: keytype (kt)
+			, valuetype (vt)
+		{ }
 
-			int keytype;
-			std::string k_s;
-			unsigned int k_n;
+		int keytype;
+		std::string k_s;
+		unsigned int k_n;
 
-			int valuetype;
-			// LUA_TUSERDATA
-			const void* c;
-			void* p;
-			// LUA_TBOOLEAN
-			bool b;
-			// LUA_TSTRING:
-			std::string s;
-			// LUA_TNUMBER:
-			double n;
-		};
+		int valuetype;
+		// LUA_TUSERDATA
+		const void* c;
+		void* p;
+		// LUA_TBOOLEAN
+		bool b;
+		// LUA_TSTRING:
+		std::string s;
+		// LUA_TNUMBER:
+		double n;
+	};
 
-		std::vector<LuaTableEntry> _data;
+	std::vector<LuaTableEntry> _data;
 
-		static void* findclasskey (lua_State *L, const void* key);
-		template<typename T>
-		static void assign (luabridge::LuaRef* rv, T key, const LuaTableEntry& s);
+	static void* findclasskey (lua_State *L, const void* key);
+	template<typename T>
+	static void assign (luabridge::LuaRef* rv, T key, const LuaTableEntry& s);
 };
 
 } /* namespace */

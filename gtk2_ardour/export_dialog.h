@@ -1,34 +1,35 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2005-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2007-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2013 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __export_dialog_h__
-#define __export_dialog_h__
+#pragma once
 
 #include <string>
-#include <boost/scoped_ptr.hpp>
-
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/label.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/progressbar.h>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/label.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/progressbar.h>
 
 #include "ardour/export_profile_manager.h"
 
@@ -62,6 +63,7 @@ public:
 	enum Responses {
 		RESPONSE_RT,
 		RESPONSE_FAST,
+		RESPONSE_ANALYZE,
 		RESPONSE_CANCEL
 	};
 
@@ -71,8 +73,8 @@ protected:
 		Gtk::Dialog::on_response (response_id);
 	}
 
-	typedef boost::shared_ptr<ARDOUR::ExportHandler> HandlerPtr;
-	typedef boost::shared_ptr<ARDOUR::ExportProfileManager> ManagerPtr;
+	typedef std::shared_ptr<ARDOUR::ExportHandler> HandlerPtr;
+	typedef std::shared_ptr<ARDOUR::ExportProfileManager> ManagerPtr;
 
 	ARDOUR::ExportProfileManager::ExportType type;
 	HandlerPtr      handler;
@@ -84,12 +86,12 @@ protected:
 	// Must initialize all the shared_ptrs below
 	virtual void init_components ();
 
-	boost::scoped_ptr<ExportPresetSelector>   preset_selector;
-	boost::scoped_ptr<ExportTimespanSelector> timespan_selector;
-	boost::scoped_ptr<ExportChannelSelector>  channel_selector;
-	boost::scoped_ptr<ExportFileNotebook>     file_notebook;
+	std::unique_ptr<ExportPresetSelector>   preset_selector;
+	std::unique_ptr<ExportTimespanSelector> timespan_selector;
+	std::unique_ptr<ExportChannelSelector>  channel_selector;
+	std::unique_ptr<ExportFileNotebook>     file_notebook;
 
-	boost::shared_ptr<SoundcloudExportSelector> soundcloud_selector;
+	std::shared_ptr<SoundcloudExportSelector> soundcloud_selector;
 
 	Gtk::VBox                                 warning_widget;
 	Gtk::VBox                                 progress_widget;
@@ -108,7 +110,9 @@ private:
 	void update_warnings_and_example_filename ();
 	void show_conflicting_files ();
 
-	void do_export ();
+	void do_export (bool analysis_only);
+
+	void maybe_set_session_dirty ();
 
 	void update_realtime_selection ();
 	void parameter_changed (std::string const&);
@@ -116,12 +120,13 @@ private:
 	void show_progress ();
 	gint progress_timeout ();
 
-	typedef boost::shared_ptr<ARDOUR::ExportStatus> StatusPtr;
+	typedef std::shared_ptr<ARDOUR::ExportStatus> StatusPtr;
 
 	PublicEditor &  editor;
 	StatusPtr       status;
 
-
+	typedef std::map<samplepos_t, std::vector<std::string>> ReImportMap;
+	ReImportMap _files_to_reimport;
 
 	/* Warning area */
 
@@ -144,12 +149,16 @@ private:
 
 	float previous_progress; // Needed for gtk bug workaround
 
+	bool _initialized;
+	bool _analysis_only;
+
 	void soundcloud_upload_progress(double total, double now, std::string title);
 
 	/* Buttons */
 
-	Gtk::Button *           cancel_button;
-	Gtk::Button *           export_button;
+	Gtk::Button* cancel_button;
+	Gtk::Button* export_button;
+	Gtk::Button* analyze_button;
 
 };
 
@@ -195,4 +204,3 @@ class StemExportDialog : public ExportDialog
 	void init_components ();
 };
 
-#endif /* __ardour_export_dialog_h__ */

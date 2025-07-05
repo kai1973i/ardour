@@ -1,34 +1,39 @@
 /*
-    Copyright (C) 1999 Paul Davis
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2008-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2016-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __audio_clock_h__
-#define __audio_clock_h__
+#pragma once
 
 #include <map>
 #include <vector>
 
 #include <pangomm.h>
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/box.h>
-#include <gtkmm/menu.h>
-#include <gtkmm/label.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/label.h>
 
 #include "ardour/ardour.h"
 #include "ardour/session_handle.h"
@@ -42,7 +47,7 @@ namespace ARDOUR {
 
 class AudioClock : public CairoWidget, public ARDOUR::SessionHandlePtr
 {
-	public:
+public:
 	enum Mode {
 		Timecode,
 		BBT,
@@ -67,19 +72,21 @@ class AudioClock : public CairoWidget, public ARDOUR::SessionHandlePtr
 
 	void focus ();
 
-	virtual void set (samplepos_t, bool force = false, ARDOUR::samplecnt_t offset = 0);
+	/* overridden by MainClock */
+	virtual void set (Temporal::timepos_t const &, bool force = false, bool round_to_beat = false);
+	void set_duration (Temporal::timecnt_t const &, bool force = false);
+
+	virtual	void set_mode (Mode);
+
 	void set_from_playhead ();
 	void locate ();
-	void set_mode (Mode, bool noemit = false);
-	void set_bbt_reference (samplepos_t);
-	void set_is_duration (bool);
 
 	void copy_text_to_clipboard () const;
 
 	std::string name() const { return _name; }
 
-	samplepos_t current_time (samplepos_t position = 0) const;
-	samplepos_t current_duration (samplepos_t position = 0) const;
+	Temporal::timepos_t last_when () const { return last_time.position(); }
+	Temporal::timecnt_t current_duration (Temporal::timepos_t position = Temporal::timepos_t()) const;
 	void set_session (ARDOUR::Session *s);
 	void set_negative_allowed (bool yn);
 
@@ -94,47 +101,40 @@ class AudioClock : public CairoWidget, public ARDOUR::SessionHandlePtr
 	 */
 	void set_scale (double x, double y);
 
-	static void print_minsec (samplepos_t, char* buf, size_t bufsize, float sample_rate);
+	static void print_minsec (samplepos_t, char* buf, size_t bufsize, float sample_rate, int decimals = 3);
 
 	sigc::signal<void> ValueChanged;
 	sigc::signal<void> mode_changed;
-	sigc::signal<void> ChangeAborted;
 
-	static sigc::signal<void> ModeChanged;
 	static std::vector<AudioClock*> clocks;
 
-	protected:
+protected:
 	void render (Cairo::RefPtr<Cairo::Context> const&, cairo_rectangle_t*);
 	bool get_is_duration () const { return is_duration; }
-	ARDOUR::samplecnt_t offset () const { return _offset; }
 
 	virtual void build_ops_menu ();
 	Gtk::Menu  *ops_menu;
 
 	bool on_button_press_event (GdkEventButton *ev);
 	bool on_button_release_event(GdkEventButton *ev);
+	void on_size_request (Gtk::Requisition* req);
 
 	ArdourWidgets::ArdourButton _left_btn;
 	ArdourWidgets::ArdourButton _right_btn;
 
-	private:
+private:
 	Mode             _mode;
 	std::string      _name;
-	bool              is_transient;
 	bool              is_duration;
 	bool              editable;
 	/** true if this clock follows the playhead, meaning that certain operations are redundant */
 	bool             _follows_playhead;
 	bool             _accept_on_focus_out;
 	bool             _off;
-	int              em_width;
-	bool             _edit_by_click_field;
 	bool             _negative_allowed;
 	bool             edit_is_negative;
 
-	samplepos_t       _limit_pos;
-
-	ARDOUR::samplecnt_t _offset;
+	Temporal::timepos_t _limit_pos;
 
 	Glib::RefPtr<Pango::Layout> _layout;
 
@@ -153,10 +153,6 @@ class AudioClock : public CairoWidget, public ARDOUR::SessionHandlePtr
 	int layout_width;
 	double corner_radius;
 	uint32_t font_size;
-
-	static const double info_font_scale_factor;
-	static const double separator_height;
-	static const double x_leading_padding;
 
 	enum Field {
 		Timecode_Hours = 1,
@@ -190,10 +186,7 @@ class AudioClock : public CairoWidget, public ARDOUR::SessionHandlePtr
 	std::string pre_edit_string;
 	std::string input_string;
 
-	samplepos_t bbt_reference_time;
-	samplepos_t last_when;
-	bool last_pdelta;
-	bool last_sdelta;
+	Temporal::timecnt_t last_time;
 
 	bool dragging;
 	double drag_start_y;
@@ -206,51 +199,51 @@ class AudioClock : public CairoWidget, public ARDOUR::SessionHandlePtr
 	bool on_key_release_event (GdkEventKey *);
 	bool on_scroll_event (GdkEventScroll *ev);
 	void on_style_changed (const Glib::RefPtr<Gtk::Style>&);
-	void on_size_request (Gtk::Requisition* req);
 	bool on_motion_notify_event (GdkEventMotion *ev);
 	bool on_focus_out_event (GdkEventFocus*);
+	bool on_enter_notify_event (GdkEventCrossing*);
+	bool on_leave_notify_event (GdkEventCrossing*);
 
 	void set_slave_info ();
-	void set_timecode (samplepos_t, bool);
-	void set_bbt (samplepos_t, ARDOUR::samplecnt_t, bool);
-	void set_minsec (samplepos_t, bool);
-	void set_seconds (samplepos_t, bool);
-	void set_samples (samplepos_t, bool);
+	void set_timecode (Temporal::timepos_t const &);
+	void set_bbt (Temporal::timecnt_t const &);
+	void set_minsec (Temporal::timepos_t const &);
+	void set_seconds (Temporal::timepos_t const &);
+	void set_samples (Temporal::timepos_t const &);
 	void set_out_of_bounds (bool negative);
+	void finish_set (Temporal::timepos_t const &, bool);
 
 	void set_clock_dimensions (Gtk::Requisition&);
 
-	samplepos_t get_sample_step (Field, samplepos_t pos = 0, int dir = 1);
+	Temporal::timepos_t get_incremental_step (Field, Temporal::timepos_t const & pos = Temporal::timepos_t ());
 
 	bool timecode_validate_edit (const std::string&);
 	bool bbt_validate_edit (std::string&);
 	bool minsec_validate_edit (const std::string&);
 
 	samplepos_t samples_from_timecode_string (const std::string&) const;
-	samplepos_t samples_from_bbt_string (samplepos_t, const std::string&) const;
-	samplepos_t sample_duration_from_bbt_string (samplepos_t, const std::string&) const;
+	samplepos_t samples_from_bbt_string (Temporal::timepos_t const &, const std::string&) const;
+	samplepos_t sample_duration_from_bbt_string (Temporal::timepos_t const &, const std::string&) const;
 	samplepos_t samples_from_minsec_string (const std::string&) const;
 	samplepos_t samples_from_seconds_string (const std::string&) const;
 	samplepos_t samples_from_audiosamples_string (const std::string&) const;
 
 	void session_configuration_changed (std::string);
-	void session_property_changed (const PBD::PropertyChange&);
+	void tempo_map_changed ();
 
 	Field index_to_field () const;
 
 	void start_edit (Field f = Field (0));
 	void end_edit (bool);
 	void end_edit_relative (bool);
-	void edit_next_field ();
-	ARDOUR::samplecnt_t parse_as_distance (const std::string&);
 
-	ARDOUR::samplecnt_t parse_as_timecode_distance (const std::string&);
-	ARDOUR::samplecnt_t parse_as_minsec_distance (const std::string&);
-	ARDOUR::samplecnt_t parse_as_bbt_distance (const std::string&);
-	ARDOUR::samplecnt_t parse_as_seconds_distance (const std::string&);
-	ARDOUR::samplecnt_t parse_as_samples_distance (const std::string&);
+	Temporal::timecnt_t parse_as_distance (const std::string&);
+	Temporal::timecnt_t parse_as_timecode_distance (const std::string&);
+	Temporal::timecnt_t parse_as_minsec_distance (const std::string&);
+	Temporal::timecnt_t parse_as_bbt_distance (const std::string&);
+	Temporal::timecnt_t parse_as_seconds_distance (const std::string&);
+	Temporal::timecnt_t parse_as_samples_distance (const std::string&);
 
-	void set_font (Pango::FontDescription);
 	void set_colors ();
 	void show_edit_status (int length);
 	int  merge_input_and_edit_string ();
@@ -264,6 +257,9 @@ class AudioClock : public CairoWidget, public ARDOUR::SessionHandlePtr
 
 	double xscale;
 	double yscale;
+
+	bool _hovering;
+
+	PBD::ScopedConnection tempo_map_connection;
 };
 
-#endif /* __audio_clock_h__ */

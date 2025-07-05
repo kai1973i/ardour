@@ -1,22 +1,27 @@
 /*
-    Copyright (C) 2000-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-    $Id: midiregion.cc 746 2006-08-02 02:44:23Z drobilla $
-*/
+ * Copyright (C) 2006-2016 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2008 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2016-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <climits>
@@ -32,6 +37,7 @@
 
 #include "pbd/xml++.h"
 #include "pbd/basename.h"
+#include "pbd/types_convert.h"
 
 #include "ardour/automation_control.h"
 #include "ardour/midi_cursor.h"
@@ -44,6 +50,7 @@
 #include "ardour/session.h"
 #include "ardour/source_factory.h"
 #include "ardour/tempo.h"
+#include "ardour/thawlist.h"
 #include "ardour/types.h"
 #include "ardour/evoral_types_convert.h"
 
@@ -54,75 +61,44 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-namespace ARDOUR {
-	namespace Properties {
-		PBD::PropertyDescriptor<double> start_beats;
-		PBD::PropertyDescriptor<double> length_beats;
-	}
-}
-
-void
-MidiRegion::make_property_quarks ()
-{
-	Properties::start_beats.property_id = g_quark_from_static_string (X_("start-beats"));
-	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for start-beats = %1\n", Properties::start_beats.property_id));
-	Properties::length_beats.property_id = g_quark_from_static_string (X_("length-beats"));
-	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for length-beats = %1\n", Properties::length_beats.property_id));
-}
-
-void
-MidiRegion::register_properties ()
-{
-	add_property (_start_beats);
-	add_property (_length_beats);
+namespace PBD {
+  DEFINE_ENUM_CONVERT(ARDOUR::Source::Flag);
 }
 
 /* Basic MidiRegion constructor (many channels) */
 MidiRegion::MidiRegion (const SourceList& srcs)
 	: Region (srcs)
-	, _start_beats (Properties::start_beats, 0.0)
-	, _length_beats (Properties::length_beats, midi_source(0)->length_beats().to_double())
 	, _ignore_shift (false)
 {
-	register_properties ();
-	midi_source(0)->ModelChanged.connect_same_thread (_source_connection, boost::bind (&MidiRegion::model_changed, this));
+	/* by default MIDI regions are transparent,
+	 * this should probably be set depending on use-case,
+	 * (eg. loop recording, vs copy/edit/paste)
+	 */
+	override_opaqueness (false);
+
+	midi_source(0)->ModelChanged.connect_same_thread (_source_connection, std::bind (&MidiRegion::model_changed, this));
 	model_changed ();
 	assert(_name.val().find("/") == string::npos);
 	assert(_type == DataType::MIDI);
 }
 
-MidiRegion::MidiRegion (boost::shared_ptr<const MidiRegion> other)
+MidiRegion::MidiRegion (std::shared_ptr<const MidiRegion> other)
 	: Region (other)
-	, _start_beats (Properties::start_beats, other->_start_beats)
-	, _length_beats (Properties::length_beats, other->_length_beats)
 	, _ignore_shift (false)
 {
-	//update_length_beats ();
-	register_properties ();
-
 	assert(_name.val().find("/") == string::npos);
-	midi_source(0)->ModelChanged.connect_same_thread (_source_connection, boost::bind (&MidiRegion::model_changed, this));
+	midi_source(0)->ModelChanged.connect_same_thread (_source_connection, std::bind (&MidiRegion::model_changed, this));
 	model_changed ();
 }
 
 /** Create a new MidiRegion that is part of an existing one */
-MidiRegion::MidiRegion (boost::shared_ptr<const MidiRegion> other, MusicSample offset)
+MidiRegion::MidiRegion (std::shared_ptr<const MidiRegion> other, timecnt_t const & offset)
 	: Region (other, offset)
-	, _start_beats (Properties::start_beats, other->_start_beats)
-	, _length_beats (Properties::length_beats, other->_length_beats)
 	, _ignore_shift (false)
 {
 
-	register_properties ();
-
-	const double offset_quarter_note = _session.tempo_map().exact_qn_at_sample (other->_position + offset.sample, offset.division) - other->_quarter_note;
-	if (offset.sample != 0) {
-		_start_beats = other->_start_beats + offset_quarter_note;
-		_length_beats = other->_length_beats - offset_quarter_note;
-	}
-
 	assert(_name.val().find("/") == string::npos);
-	midi_source(0)->ModelChanged.connect_same_thread (_source_connection, boost::bind (&MidiRegion::model_changed, this));
+	midi_source(0)->ModelChanged.connect_same_thread (_source_connection, std::bind (&MidiRegion::model_changed, this));
 	model_changed ();
 }
 
@@ -133,26 +109,21 @@ MidiRegion::~MidiRegion ()
 /** Export the MIDI data of the MidiRegion to a new MIDI file (SMF).
  */
 bool
-MidiRegion::do_export (string path) const
+MidiRegion::do_export (string const& path) const
 {
-	boost::shared_ptr<MidiSource> newsrc;
+	std::shared_ptr<MidiSource> newsrc;
 
 	/* caller must check for pre-existing file */
 	assert (!path.empty());
 	assert (!Glib::file_test (path, Glib::FILE_TEST_EXISTS));
-	newsrc = boost::dynamic_pointer_cast<MidiSource>(
-		SourceFactory::createWritable(DataType::MIDI, _session,
-		                              path, false, _session.sample_rate()));
-
-	BeatsSamplesConverter bfc (_session.tempo_map(), _position);
-	Temporal::Beats const bbegin = bfc.from (_start);
-	Temporal::Beats const bend = bfc.from (_start + _length);
+	newsrc = std::dynamic_pointer_cast<MidiSource> (SourceFactory::createWritable (DataType::MIDI, _session, path, _session.sample_rate (), false, true));
 
 	{
 		/* Lock our source since we'll be reading from it.  write_to() will
-		   take a lock on newsrc. */
-		Source::Lock lm (midi_source(0)->mutex());
-		if (midi_source(0)->export_write_to (lm, newsrc, bbegin, bend)) {
+		 * take a lock on newsrc.
+		 */
+		Source::ReaderLock lm (midi_source(0)->mutex());
+		if (midi_source(0)->export_write_to (lm, newsrc, _start.val().beats(), _start.val().beats() + _length.val().beats())) {
 			return false;
 		}
 	}
@@ -163,290 +134,139 @@ MidiRegion::do_export (string path) const
 
 /** Create a new MidiRegion that has its own version of some/all of the Source used by another.
  */
-boost::shared_ptr<MidiRegion>
+std::shared_ptr<MidiRegion>
 MidiRegion::clone (string path) const
 {
-	boost::shared_ptr<MidiSource> newsrc;
+	std::shared_ptr<MidiSource> newsrc;
 
 	/* caller must check for pre-existing file */
 	assert (!path.empty());
 	assert (!Glib::file_test (path, Glib::FILE_TEST_EXISTS));
-	newsrc = boost::dynamic_pointer_cast<MidiSource>(
-		SourceFactory::createWritable(DataType::MIDI, _session,
-					      path, false, _session.sample_rate()));
+	newsrc = std::dynamic_pointer_cast<MidiSource>(
+		SourceFactory::createWritable(DataType::MIDI, _session, path, _session.sample_rate()));
 	return clone (newsrc);
 }
 
-boost::shared_ptr<MidiRegion>
-MidiRegion::clone (boost::shared_ptr<MidiSource> newsrc) const
+std::shared_ptr<MidiRegion>
+MidiRegion::clone (std::shared_ptr<MidiSource> newsrc, ThawList* tl) const
 {
-	BeatsSamplesConverter bfc (_session.tempo_map(), _position);
-	Temporal::Beats const bbegin = bfc.from (_start);
-	Temporal::Beats const bend = bfc.from (_start + _length);
-
 	{
-		boost::shared_ptr<MidiSource> ms = midi_source(0);
-		Source::Lock lm (ms->mutex());
+		std::shared_ptr<MidiSource> ms = midi_source(0);
 
-		if (!ms->model()) {
-			ms->load_model (lm);
-		}
+		/* copy source state (cue markers, captured_for, CC/param interpolation */
+		XMLNode& node (ms->get_state());
+		/* these must be set, otherwise Source::set_state() returns early */
+		node.set_property (X_("id"), newsrc->id());
+		node.set_property (X_("name"), newsrc->name());
+		node.set_property (X_("flags"), newsrc->flags ());
+		node.set_property (X_("take-id"), newsrc->take_id());
 
 		/* Lock our source since we'll be reading from it.  write_to() will
 		   take a lock on newsrc.
 		*/
 
-		if (ms->write_to (lm, newsrc, bbegin, bend)) {
-			return boost::shared_ptr<MidiRegion> ();
+		Source::ReaderLock lm (ms->mutex());
+		if (ms->write_to (lm, newsrc, Temporal::Beats(), std::numeric_limits<Temporal::Beats>::max())) {
+			delete &node;
+			return std::shared_ptr<MidiRegion> ();
 		}
+
+		/* compare to SMFSource::set_state */
+		newsrc->MidiSource::set_state (node, Stateful::current_state_version);
+		newsrc->Source::set_state (node, Stateful::current_state_version);
+		delete &node;
 	}
 
-	PropertyList plist;
+	PropertyList plist (derive_properties ());
 
 	plist.add (Properties::name, PBD::basename_nosuffix (newsrc->name()));
 	plist.add (Properties::whole_file, true);
-	plist.add (Properties::start, _start);
-	plist.add (Properties::start_beats, _start_beats);
-	plist.add (Properties::length, _length);
-	plist.add (Properties::position, _position);
-	plist.add (Properties::beat, _beat);
-	plist.add (Properties::length_beats, _length_beats);
+	plist.add (Properties::external, false);
+	plist.add (Properties::import, false);
 	plist.add (Properties::layer, 0);
 
-	boost::shared_ptr<MidiRegion> ret (boost::dynamic_pointer_cast<MidiRegion> (RegionFactory::create (newsrc, plist, true)));
-	ret->set_quarter_note (quarter_note());
+	std::shared_ptr<MidiRegion> ret (std::dynamic_pointer_cast<MidiRegion> (RegionFactory::create (newsrc, plist, true, tl)));
 
 	return ret;
 }
 
-void
-MidiRegion::post_set (const PropertyChange& pc)
-{
-	Region::post_set (pc);
-
-	if (pc.contains (Properties::length) && !pc.contains (Properties::length_beats)) {
-		/* we're called by Stateful::set_values() which sends a change
-		   only if the value is different from _current.
-		   session load means we can clobber length_beats here in error (not all properties differ from current),
-		   so disallow (this has been set from XML state anyway).
-		*/
-		if (!_session.loading()) {
-			update_length_beats (0);
-		}
-	}
-
-	if (pc.contains (Properties::start) && !pc.contains (Properties::start_beats)) {
-		set_start_beats_from_start_samples ();
-	}
-}
-
-void
-MidiRegion::set_start_beats_from_start_samples ()
-{
-	if (position_lock_style() == AudioTime) {
-		_start_beats = quarter_note() - _session.tempo_map().quarter_note_at_sample (_position - _start);
-	}
-}
-
-void
-MidiRegion::set_length_internal (samplecnt_t len, const int32_t sub_num)
-{
-	Region::set_length_internal (len, sub_num);
-	update_length_beats (sub_num);
-}
-
-void
-MidiRegion::update_after_tempo_map_change (bool /* send */)
-{
-	boost::shared_ptr<Playlist> pl (playlist());
-
-	if (!pl) {
-		return;
-	}
-
-	const samplepos_t old_pos = _position;
-	const samplepos_t old_length = _length;
-	const samplepos_t old_start = _start;
-
-	PropertyChange s_and_l;
-
-	if (position_lock_style() == AudioTime) {
-		recompute_position_from_lock_style (0);
-
-		/*
-		  set _start to new position in tempo map.
-
-		  The user probably expects the region contents to maintain audio position as the
-		  tempo changes, but AFAICT this requires modifying the src file to use
-		  SMPTE timestamps with the current disk read model (?).
-
-		  We could arguably use _start to set _start_beats here,
-		  resulting in viewport-like behaviour (the contents maintain
-		  their musical position while the region is stationary).
-
-		  For now, the musical position at the region start is retained, but subsequent events
-		  will maintain their beat distance according to the map.
-		*/
-		_start = _session.tempo_map().samples_between_quarter_notes (quarter_note() - start_beats(), quarter_note());
-
-		/* _length doesn't change for audio-locked regions. update length_beats to match. */
-		_length_beats = _session.tempo_map().quarter_note_at_sample (_position + _length) - quarter_note();
-
-		s_and_l.add (Properties::start);
-		s_and_l.add (Properties::length_beats);
-
-		send_change  (s_and_l);
-		return;
-	}
-
-	Region::update_after_tempo_map_change (false);
-
-	/* _start has now been updated. */
-	_length = max ((samplecnt_t) 1, _session.tempo_map().samples_between_quarter_notes (quarter_note(), quarter_note() + _length_beats));
-
-	if (old_start != _start) {
-		s_and_l.add (Properties::start);
-	}
-	if (old_length != _length) {
-		s_and_l.add (Properties::length);
-	}
-	if (old_pos != _position) {
-		s_and_l.add (Properties::position);
-	}
-
-	send_change (s_and_l);
-}
-
-void
-MidiRegion::update_length_beats (const int32_t sub_num)
-{
-	_length_beats = _session.tempo_map().exact_qn_at_sample (_position + _length, sub_num) - quarter_note();
-}
-
-void
-MidiRegion::set_position_internal (samplepos_t pos, bool allow_bbt_recompute, const int32_t sub_num)
-{
-	Region::set_position_internal (pos, allow_bbt_recompute, sub_num);
-
-	/* don't clobber _start _length and _length_beats if session loading.*/
-	if (_session.loading()) {
-		return;
-	}
-
-	/* set _start to new position in tempo map */
-	_start = _session.tempo_map().samples_between_quarter_notes (quarter_note() - start_beats(), quarter_note());
-
-	/* in construction from src */
-	if (_length_beats == 0.0) {
-		update_length_beats (sub_num);
-	}
-
-	if (position_lock_style() == AudioTime) {
-		_length_beats = _session.tempo_map().quarter_note_at_sample (_position + _length) - quarter_note();
-	} else {
-		/* leave _length_beats alone, and change _length to reflect the state of things
-		   at the new position (tempo map may dictate a different number of samples).
-		*/
-		Region::set_length_internal (_session.tempo_map().samples_between_quarter_notes (quarter_note(), quarter_note() + length_beats()), sub_num);
-	}
-}
-
-void
-MidiRegion::set_position_music_internal (double qn)
-{
-	Region::set_position_music_internal (qn);
-	/* set _start to new position in tempo map */
-	_start = _session.tempo_map().samples_between_quarter_notes (quarter_note() - start_beats(), quarter_note());
-
-	if (position_lock_style() == AudioTime) {
-		_length_beats = _session.tempo_map().quarter_note_at_sample (_position + _length) - quarter_note();
-
-	} else {
-		/* leave _length_beats alone, and change _length to reflect the state of things
-		   at the new position (tempo map may dictate a different number of samples).
-		*/
-		_length = _session.tempo_map().samples_between_quarter_notes (quarter_note(), quarter_note() + length_beats());
-	}
-}
-
-samplecnt_t
+timecnt_t
 MidiRegion::read_at (Evoral::EventSink<samplepos_t>& out,
-                     samplepos_t                     position,
-                     samplecnt_t                     dur,
-                     Evoral::Range<samplepos_t>*     loop_range,
-                     MidiCursor&                    cursor,
-                     uint32_t                       chan_n,
-                     NoteMode                       mode,
-                     MidiStateTracker*              tracker,
-                     MidiChannelFilter*             filter) const
+                     timepos_t const &               position,
+                     timecnt_t const &               dur,
+                     Temporal::Range*                loop_range,
+                     MidiCursor&                     cursor,
+                     uint32_t                        chan_n,
+                     NoteMode                        mode,
+                     MidiNoteTracker*               tracker,
+                     MidiChannelFilter*              filter) const
 {
 	return _read_at (_sources, out, position, dur, loop_range, cursor, chan_n, mode, tracker, filter);
 }
 
-samplecnt_t
+timecnt_t
 MidiRegion::master_read_at (MidiRingBuffer<samplepos_t>& out,
-                            samplepos_t                  position,
-                            samplecnt_t                  dur,
-                            Evoral::Range<samplepos_t>*  loop_range,
-                            MidiCursor&                 cursor,
-                            uint32_t                    chan_n,
-                            NoteMode                    mode) const
+                            timepos_t const &            position,
+                            timecnt_t const &            dur,
+                            Temporal::Range*             loop_range,
+                            MidiCursor&                  cursor,
+                            uint32_t                     chan_n,
+                            NoteMode                     mode) const
 {
 	return _read_at (_master_sources, out, position, dur, loop_range, cursor, chan_n, mode); /* no tracker */
 }
 
-samplecnt_t
+timecnt_t
 MidiRegion::_read_at (const SourceList&              /*srcs*/,
                       Evoral::EventSink<samplepos_t>& dst,
-                      samplepos_t                     position,
-                      samplecnt_t                     dur,
-                      Evoral::Range<samplepos_t>*     loop_range,
-                      MidiCursor&                    cursor,
-                      uint32_t                       chan_n,
-                      NoteMode                       mode,
-                      MidiStateTracker*              tracker,
-                      MidiChannelFilter*             filter) const
+                      timepos_t const &               pos,
+                      timecnt_t const &               xdur,
+                      Temporal::Range*                loop_range,
+                      MidiCursor&                     cursor,
+                      uint32_t                        chan_n,
+                      NoteMode                        mode,
+                      MidiNoteTracker*               tracker,
+                      MidiChannelFilter*              filter) const
 {
-	sampleoffset_t internal_offset = 0;
-	samplecnt_t    to_read         = 0;
+	timecnt_t dur (xdur);
+	timecnt_t internal_offset;
+	timecnt_t to_read;
 
 	/* precondition: caller has verified that we cover the desired section */
 
 	assert(chan_n == 0);
 
 	if (muted()) {
-		return 0; /* read nothing */
+		return timecnt_t(); /* read nothing */
 	}
 
-	if (position < _position) {
+	if (pos < position()) {
 		/* we are starting the read from before the start of the region */
-		internal_offset = 0;
-		dur -= _position - position;
+		internal_offset = timecnt_t (Temporal::BeatTime);;
+		dur -= pos.distance (position());
 	} else {
 		/* we are starting the read from after the start of the region */
-		internal_offset = position - _position;
+		internal_offset = position().distance (pos);
 	}
 
 	if (internal_offset >= _length) {
-		return 0; /* read nothing */
+		return timecnt_t(); /* read nothing */
 	}
 
 	if ((to_read = min (dur, _length - internal_offset)) == 0) {
-		return 0; /* read nothing */
+		return timecnt_t(); /* read nothing */
 	}
 
-	boost::shared_ptr<MidiSource> src = midi_source(chan_n);
+	std::shared_ptr<MidiSource> src = midi_source(chan_n);
 
-	Glib::Threads::Mutex::Lock lm(src->mutex());
-
-	src->set_note_mode(lm, mode);
+	Source::ReaderLock lm (src->mutex());
 
 #if 0
-	cerr << "MR " << name () << " read @ " << position << " + " << to_read
+	cerr << "MR " << name () << " read @ " << pos << " + " << to_read
 	     << " dur was " << dur
 	     << " len " << _length
 	     << " l-io " << (_length - internal_offset)
-	     << " _position = " << _position
+	     << " position = " << position()
 	     << " _start = " << _start
 	     << " intoffset = " << internal_offset
 	     << " quarter_note = " << quarter_note()
@@ -459,25 +279,91 @@ MidiRegion::_read_at (const SourceList&              /*srcs*/,
 	if (src->midi_read (
 		    lm, // source lock
 		    dst, // destination buffer
-		    _position - _start, // start position of the source in session samples
-		    _start + internal_offset, // where to start reading in the source
+		    position().earlier (_start.val()), // start position of the source on timeline
+		    _start.val() + internal_offset, // where to start reading in the source
 		    to_read, // read duration in samples
 		    loop_range,
 		    cursor,
 		    tracker,
 		    filter,
-		    _filtered_parameters,
-		    quarter_note(),
-		    _start_beats
+		    _filtered_parameters
 		    ) != to_read) {
-		return 0; /* "read nothing" */
+		return timecnt_t(); /* "read nothing" */
 	}
 
 	return to_read;
 }
 
+int
+MidiRegion::render (Evoral::EventSink<samplepos_t>& dst,
+                    uint32_t                        chan_n,
+                    NoteMode                        mode,
+                    MidiChannelFilter*              filter) const
+{
+	return render_range (dst, chan_n, mode, this->start(), _length, filter);
+}
+
+int
+MidiRegion::render_range (Evoral::EventSink<samplepos_t>& dst,
+                          uint32_t                        chan_n,
+                          NoteMode                        mode,
+                          timepos_t const &               read_start,
+                          timecnt_t const &               read_length,
+                          MidiChannelFilter*              filter) const
+{
+	/* precondition: caller has verified that we cover the desired section */
+
+	assert(chan_n == 0);
+
+	if (muted()) {
+		return 0; /* read nothing */
+	}
+
+	std::shared_ptr<MidiSource> src = midi_source(chan_n);
+
+
+#if 0
+	cerr << "MR " << name () << " render "
+	     << " _position = " << position ()
+	     << " _start = " << _start
+	     << " _length = " << _length
+	     << " read_start = " << read_start
+	     << " read_length = " << read_length
+	     << endl;
+#endif
+
+	MidiCursor cursor;
+	MidiNoteTracker tracker;
+
+	/* This call reads events from a source and writes them to `dst' timed in session samples */
+
+	Source::ReaderLock lm (src->mutex());
+
+	src->midi_read (
+		lm, // source lock
+		dst, // destination buffer
+		source_position(), // start position of the source in session samples
+		read_start,
+		read_length,
+		0,
+		cursor,
+		&tracker,
+		filter,
+		_filtered_parameters);
+
+	/* resolve any notes that were "cut off" by the end of the region. The
+	 * Note-Off's get inserted at the end of the region
+	 */
+
+	const timepos_t end = source_position() + read_start + read_length;
+	tracker.resolve_notes (dst, end.samples());
+
+	return 0;
+}
+
+
 XMLNode&
-MidiRegion::state ()
+MidiRegion::state () const
 {
 	return Region::state ();
 }
@@ -486,6 +372,11 @@ int
 MidiRegion::set_state (const XMLNode& node, int version)
 {
 	int ret = Region::set_state (node, version);
+
+	if (version < 7001) {
+		/* previous sessions had uncontionally transparent MIDI regions */
+		override_opaqueness (false);
+	}
 
 	return ret;
 }
@@ -511,58 +402,41 @@ MidiRegion::recompute_at_start ()
 }
 
 int
-MidiRegion::separate_by_channel (vector< boost::shared_ptr<Region> >&) const
+MidiRegion::separate_by_channel (vector< std::shared_ptr<Region> >&) const
 {
 	// TODO
 	return -1;
 }
 
-boost::shared_ptr<Evoral::Control>
+std::shared_ptr<Evoral::Control>
 MidiRegion::control (const Evoral::Parameter& id, bool create)
 {
 	return model()->control(id, create);
 }
 
-boost::shared_ptr<const Evoral::Control>
+std::shared_ptr<const Evoral::Control>
 MidiRegion::control (const Evoral::Parameter& id) const
 {
 	return model()->control(id);
 }
 
-boost::shared_ptr<MidiModel>
+std::shared_ptr<MidiModel>
 MidiRegion::model()
 {
 	return midi_source()->model();
 }
 
-boost::shared_ptr<const MidiModel>
+std::shared_ptr<const MidiModel>
 MidiRegion::model() const
 {
 	return midi_source()->model();
 }
 
-boost::shared_ptr<MidiSource>
+std::shared_ptr<MidiSource>
 MidiRegion::midi_source (uint32_t n) const
 {
 	// Guaranteed to succeed (use a static cast?)
-	return boost::dynamic_pointer_cast<MidiSource>(source(n));
-}
-
-/* don't use this. hopefully it will go away.
-   currently used by headless-chicken session utility.
-*/
-void
-MidiRegion::clobber_sources (boost::shared_ptr<MidiSource> s)
-{
-       drop_sources();
-
-       _sources.push_back (s);
-       s->inc_use_count ();
-       _master_sources.push_back (s);
-       s->inc_use_count ();
-
-       s->DropReferences.connect_same_thread (*this, boost::bind (&Region::source_deleted, this, boost::weak_ptr<Source>(s)));
-
+	return std::dynamic_pointer_cast<MidiSource>(source(n));
 }
 
 void
@@ -579,7 +453,7 @@ MidiRegion::model_changed ()
 	Automatable::Controls const & c = model()->controls();
 
 	for (Automatable::Controls::const_iterator i = c.begin(); i != c.end(); ++i) {
-		boost::shared_ptr<AutomationControl> ac = boost::dynamic_pointer_cast<AutomationControl> (i->second);
+		std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl> (i->second);
 		assert (ac);
 		if (ac->alist()->automation_state() != Play) {
 			_filtered_parameters.insert (ac->parameter ());
@@ -588,13 +462,21 @@ MidiRegion::model_changed ()
 
 	/* watch for changes to controls' AutoState */
 	midi_source()->AutomationStateChanged.connect_same_thread (
-		_model_connection, boost::bind (&MidiRegion::model_automation_state_changed, this, _1)
+		_model_connection, std::bind (&MidiRegion::model_automation_state_changed, this, _1)
 		);
 
-	model()->ContentsShifted.connect_same_thread (_model_shift_connection, boost::bind (&MidiRegion::model_shifted, this, _1));
+	model()->ContentsShifted.connect_same_thread (_model_shift_connection, std::bind (&MidiRegion::model_shifted, this, _1));
+	model()->ContentsChanged.connect_same_thread (_model_changed_connection, std::bind (&MidiRegion::model_contents_changed, this));
 }
+
 void
-MidiRegion::model_shifted (double qn_distance)
+MidiRegion::model_contents_changed ()
+{
+	send_change (Properties::contents);
+}
+
+void
+MidiRegion::model_shifted (timecnt_t distance)
 {
 	if (!model()) {
 		return;
@@ -602,11 +484,18 @@ MidiRegion::model_shifted (double qn_distance)
 
 	if (!_ignore_shift) {
 		PropertyChange what_changed;
-		_start_beats += qn_distance;
-		samplepos_t const new_start = _session.tempo_map().samples_between_quarter_notes (_quarter_note - _start_beats, _quarter_note);
-		_start = new_start;
-		what_changed.add (Properties::start);
-		what_changed.add (Properties::start_beats);
+		/* _length is a Property, so we cannot call timepos_t methods on
+		   it directly. ::val() only provides a const, so use
+		   operator+() rather than operator+=()
+		*/
+		_length = _length.val() + distance;
+		if (!_start.val().is_zero()) {
+			_length = _length.val() + _start.val();
+			_start = timepos_t::zero (_start.val().time_domain());
+			what_changed.add (Properties::start);
+		}
+		what_changed.add (Properties::contents);
+		what_changed.add (Properties::length);
 		send_change (what_changed);
 	} else {
 		_ignore_shift = false;
@@ -618,7 +507,7 @@ MidiRegion::model_automation_state_changed (Evoral::Parameter const & p)
 {
 	/* Update our filtered parameters list after a change to a parameter's AutoState */
 
-	boost::shared_ptr<AutomationControl> ac = model()->automation_control (p);
+	std::shared_ptr<AutomationControl> ac = model()->automation_control (p);
 	if (!ac || ac->alist()->automation_state() == Play) {
 		/* It should be "impossible" for ac to be NULL, but if it is, don't
 		   filter the parameter so events aren't lost. */
@@ -631,7 +520,7 @@ MidiRegion::model_automation_state_changed (Evoral::Parameter const & p)
 	   for a given set of filtered_parameters, so now that we've changed that list we must invalidate
 	   the iterator.
 	*/
-	Glib::Threads::Mutex::Lock lm (midi_source(0)->mutex(), Glib::Threads::TRY_LOCK);
+	Source::WriterLock lm (midi_source(0)->mutex(), Glib::Threads::TRY_LOCK);
 	if (lm.locked()) {
 		/* TODO: This is too aggressive, we need more fine-grained invalidation. */
 		midi_source(0)->invalidate (lm);
@@ -642,90 +531,122 @@ MidiRegion::model_automation_state_changed (Evoral::Parameter const & p)
  *  Fix it up by adding some empty space to the source.
  */
 void
-MidiRegion::fix_negative_start ()
+MidiRegion::fix_negative_start (HistoryOwner& history)
 {
-	BeatsSamplesConverter c (_session.tempo_map(), _position);
-
 	_ignore_shift = true;
 
-	model()->insert_silence_at_start (Temporal::Beats (- _start_beats));
+	model()->insert_silence_at_start (-start().beats(), history);
 
-	_start = 0;
-	_start_beats = 0.0;
+	_start = timepos_t::zero (start().time_domain());
+}
+
+bool
+MidiRegion::set_name (const std::string& str)
+{
+	if (_name == str) {
+		return true;
+	}
+
+	if (!Session::session_name_is_legal (str).empty ()) {
+		return false;
+	}
+
+	return Region::set_name (str);
 }
 
 void
-MidiRegion::set_start_internal (samplecnt_t s, const int32_t sub_num)
+MidiRegion::merge (std::shared_ptr<MidiRegion const> other_region)
 {
-	Region::set_start_internal (s, sub_num);
+	std::shared_ptr<MidiModel const> self  = model ();
+	std::shared_ptr<MidiModel const> other = other_region->model();
 
-	set_start_beats_from_start_samples ();
+	Temporal::Beats other_region_start (other_region->start().beats());
+	Temporal::Beats other_region_end ((other_region->start() + other_region->length()).beats());
+
+	Evoral::Sequence<Temporal::Beats>::const_iterator e1 = self->begin();
+	Evoral::Sequence<Temporal::Beats>::const_iterator e2 = other->begin();
+
+	Source::WriterLock sl (midi_source()->mutex ());
+	midi_source ()->drop_model (sl);
+	std::shared_ptr<MidiModel> new_model (new MidiModel (*midi_source()));
+	new_model->start_write ();
+
+	/* Note: merge() is called with sorted region list so that
+	 * self->position <= other->position ()
+	 */
+
+	assert (position() <= other_region->position ());
+
+	while ((e1 != self->end ()) || (e2 != other->end ())) {
+		/* map time from other region to this region */
+		Temporal::Beats e2t;
+		if (e2 != other->end ()) {
+			timepos_t abs_time (other_region->source_beats_to_absolute_time (e2->time()));
+			e2t = position().distance (abs_time).beats();
+		}
+
+		if (e2 == other->end () || (e1 != self->end () && e1->time() < e2t)) {
+			Evoral::Event<Temporal::Beats> ev (*e1, true);
+			new_model->append (ev, Evoral::next_event_id());
+			++e1;
+			continue;
+		}
+
+		if (e1 == self->end () || (e2 != other->end () && e1->time() >= e2t)) {
+			if (e2->time() < other_region_start) {
+				++e2;
+				continue;
+			}
+			if (e2->time() > other_region_end) {
+				/* No more events form other region */
+				e2 = other->end ();
+				continue;
+			}
+
+			Evoral::Event<Temporal::Beats> ev (*e2, true);
+			ev.set_time (e2t);
+			new_model->append (ev, Evoral::next_event_id());
+			++e2;
+			continue;
+		}
+
+		assert (0);
+		break;
+	}
+
+	new_model->end_write (Evoral::Sequence<Temporal::Beats>::ResolveStuckNotes, length().beats());
+	midi_source()->set_model (sl, new_model);
+
+	set_length (max (length(), position().distance (other_region->end())));
 }
 
 void
-MidiRegion::trim_to_internal (samplepos_t position, samplecnt_t length, const int32_t sub_num)
+MidiRegion::start_domain_bounce (Temporal::DomainBounceInfo& cmd)
 {
-	if (locked()) {
+	/* Deal with the region position & length */
+
+	Region::start_domain_bounce (cmd);
+	if (cmd.from != Temporal::BeatTime) {
 		return;
 	}
 
-	PropertyChange what_changed;
+	model()->start_domain_bounce (cmd);
+	model()->create_mapping_stash (source_position().beats());
+}
 
+void
+MidiRegion::finish_domain_bounce (Temporal::DomainBounceInfo& cmd)
+{
+	Region::finish_domain_bounce (cmd);
 
-	/* Set position before length, otherwise for MIDI regions this bad thing happens:
-	 * 1. we call set_length_internal; length in beats is computed using the region's current
-	 *    (soon-to-be old) position
-	 * 2. we call set_position_internal; position is set and length in samples re-computed using
-	 *    length in beats from (1) but at the new position, which is wrong if the region
-	 *    straddles a tempo/meter change.
-	 */
-
-	if (_position != position) {
-
-		const double pos_qn = _session.tempo_map().exact_qn_at_sample (position, sub_num);
-		const double old_pos_qn = quarter_note();
-
-		/* sets _pulse to new position.*/
-		set_position_internal (position, true, sub_num);
-		what_changed.add (Properties::position);
-
-		double new_start_qn = start_beats() + (pos_qn - old_pos_qn);
-		samplepos_t new_start = _session.tempo_map().samples_between_quarter_notes (pos_qn - new_start_qn, pos_qn);
-
-		if (!verify_start_and_length (new_start, length)) {
-			return;
-		}
-
-		_start_beats = new_start_qn;
-		what_changed.add (Properties::start_beats);
-
-		set_start_internal (new_start, sub_num);
-		what_changed.add (Properties::start);
+	if (cmd.from != Temporal::BeatTime) {
+		return;
 	}
 
-	if (_length != length) {
+	model()->rebuild_from_mapping_stash (source_position().beats());
+	model()->finish_domain_bounce (cmd);
 
-		if (!verify_start_and_length (_start, length)) {
-			return;
-		}
-
-		set_length_internal (length, sub_num);
-		what_changed.add (Properties::length);
-		what_changed.add (Properties::length_beats);
-	}
-
-	set_whole_file (false);
-
-	PropertyChange start_and_length;
-
-	start_and_length.add (Properties::start);
-	start_and_length.add (Properties::length);
-
-	if (what_changed.contains (start_and_length)) {
-		first_edit ();
-	}
-
-	if (!what_changed.empty()) {
-		send_change (what_changed);
-	}
+	_model_changed_connection.disconnect ();
+	model()->ContentsChanged ();
+	model()->ContentsChanged.connect_same_thread (_model_changed_connection, std::bind (&MidiRegion::model_contents_changed, this));
 }

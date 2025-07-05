@@ -8,17 +8,17 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #ifndef _WEAK_JACK_H
 #define _WEAK_JACK_H
@@ -59,6 +59,8 @@ int have_libjack(void);
 #define jack_cpu_load                       WJACK_cpu_load
 #define jack_is_realtime                    WJACK_is_realtime
 
+#define jack_client_name_size               WJACK_client_name_size
+
 #define jack_set_freewheel                  WJACK_set_freewheel
 #define jack_set_buffer_size                WJACK_set_buffer_size
 
@@ -92,6 +94,7 @@ int have_libjack(void);
 #define jack_port_short_name                WJACK_port_short_name
 #define jack_port_flags                     WJACK_port_flags
 #define jack_port_is_mine                   WJACK_port_is_mine
+#define jack_port_connected                 WJACK_port_connected
 #define jack_get_ports                      WJACK_get_ports
 #define jack_port_name_size                 WJACK_port_name_size
 #define jack_port_type_size                 WJACK_port_type_size

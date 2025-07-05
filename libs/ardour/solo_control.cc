@@ -1,20 +1,21 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/debug.h"
 #include "ardour/mute_master.h"
@@ -27,9 +28,9 @@ using namespace ARDOUR;
 using namespace std;
 using namespace PBD;
 
-SoloControl::SoloControl (Session& session, std::string const & name, Soloable& s, Muteable& m)
+SoloControl::SoloControl (Session& session, std::string const & name, Soloable& s, Muteable& m, Temporal::TimeDomainProvider const & tdp)
 	: SlavableAutomationControl (session, SoloAutomation, ParameterDescriptor (SoloAutomation),
-	                             boost::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(SoloAutomation))),
+	                             std::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(SoloAutomation), tdp)),
 	                             name)
 	, _soloable (s)
 	, _muteable (m)
@@ -40,7 +41,7 @@ SoloControl::SoloControl (Session& session, std::string const & name, Soloable& 
 {
 	_list->set_interpolation (Evoral::ControlList::Discrete);
 	/* solo changes must be synchronized by the process cycle */
-	set_flags (Controllable::Flag (flags() | Controllable::RealTime));
+	set_flag (Controllable::RealTime);
 }
 
 void
@@ -78,7 +79,7 @@ SoloControl::set_mute_master_solo ()
 void
 SoloControl::mod_solo_by_others_downstream (int32_t delta)
 {
-	if (_soloable.is_safe() || !_soloable.can_solo()) {
+	if (_soloable.is_safe() || !can_solo()) {
 		return;
 	}
 
@@ -105,7 +106,7 @@ SoloControl::mod_solo_by_others_downstream (int32_t delta)
 void
 SoloControl::mod_solo_by_others_upstream (int32_t delta)
 {
-	if (_soloable.is_safe() || !_soloable.can_solo()) {
+	if (_soloable.is_safe() || !can_solo()) {
 		return;
 	}
 
@@ -160,7 +161,7 @@ SoloControl::mod_solo_by_others_upstream (int32_t delta)
 void
 SoloControl::actually_set_value (double val, PBD::Controllable::GroupControlDisposition group_override)
 {
-	if (_soloable.is_safe() || !_soloable.can_solo()) {
+	if (_soloable.is_safe() || !can_solo()) {
 		return;
 	}
 
@@ -180,7 +181,7 @@ SoloControl::get_value () const
 		return self_soloed() || get_masters_value ();
 	}
 
-	if (_list && boost::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
+	if (_list && std::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
 		// Playing back automation, get the value from the list
 		return AutomationControl::get_value();
 	}
@@ -247,7 +248,7 @@ SoloControl::set_state (XMLNode const & node, int version)
 }
 
 XMLNode&
-SoloControl::get_state ()
+SoloControl::get_state () const
 {
 	XMLNode& node (SlavableAutomationControl::get_state());
 
@@ -259,9 +260,9 @@ SoloControl::get_state ()
 }
 
 void
-SoloControl::master_changed (bool /*from self*/, GroupControlDisposition, boost::weak_ptr<AutomationControl> wm)
+SoloControl::master_changed (bool /*from self*/, GroupControlDisposition, std::weak_ptr<AutomationControl> wm)
 {
-	boost::shared_ptr<AutomationControl> m = wm.lock ();
+	std::shared_ptr<AutomationControl> m = wm.lock ();
 	assert (m);
 	bool send_signal = false;
 
@@ -298,7 +299,7 @@ SoloControl::master_changed (bool /*from self*/, GroupControlDisposition, boost:
 }
 
 void
-SoloControl::post_add_master (boost::shared_ptr<AutomationControl> m)
+SoloControl::post_add_master (std::shared_ptr<AutomationControl> m)
 {
 	if (m->get_value()) {
 
@@ -316,7 +317,7 @@ SoloControl::post_add_master (boost::shared_ptr<AutomationControl> m)
 }
 
 void
-SoloControl::pre_remove_master (boost::shared_ptr<AutomationControl> m)
+SoloControl::pre_remove_master (std::shared_ptr<AutomationControl> m)
 {
 	if (!m) {
 		/* null control ptr means we're removing all masters. Nothing
@@ -350,5 +351,9 @@ SoloControl::pre_remove_master (boost::shared_ptr<AutomationControl> m)
 bool
 SoloControl::can_solo () const
 {
-	return _soloable.can_solo ();
+  if (Config->get_solo_control_is_listen_control()) {
+		return _soloable.can_monitor ();
+	} else {
+		return _soloable.can_solo ();
+	}
 }

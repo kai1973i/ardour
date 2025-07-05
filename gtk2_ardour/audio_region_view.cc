@@ -1,40 +1,45 @@
 /*
-    Copyright (C) 2001-2006 Paul Davis
-
-    This program is free software; you can r>edistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2007-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2014-2015 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2014-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <cassert>
 #include <algorithm>
 #include <vector>
 
-#include <boost/scoped_array.hpp>
-
-#include <gtkmm.h>
+#include <ytkmm/ytkmm.h>
 
 #include "ardour/playlist.h"
 #include "ardour/audioregion.h"
 #include "ardour/audiosource.h"
 #include "ardour/profile.h"
+#include "ardour/region_fx_plugin.h"
 #include "ardour/session.h"
 
 #include "pbd/memento_command.h"
-#include "pbd/stacktrace.h"
 
-#include "evoral/Curve.hpp"
+#include "evoral/Curve.h"
 
 #include "gtkmm2ext/gtk_ui.h"
 #include "gtkmm2ext/utils.h"
@@ -57,8 +62,10 @@
 #include "public_editor.h"
 #include "audio_region_editor.h"
 #include "audio_streamview.h"
+#include "mergeable_line.h"
 #include "region_gain_line.h"
 #include "control_point.h"
+#include "paste_context.h"
 #include "ghostregion.h"
 #include "audio_time_axis.h"
 #include "rgb_macros.h"
@@ -66,8 +73,6 @@
 #include "ui_config.h"
 
 #include "pbd/i18n.h"
-
-#define MUTED_ALPHA 48
 
 using namespace std;
 using namespace ARDOUR;
@@ -107,10 +112,8 @@ static Cairo::RefPtr<Cairo::Pattern> create_pending_peak_pattern() {
 	return p;
 }
 
-AudioRegionView::AudioRegionView (ArdourCanvas::Container *parent, RouteTimeAxisView &tv, boost::shared_ptr<AudioRegion> r, double spu,
-				  uint32_t basic_color)
+AudioRegionView::AudioRegionView (ArdourCanvas::Container *parent, RouteTimeAxisView &tv, std::shared_ptr<AudioRegion> r, double spu, uint32_t basic_color)
 	: RegionView (parent, tv, r, spu, basic_color)
-	, sync_mark(0)
 	, fade_in_handle(0)
 	, fade_out_handle(0)
 	, fade_in_trim_handle(0)
@@ -125,14 +128,15 @@ AudioRegionView::AudioRegionView (ArdourCanvas::Container *parent, RouteTimeAxis
 	, _amplitude_above_axis(1.0)
 	, trim_fade_in_drag_active(false)
 	, trim_fade_out_drag_active(false)
+	, _rfx_id (0)
+	, _rdx_param (UINT32_MAX)
+	, _ignore_line_change (false)
 {
-	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &AudioRegionView::parameter_changed));
 }
 
-AudioRegionView::AudioRegionView (ArdourCanvas::Container *parent, RouteTimeAxisView &tv, boost::shared_ptr<AudioRegion> r, double spu,
+AudioRegionView::AudioRegionView (ArdourCanvas::Container *parent, RouteTimeAxisView &tv, std::shared_ptr<AudioRegion> r, double spu,
 				  uint32_t basic_color, bool recording, TimeAxisViewItem::Visibility visibility)
 	: RegionView (parent, tv, r, spu, basic_color, recording, visibility)
-	, sync_mark(0)
 	, fade_in_handle(0)
 	, fade_out_handle(0)
 	, fade_in_trim_handle(0)
@@ -147,12 +151,14 @@ AudioRegionView::AudioRegionView (ArdourCanvas::Container *parent, RouteTimeAxis
 	, _amplitude_above_axis(1.0)
 	, trim_fade_in_drag_active(false)
 	, trim_fade_out_drag_active(false)
+	, _rfx_id (0)
+	, _rdx_param (UINT32_MAX)
+	, _ignore_line_change (false)
 {
-	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &AudioRegionView::parameter_changed));
 }
 
-AudioRegionView::AudioRegionView (const AudioRegionView& other, boost::shared_ptr<AudioRegion> other_region)
-	: RegionView (other, boost::shared_ptr<Region> (other_region))
+AudioRegionView::AudioRegionView (const AudioRegionView& other, std::shared_ptr<AudioRegion> other_region)
+	: RegionView (other, std::shared_ptr<Region> (other_region))
 	, fade_in_handle(0)
 	, fade_out_handle(0)
 	, fade_in_trim_handle(0)
@@ -167,10 +173,11 @@ AudioRegionView::AudioRegionView (const AudioRegionView& other, boost::shared_pt
 	, _amplitude_above_axis (other._amplitude_above_axis)
 	, trim_fade_in_drag_active(false)
 	, trim_fade_out_drag_active(false)
+	, _rfx_id (0)
+	, _rdx_param (UINT32_MAX)
+	, _ignore_line_change (false)
 {
 	init (true);
-
-	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &AudioRegionView::parameter_changed));
 }
 
 void
@@ -233,12 +240,7 @@ AudioRegionView::init (bool wfd)
 		set_fade_visibility (false);
 	}
 
-	const string line_name = _region->name() + ":gain";
-
-	gain_line.reset (new AudioRegionGainLine (line_name, *this, *group, audio_region()->envelope()));
-
-	update_envelope_visibility ();
-	gain_line->reset ();
+	set_region_gain_line ();
 
 	/* streamview will call set_height() */
 	//set_height (trackview.current_height()); // XXX not correct for Layered mode, but set_height() will fix later.
@@ -278,6 +280,9 @@ AudioRegionView::init (bool wfd)
 
 	setup_waveform_visibility ();
 
+	get_canvas_frame()->set_data ("linemerger", (LineMerger*) this);
+	_fx_line->canvas_group().raise_to_top ();
+
 	/* XXX sync mark drag? */
 }
 
@@ -299,11 +304,11 @@ AudioRegionView::~AudioRegionView ()
 	/* all waveviews etc will be destroyed when the group is destroyed */
 }
 
-boost::shared_ptr<ARDOUR::AudioRegion>
+std::shared_ptr<ARDOUR::AudioRegion>
 AudioRegionView::audio_region() const
 {
 	// "Guaranteed" to succeed...
-	return boost::dynamic_pointer_cast<AudioRegion>(_region);
+	return std::dynamic_pointer_cast<AudioRegion>(_region);
 }
 
 void
@@ -374,6 +379,30 @@ AudioRegionView::fade_out_active_changed ()
 	}
 }
 
+uint32_t
+AudioRegionView::get_fill_color () const
+{
+	Gtkmm2ext::Color c;
+	const bool opaque = _region->opaque() || trackview.layer_display () == Stacked;
+
+	if (_selected) {
+		c = UIConfiguration::instance().color ("selected region base");
+	} else if (_recregion) {
+		return UIConfiguration::instance().color ("recording rect");
+	} else if (!UIConfiguration::instance().get_color_regions_using_track_color()) {
+		c = UIConfiguration::instance().color (fill_color_name);
+	} else {
+		c = fill_color;
+	}
+
+	if (opaque && ( !_dragging && !_region->muted () )) {
+		return c;
+	} else if (_dragging) {
+		return UIConfiguration::instance().color_mod (c, "dragging region");
+	} else {
+		return Gtkmm2ext::HSV(c).mod (UIConfiguration::instance().modifier ("transparent region base")).color ();
+	}
+}
 
 void
 AudioRegionView::region_scale_amplitude_changed ()
@@ -393,15 +422,11 @@ AudioRegionView::region_renamed ()
 		str = string ("*") + str;
 	}
 
-	if (_region->muted()) {
-		str = string ("!") + str;
-	}
-
-
-	boost::shared_ptr<AudioRegion> ar (audio_region());
-	if (ar->scale_amplitude() != 1.0) {
+	std::shared_ptr<AudioRegion> ar (audio_region());
+	const gain_t scale_amplitude = ar->scale_amplitude();
+	if (scale_amplitude != 1.0) {
 		char tmp[32];
-		snprintf (tmp, 32, " (%.1fdB)", accurate_coefficient_to_dB (ar->scale_amplitude()));
+		snprintf (tmp, 32, " (%.1fdB%s)", accurate_coefficient_to_dB (fabsf (scale_amplitude)), scale_amplitude < 0 ? " Ø" : "");
 		str += tmp;
 	}
 
@@ -483,7 +508,7 @@ AudioRegionView::reset_width_dependent_items (double pixel_width)
 		return;
 	}
 
-	samplepos_t position = _region->position();
+	samplepos_t position = _region->position_sample();
 
 	AnalysisFeatureList::const_iterator i;
 	list<std::pair<samplepos_t, ArdourCanvas::Line*> >::iterator l;
@@ -538,6 +563,14 @@ AudioRegionView::setup_fade_handle_positions()
 void
 AudioRegionView::set_height (gdouble height)
 {
+	uint32_t gap = UIConfiguration::instance().get_vertical_region_gap ();
+	float ui_scale = UIConfiguration::instance().get_ui_scale ();
+	if (gap > 0 && ui_scale > 0) {
+		gap = ceil (gap * ui_scale);
+	}
+
+	height = std::max (3.0, height - gap);
+
 	if (height == _height) {
 		return;
 	}
@@ -545,42 +578,52 @@ AudioRegionView::set_height (gdouble height)
 	RegionView::set_height (height);
 	pending_peak_data->set_y1 (height);
 
-	uint32_t wcnt = waves.size();
+	RouteTimeAxisView& atv (*(dynamic_cast<RouteTimeAxisView*>(&trackview))); // ick
+	uint32_t nchans = atv.track()->n_channels().n_audio();
 
-	if (wcnt > 0) {
+	if (!tmp_waves.empty () || !waves.empty ()) {
 
 		gdouble ht;
 
 		if (!UIConfiguration::instance().get_show_name_highlight() || (height < NAME_HIGHLIGHT_THRESH)) {
-			ht = height / (double) wcnt;
+			ht = height / (double) nchans;
 		} else {
-			ht = (height - NAME_HIGHLIGHT_SIZE) / (double) wcnt;
+			ht = (height - NAME_HIGHLIGHT_SIZE) / (double) nchans;
 		}
 
+		uint32_t wcnt = waves.size();
 		for (uint32_t n = 0; n < wcnt; ++n) {
-
 			gdouble yoff = floor (ht * n);
-
 			waves[n]->set_height (ht);
 			waves[n]->set_y_position (yoff);
 		}
+
+		wcnt = tmp_waves.size();
+		for (uint32_t n = 0; n < wcnt; ++n) {
+			if (!tmp_waves[n]) {
+				continue;
+			}
+			gdouble yoff = floor (ht * n);
+			tmp_waves[n]->set_height (ht);
+			tmp_waves[n]->set_y_position (yoff);
+		}
 	}
 
-	if (gain_line) {
+	if (_fx_line) {
 
-		if ((height/wcnt) < NAME_HIGHLIGHT_THRESH) {
-			gain_line->hide ();
+		if ((height / nchans) < NAME_HIGHLIGHT_THRESH) {
+			_fx_line->hide ();
 		} else {
 			update_envelope_visibility ();
 		}
 
-		gain_line->set_height ((uint32_t) rint (height - NAME_HIGHLIGHT_SIZE) - 2);
+		_fx_line->set_height ((uint32_t) rint (height - NAME_HIGHLIGHT_SIZE) - 2);
 	}
 
 	reset_fade_shapes ();
 
 	/* Update heights for any feature lines */
-	samplepos_t position = _region->position();
+	samplepos_t position = _region->position_sample();
 	list<std::pair<samplepos_t, ArdourCanvas::Line*> >::iterator l;
 	double y1;
 	if (_height >= NAME_HIGHLIGHT_THRESH) {
@@ -611,11 +654,11 @@ AudioRegionView::reset_fade_shapes ()
 void
 AudioRegionView::reset_fade_in_shape ()
 {
-	reset_fade_in_shape_width (audio_region(), (samplecnt_t) audio_region()->fade_in()->back()->when);
+	reset_fade_in_shape_width (audio_region(), audio_region()->fade_in()->back()->when.samples());
 }
 
 void
-AudioRegionView::reset_fade_in_shape_width (boost::shared_ptr<AudioRegion> ar, samplecnt_t width, bool drag_active)
+AudioRegionView::reset_fade_in_shape_width (std::shared_ptr<AudioRegion> ar, samplecnt_t width, bool drag_active)
 {
 	trim_fade_in_drag_active = drag_active;
 	if (fade_in_handle == 0) {
@@ -627,7 +670,7 @@ AudioRegionView::reset_fade_in_shape_width (boost::shared_ptr<AudioRegion> ar, s
 	width = std::max ((samplecnt_t) 64, width);
 
 	/* round here to prevent little visual glitches with sub-pixel placement */
-	double const pwidth = floor (width / samples_per_pixel);
+	double const pwidth  = (double) width /  samples_per_pixel;
 	double const handle_left = pwidth;
 
 	/* Put the fade in handle so that its left side is at the end-of-fade line */
@@ -644,7 +687,7 @@ AudioRegionView::reset_fade_in_shape_width (boost::shared_ptr<AudioRegion> ar, s
 		entered();
 	}
 
-	if (pwidth < 5) {
+	if (pwidth < 5.f) {
 		hide_start_xfade();
 		return;
 	}
@@ -666,14 +709,15 @@ AudioRegionView::reset_fade_in_shape_width (boost::shared_ptr<AudioRegion> ar, s
 
 	Points points;
 	Points::size_type pi;
-	boost::shared_ptr<const Evoral::ControlList> list (audio_region()->fade_in());
+	std::shared_ptr<const Evoral::ControlList> list (audio_region()->fade_in());
 	Evoral::ControlList::const_iterator x;
-	double length = list->length();
+	samplecnt_t length = list->length().samples();
 
 	points.assign (list->size(), Duple());
 
 	for (x = list->begin(), pi = 0; x != list->end(); ++x, ++pi) {
-		points[pi].x = (pwidth * ((*x)->when/length));
+		const double p = (*x)->when.samples();
+		points[pi].x = (p * pwidth) / length;
 		points[pi].y = effective_height - ((*x)->value * (effective_height - 1.));
 	}
 
@@ -682,19 +726,19 @@ AudioRegionView::reset_fade_in_shape_width (boost::shared_ptr<AudioRegion> ar, s
 	redraw_start_xfade_to (ar, width, points, effective_height, handle_left);
 
 	/* ensure trim handle stays on top */
-	if (sample_handle_start) {
-		sample_handle_start->raise_to_top();
+	if (frame_handle_start) {
+		frame_handle_start->raise_to_top();
 	}
 }
 
 void
 AudioRegionView::reset_fade_out_shape ()
 {
-	reset_fade_out_shape_width (audio_region(), (samplecnt_t) audio_region()->fade_out()->back()->when);
+	reset_fade_out_shape_width (audio_region(), audio_region()->fade_out()->back()->when.samples());
 }
 
 void
-AudioRegionView::reset_fade_out_shape_width (boost::shared_ptr<AudioRegion> ar, samplecnt_t width, bool drag_active)
+AudioRegionView::reset_fade_out_shape_width (std::shared_ptr<AudioRegion> ar, samplecnt_t width, bool drag_active)
 {
 	trim_fade_out_drag_active = drag_active;
 	if (fade_out_handle == 0) {
@@ -708,12 +752,12 @@ AudioRegionView::reset_fade_out_shape_width (boost::shared_ptr<AudioRegion> ar, 
 
 	double const pwidth = floor(trackview.editor().sample_to_pixel (width));
 
-	/* the right edge should be right on the region sample is the pixel
+	/* the right edge should be right on the region frame is the pixel
 	 * width is zero. Hence the additional + 1.0 at the end.
 	 */
 
-	double const handle_right = rint(trackview.editor().sample_to_pixel (_region->length()) - pwidth);
-	double const trim_handle_right = rint(trackview.editor().sample_to_pixel (_region->length()));
+	double const handle_right = rint(trackview.editor().sample_to_pixel (_region->length_samples()) - pwidth);
+	double const trim_handle_right = rint(trackview.editor().sample_to_pixel (_region->length_samples()));
 
 	/* Put the fade out handle so that its right side is at the end-of-fade line;
 	 */
@@ -752,14 +796,15 @@ AudioRegionView::reset_fade_out_shape_width (boost::shared_ptr<AudioRegion> ar, 
 
 	Points points;
 	Points::size_type pi;
-	boost::shared_ptr<const Evoral::ControlList> list (audio_region()->fade_out());
+	std::shared_ptr<const Evoral::ControlList> list (audio_region()->fade_out());
 	Evoral::ControlList::const_iterator x;
-	double length = list->length();
+	double length = list->length().samples();
 
 	points.assign (list->size(), Duple());
 
 	for (x = list->begin(), pi = 0; x != list->end(); ++x, ++pi) {
-		points[pi].x = _pixel_width - pwidth + (pwidth * ((*x)->when/length));
+		const double p = (*x)->when.samples();
+		points[pi].x = _pixel_width - pwidth + (pwidth * (p/length));
 		points[pi].y = effective_height - ((*x)->value * (effective_height - 1.));
 	}
 
@@ -768,39 +813,39 @@ AudioRegionView::reset_fade_out_shape_width (boost::shared_ptr<AudioRegion> ar, 
 	redraw_end_xfade_to (ar, width, points, effective_height, handle_right, pwidth);
 
 	/* ensure trim handle stays on top */
-	if (sample_handle_end) {
-		sample_handle_end->raise_to_top();
+	if (frame_handle_end) {
+		frame_handle_end->raise_to_top();
 	}
 }
 
 samplepos_t
 AudioRegionView::get_fade_in_shape_width ()
 {
-	return audio_region()->fade_in()->back()->when;
+	return audio_region()->fade_in()->back()->when.samples();
 }
 
 samplepos_t
 AudioRegionView::get_fade_out_shape_width ()
 {
-	return audio_region()->fade_out()->back()->when;
+	return audio_region()->fade_out()->back()->when.samples();
 }
 
 
 void
 AudioRegionView::redraw_start_xfade ()
 {
-	boost::shared_ptr<AudioRegion> ar (audio_region());
+	std::shared_ptr<AudioRegion> ar (audio_region());
 
 	if (!ar->fade_in() || ar->fade_in()->empty()) {
 		return;
 	}
 
 	show_start_xfade();
-	reset_fade_in_shape_width (ar, ar->fade_in()->back()->when);
+	reset_fade_in_shape_width (ar, ar->fade_in()->back()->when.samples());
 }
 
 void
-AudioRegionView::redraw_start_xfade_to (boost::shared_ptr<AudioRegion> ar, samplecnt_t /*width*/, Points& points, double effective_height,
+AudioRegionView::redraw_start_xfade_to (std::shared_ptr<AudioRegion> ar, samplecnt_t /*width*/, Points& points, double effective_height,
 					double rect_width)
 {
 	if (points.size() < 2) {
@@ -828,7 +873,7 @@ AudioRegionView::redraw_start_xfade_to (boost::shared_ptr<AudioRegion> ar, sampl
 
 	/* fade out line */
 
-	boost::shared_ptr<AutomationList> inverse = ar->inverse_fade_in ();
+	std::shared_ptr<AutomationList> inverse = ar->inverse_fade_in ();
 	Points ipoints;
 	Points::size_type npoints;
 
@@ -860,11 +905,12 @@ AudioRegionView::redraw_start_xfade_to (boost::shared_ptr<AudioRegion> ar, sampl
 
 		Evoral::ControlList::const_iterator x;
 		Points::size_type pi;
-		double length = inverse->length();
+		const double length = inverse->length().samples();
 
 		for (x = inverse->begin(), pi = 0; x != inverse->end(); ++x, ++pi) {
 			ArdourCanvas::Duple& p (ipoints[pi]);
-			p.x = (rect_width * ((*x)->when/length));
+			double pos = (*x)->when.samples();
+			p.x = (rect_width * (pos/length));
 			p.y = effective_height - ((*x)->value * (effective_height));
 		}
 	}
@@ -877,7 +923,7 @@ AudioRegionView::redraw_start_xfade_to (boost::shared_ptr<AudioRegion> ar, sampl
 void
 AudioRegionView::redraw_end_xfade ()
 {
-	boost::shared_ptr<AudioRegion> ar (audio_region());
+	std::shared_ptr<AudioRegion> ar (audio_region());
 
 	if (!ar->fade_out() || ar->fade_out()->empty()) {
 		return;
@@ -885,11 +931,11 @@ AudioRegionView::redraw_end_xfade ()
 
 	show_end_xfade();
 
-	reset_fade_out_shape_width (ar, ar->fade_out()->back()->when);
+	reset_fade_out_shape_width (ar, ar->fade_out()->back()->when.samples());
 }
 
 void
-AudioRegionView::redraw_end_xfade_to (boost::shared_ptr<AudioRegion> ar, samplecnt_t width, Points& points, double effective_height,
+AudioRegionView::redraw_end_xfade_to (std::shared_ptr<AudioRegion> ar, samplecnt_t width, Points& points, double effective_height,
                                       double rect_edge, double rect_width)
 {
 	if (points.size() < 2) {
@@ -918,7 +964,7 @@ AudioRegionView::redraw_end_xfade_to (boost::shared_ptr<AudioRegion> ar, samplec
 
 	/* fade in line */
 
-	boost::shared_ptr<AutomationList> inverse = ar->inverse_fade_out ();
+	std::shared_ptr<AutomationList> inverse = ar->inverse_fade_out ();
 	Points ipoints;
 	Points::size_type npoints;
 
@@ -949,15 +995,16 @@ AudioRegionView::redraw_end_xfade_to (boost::shared_ptr<AudioRegion> ar, samplec
 		npoints = inverse->size();
 		ipoints.assign (npoints, Duple());
 
-		const double rend = trackview.editor().sample_to_pixel (_region->length() - width);
+		const double rend = trackview.editor().sample_to_pixel (_region->length_samples() - width);
 
 		Evoral::ControlList::const_iterator x;
 		Points::size_type pi;
-		double length = inverse->length();
+		const double length = inverse->length().samples();
 
 		for (x = inverse->begin(), pi = 0; x != inverse->end(); ++x, ++pi) {
 			ArdourCanvas::Duple& p (ipoints[pi]);
-			p.x = (rect_width * ((*x)->when/length)) + rend;
+			const double pos = (*x)->when.samples();
+			p.x = (rect_width * (pos/length)) + rend;
 			p.y = effective_height - ((*x)->value * (effective_height));
 		}
 	}
@@ -1037,8 +1084,8 @@ AudioRegionView::set_samples_per_pixel (gdouble fpp)
 		}
 	}
 
-	if (gain_line) {
-		gain_line->reset ();
+	if (_fx_line) {
+		_fx_line->reset ();
 	}
 
 	reset_fade_shapes ();
@@ -1057,12 +1104,7 @@ AudioRegionView::set_colors ()
 {
 	RegionView::set_colors();
 
-	if (gain_line) {
-		gain_line->set_line_color (audio_region()->envelope_active() ?
-					   UIConfiguration::instance().color ("gain line") :
-					   UIConfiguration::instance().color_mod ("gain line inactive", "gain line inactive"));
-	}
-
+	set_fx_line_colors ();
 	set_waveform_colors ();
 
 	if (start_xfade_curve) {
@@ -1104,8 +1146,8 @@ AudioRegionView::setup_waveform_visibility ()
 void
 AudioRegionView::temporarily_hide_envelope ()
 {
-	if (gain_line) {
-		gain_line->hide ();
+	if (_fx_line) {
+		_fx_line->hide ();
 	}
 }
 
@@ -1116,20 +1158,154 @@ AudioRegionView::unhide_envelope ()
 }
 
 void
+AudioRegionView::set_region_gain_line ()
+{
+	if (_ignore_line_change) {
+		return;
+	}
+	const string line_name = _region->name() + ":gain";
+	_fx_line.reset (new AudioRegionGainLine (line_name, *this, *group, audio_region()->envelope()));
+	_fx_line->set_height ((uint32_t) rint (height() - NAME_HIGHLIGHT_SIZE) - 2);
+	_fx_line->reset ();
+	_region_fx_connection.disconnect ();
+	bool changed = _rfx_id != PBD::ID (0) || _rdx_param != UINT32_MAX;
+	_rfx_id    = PBD::ID (0);
+	_rdx_param = UINT32_MAX;
+
+	envelope_active_changed ();
+	if (changed) {
+		region_line_changed (); /* EMIT SIGNAL */
+	}
+}
+
+void
+AudioRegionView::set_region_fx_line (std::shared_ptr<AutomationControl> ac, std::shared_ptr<RegionFxPlugin> rfx, uint32_t param_id)
+{
+	const string line_name = _region->name () + ":" + rfx->describe_parameter (Evoral::Parameter (PluginAutomation, 0, param_id));
+	_fx_line.reset (new RegionFxLine (line_name, *this, *group, ac));
+	_fx_line->set_height ((uint32_t) rint (height() - NAME_HIGHLIGHT_SIZE) - 2);
+	_fx_line->reset ();
+
+	rfx->DropReferences.connect (_region_fx_connection, invalidator (*this), std::bind (&AudioRegionView::set_region_gain_line, this), gui_context ());
+
+	bool changed = _rfx_id != rfx->id () || _rdx_param != param_id;
+	_rfx_id    = rfx->id ();
+	_rdx_param = param_id;
+
+	envelope_active_changed ();
+	if (changed) {
+		region_line_changed (); /* EMIT SIGNAL */
+	}
+}
+
+bool
+AudioRegionView::set_region_fx_line (uint32_t plugin_id, uint32_t param_id)
+{
+	if (_ignore_line_change) {
+		return false;
+	}
+	std::shared_ptr<RegionFxPlugin> rfx = _region->nth_plugin (plugin_id);
+	if (rfx) {
+		std::shared_ptr<Evoral::Control> c = rfx->control (Evoral::Parameter (PluginAutomation, 0, param_id));
+		std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl> (c);
+		if (ac) {
+			set_region_fx_line (ac, rfx, param_id);
+			return true;
+		}
+	}
+	return false;
+}
+
+bool
+AudioRegionView::set_region_fx_line (std::weak_ptr<PBD::Controllable> wac)
+{
+	if (_ignore_line_change) {
+		return false;
+	}
+	std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl> (wac.lock ());
+	if (!ac) {
+		return false;
+	}
+	bool found = false;
+	_region->foreach_plugin ([this, ac, &found](std::weak_ptr<RegionFxPlugin> wfx)
+	{
+		std::shared_ptr<RegionFxPlugin> rfx (wfx.lock ());
+		if (!rfx || found) {
+			return;
+		}
+		std::shared_ptr<Plugin> plugin = rfx->plugin ();
+		for (size_t i = 0; i < plugin->parameter_count (); ++i) {
+			if (!plugin->parameter_is_control (i) || !plugin->parameter_is_input (i)) {
+				continue;
+			}
+			const Evoral::Parameter param (PluginAutomation, 0, i);
+			if (ac == std::dynamic_pointer_cast<ARDOUR::AutomationControl> (rfx->control (param))) {
+				set_region_fx_line (ac, rfx, i);
+				found = true;
+				break;
+			}
+		}
+	});
+	return found;
+}
+
+bool
+AudioRegionView::get_region_fx_line (PBD::ID& id, uint32_t& param_id)
+{
+	id       = _rfx_id;
+	param_id = _rdx_param;
+	return _rdx_param != UINT32_MAX && _rfx_id != 0;
+}
+
+bool
+AudioRegionView::paste (Temporal::timepos_t const& pos, const Selection& selection, PasteContext& ctx)
+{
+	if (!_fx_line || selection.lines.size() != 1) {
+		return false;
+	}
+	std::shared_ptr<AutomationList> alist (_fx_line->the_list());
+
+	AutomationSelection::const_iterator p = selection.lines.begin ();
+
+	Temporal::timecnt_t len = (*p)->length();
+	Temporal::timepos_t tpos (pos);
+
+	unsigned paste_count = ctx.count;
+
+	switch (alist->time_domain()) {
+		case Temporal::BeatTime:
+			tpos += trackview.editor().get_paste_offset (pos, paste_count > 0 ? 1 : 0, len);
+			break;
+		case Temporal::AudioTime:
+			tpos += trackview.editor().get_paste_offset (pos, paste_count, len);
+			break;
+	}
+
+	XMLNode &before = alist->get_state();
+	Temporal::timepos_t model_pos (_region->position().distance (tpos));
+	alist->paste (**p, model_pos);
+	timepos_t rlen ((samplepos_t)_region->length().samples());
+	alist->truncate_end (rlen);
+	trackview.session()->add_command (new MementoCommand<AutomationList>(*alist.get(), &before, &alist->get_state()));
+
+	return true;
+}
+
+void
 AudioRegionView::update_envelope_visibility ()
 {
-	if (!gain_line) {
+	if (!_fx_line) {
 		return;
 	}
 
 	if (trackview.editor().current_mouse_mode() == Editing::MouseDraw || trackview.editor().current_mouse_mode() == Editing::MouseContent ) {
-		gain_line->set_visibility (AutomationLine::VisibleAspects(AutomationLine::ControlPoints|AutomationLine::Line));
-		gain_line->canvas_group().raise_to_top ();
+		_fx_line->set_visibility (EditorAutomationLine::VisibleAspects(EditorAutomationLine::ControlPoints|EditorAutomationLine::Line));
+		_fx_line->canvas_group().raise_to_top ();
 	} else if (UIConfiguration::instance().get_show_region_gain() || trackview.editor().current_mouse_mode() == Editing::MouseRange ) {
-		gain_line->set_visibility (AutomationLine::VisibleAspects(AutomationLine::Line));
-		gain_line->canvas_group().raise_to_top ();
+		_fx_line->set_visibility (EditorAutomationLine::VisibleAspects(EditorAutomationLine::Line));
+		_fx_line->canvas_group().raise_to_top ();
 	} else {
-		gain_line->set_visibility (AutomationLine::VisibleAspects(0));
+		_fx_line->set_visibility (EditorAutomationLine::VisibleAspects(0));
 	}
 }
 
@@ -1143,9 +1319,14 @@ AudioRegionView::delete_waves ()
 
 	for (vector<ArdourWaveView::WaveView*>::iterator w = waves.begin(); w != waves.end(); ++w) {
 		group->remove(*w);
+		delete *w;
 	}
 	waves.clear();
-	tmp_waves.clear();
+
+	while (!tmp_waves.empty ()) {
+		delete tmp_waves.back ();
+		tmp_waves.pop_back ();
+	}
 	pending_peak_data->show ();
 }
 
@@ -1188,18 +1369,18 @@ AudioRegionView::create_waves ()
 		// cerr << "\tchannel " << n << endl;
 
 		if (wait_for_data) {
-			if (audio_region()->audio_source(n)->peaks_ready (boost::bind (&AudioRegionView::peaks_ready_handler, this, n), &_data_ready_connections[n], gui_context())) {
-				// cerr << "\tData is ready\n";
+			if (audio_region()->audio_source(n)->peaks_ready (std::bind (&AudioRegionView::peaks_ready_handler, this, n), &_data_ready_connections[n], gui_context())) {
+				// cerr << "\tData is ready for channel " << n << "\n";
 				create_one_wave (n, true);
 			} else {
-				// cerr << "\tdata is not ready\n";
+				// cerr << "\tdata is not ready for channel " << n << "\n";
 				// we'll get a PeaksReady signal from the source in the future
 				// and will call create_one_wave(n) then.
 				pending_peak_data->show ();
 			}
 
 		} else {
-			// cerr << "\tdon't delay, display today!\n";
+			// cerr << "\tdon't delay, display channel " << n << " today!\n";
 			create_one_wave (n, true);
 		}
 
@@ -1233,10 +1414,7 @@ AudioRegionView::create_one_wave (uint32_t which, bool /*direct*/)
 		ht = (_height - NAME_HIGHLIGHT_SIZE) / (double) nchans;
 	}
 
-	/* first waveview starts at 1.0, not 0.0 since that will overlap the
-	 * sample
-	 */
-
+	/* first waveview starts at 1.0, not 0.0 since that will overlap the frame */
 	gdouble yoff = which * ht;
 
 	ArdourWaveView::WaveView *wave = new ArdourWaveView::WaveView (group, audio_region ());
@@ -1290,12 +1468,16 @@ AudioRegionView::create_one_wave (uint32_t which, bool /*direct*/)
 		}
 	}
 
-	if (n == nwaves && waves.empty()) {
+	if (n == nwaves) {
 		/* all waves are ready */
 		tmp_waves.resize(nwaves);
 
-		waves = tmp_waves;
-		tmp_waves.clear ();
+		waves.swap(tmp_waves);
+
+		while (!tmp_waves.empty ()) {
+			delete tmp_waves.back ();
+			tmp_waves.pop_back ();
+		}
 
 		/* indicate peak-completed */
 		pending_peak_data->hide ();
@@ -1303,26 +1485,28 @@ AudioRegionView::create_one_wave (uint32_t which, bool /*direct*/)
 		/* Restore stacked coverage */
 		LayerDisplay layer_display;
 		if (trackview.get_gui_property ("layer-display", layer_display)) {
-			update_coverage_samples (layer_display);
+			update_coverage_frame (layer_display);
 	  }
 	}
 
 	/* channel wave created, don't hook into peaks ready anymore */
 	delete _data_ready_connections[which];
 	_data_ready_connections[which] = 0;
+
+	maybe_raise_cue_markers ();
 }
 
 void
 AudioRegionView::peaks_ready_handler (uint32_t which)
 {
-	Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), boost::bind (&AudioRegionView::create_one_wave, this, which, false));
+	Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), std::bind (&AudioRegionView::create_one_wave, this, which, false));
 	// cerr << "AudioRegionView::peaks_ready_handler() called on " << which << " this: " << this << endl;
 }
 
 void
 AudioRegionView::add_gain_point_event (ArdourCanvas::Item *item, GdkEvent *ev, bool with_guard_points)
 {
-	if (!gain_line) {
+	if (!_fx_line) {
 		return;
 	}
 
@@ -1334,79 +1518,60 @@ AudioRegionView::add_gain_point_event (ArdourCanvas::Item *item, GdkEvent *ev, b
 
 	samplecnt_t const sample_within_region = (samplecnt_t) floor (mx * samples_per_pixel);
 
-	if (!gain_line->control_points_adjacent (sample_within_region, before_p, after_p)) {
-		/* no adjacent points */
-		return;
+	double y = my;
+
+	if (_fx_line->control_points_adjacent (sample_within_region, before_p, after_p)) {
+		/* y is in item frame */
+		double const bx = _fx_line->nth (before_p)->get_x();
+		double const ax = _fx_line->nth (after_p)->get_x();
+		double const click_ratio = (ax - mx) / (ax - bx);
+
+		y = ((_fx_line->nth (before_p)->get_y() * click_ratio) + (_fx_line->nth (after_p)->get_y() * (1 - click_ratio)));
 	}
-
-	/*y is in item sample */
-	double const bx = gain_line->nth (before_p)->get_x();
-	double const ax = gain_line->nth (after_p)->get_x();
-	double const click_ratio = (ax - mx) / (ax - bx);
-
-	double y = ((gain_line->nth (before_p)->get_y() * click_ratio) + (gain_line->nth (after_p)->get_y() * (1 - click_ratio)));
 
 	/* don't create points that can't be seen */
 
 	update_envelope_visibility ();
-	samplepos_t rpos = region ()->position ();
-	MusicSample snap_pos (trackview.editor().pixel_to_sample (mx) + rpos, 0);
+	samplepos_t rpos = region ()->position_sample();
+	timepos_t snap_pos = timepos_t (trackview.editor().pixel_to_sample (mx) + rpos);
 	trackview.editor ().snap_to_with_modifier (snap_pos, ev);
-	samplepos_t fx = snap_pos.sample - rpos;
+	samplepos_t fx = snap_pos.samples() - rpos;
 
-	if (fx > _region->length()) {
+	if (fx > _region->length_samples()) {
 		return;
 	}
 
 	/* compute vertical fractional position */
 
-	y = 1.0 - (y / (gain_line->height()));
+	y = 1.0 - (y / (_fx_line->height()));
 
 	/* map using gain line */
 
-	gain_line->view_to_model_coord (mx, y);
+	_fx_line->view_to_model_coord_y (y);
 
 	/* XXX STATEFUL: can't convert to stateful diff until we
 	   can represent automation data with it.
 	*/
 
-	XMLNode &before = audio_region()->envelope()->get_state();
-	MementoCommand<AudioRegion>* region_memento = 0;
-
-	if (!audio_region()->envelope_active()) {
-		XMLNode &region_before = audio_region()->get_state();
-		audio_region()->set_envelope_active(true);
-		XMLNode &region_after = audio_region()->get_state();
-		region_memento = new MementoCommand<AudioRegion>(*(audio_region().get()), &region_before, &region_after);
-	}
-
-	if (audio_region()->envelope()->editor_add (fx, y, with_guard_points)) {
-		XMLNode &after = audio_region()->envelope()->get_state();
+	XMLNode &before = _fx_line->the_list()->get_state();
+	if (_fx_line->the_list()->editor_add (timepos_t (fx), y, with_guard_points)) {
+		XMLNode &after = _fx_line->the_list()->get_state();
 		std::list<Selectable*> results;
 
 		trackview.editor().begin_reversible_command (_("add gain control point"));
 
-		if (region_memento) {
-			trackview.session()->add_command (region_memento);
-		}
+		_fx_line->enable_automation ();
 
-		trackview.session()->add_command (new MementoCommand<AutomationList>(*audio_region()->envelope().get(), &before, &after));
+		trackview.session()->add_command (new MementoCommand<AutomationList>(*_fx_line->the_list(), &before, &after));
 
-		gain_line->get_selectables (fx + region ()->position (), fx + region ()->position (), 0.0, 1.0, results);
+		_fx_line->get_selectables (region ()->position () + timecnt_t (fx), region ()->position () + timecnt_t (fx), 0.0, 1.0, results);
 		trackview.editor ().get_selection ().set (results);
 
 		trackview.editor ().commit_reversible_command ();
 		trackview.session ()->set_dirty ();
 	} else {
-		delete region_memento;
+		delete &before;
 	}
-}
-
-void
-AudioRegionView::remove_gain_point_event (ArdourCanvas::Item *item, GdkEvent* /*ev*/)
-{
-	ControlPoint *cp = reinterpret_cast<ControlPoint *> (item->get_data ("control_point"));
-	audio_region()->envelope()->erase (cp->model());
 }
 
 GhostRegion*
@@ -1418,7 +1583,7 @@ AudioRegionView::add_ghost (TimeAxisView& tv)
 		return 0;
 	}
 
-	double unit_position = _region->position () / samples_per_pixel;
+	double unit_position = _region->position_sample () / samples_per_pixel;
 	AudioGhostRegion* ghost = new AudioGhostRegion (*this, tv, trackview, unit_position);
 	uint32_t nchans;
 
@@ -1441,7 +1606,7 @@ AudioRegionView::add_ghost (TimeAxisView& tv)
 	}
 
 	ghost->set_height ();
-	ghost->set_duration (_region->length() / samples_per_pixel);
+	ghost->set_duration (_region->length_samples() / samples_per_pixel);
 	ghost->set_colors();
 	ghosts.push_back (ghost);
 
@@ -1472,7 +1637,7 @@ AudioRegionView::entered ()
 			fade_out_handle->raise_to_top ();
 		}
 		if (fade_in_trim_handle) {
-			boost::shared_ptr<AudioRegion> ar (audio_region());
+			std::shared_ptr<AudioRegion> ar (audio_region());
 			if (!ar->locked() && (ar->fade_in()->back()->when > 64 || (ar->can_trim() & Trimmable::FrontTrimEarlier))) {
 				fade_in_trim_handle->show ();
 				fade_in_trim_handle->raise_to_top ();
@@ -1481,7 +1646,7 @@ AudioRegionView::entered ()
 			}
 		}
 		if (fade_out_trim_handle) {
-			boost::shared_ptr<AudioRegion> ar (audio_region());
+			std::shared_ptr<AudioRegion> ar (audio_region());
 			if (!ar->locked() && (ar->fade_out()->back()->when > 64 || (ar->can_trim() & Trimmable::EndTrimLater))) {
 				fade_out_trim_handle->show ();
 				fade_out_trim_handle->raise_to_top ();
@@ -1502,12 +1667,8 @@ AudioRegionView::entered ()
 void
 AudioRegionView::exited ()
 {
-	trackview.editor().set_current_trimmable (boost::shared_ptr<Trimmable>());
-	trackview.editor().set_current_movable (boost::shared_ptr<Movable>());
-
-//	if (gain_line) {
-//		gain_line->remove_visibility (AutomationLine::ControlPoints);
-//	}
+	trackview.editor().set_current_trimmable (std::shared_ptr<Trimmable>());
+	trackview.editor().set_current_movable (std::shared_ptr<Movable>());
 
 	if (fade_in_handle)       { fade_in_handle->hide(); }
 	if (fade_out_handle)      { fade_out_handle->hide(); }
@@ -1520,12 +1681,8 @@ AudioRegionView::exited ()
 void
 AudioRegionView::envelope_active_changed ()
 {
-	if (gain_line) {
-		gain_line->set_line_color (audio_region()->envelope_active() ?
-					   UIConfiguration::instance().color ("gain line") :
-					   UIConfiguration::instance().color_mod ("gain line inactive", "gain line inactive"));
-		update_envelope_visibility ();
-	}
+	set_fx_line_colors ();
+	update_envelope_visibility ();
 }
 
 void
@@ -1544,6 +1701,22 @@ AudioRegionView::color_handler ()
 }
 
 void
+AudioRegionView::set_fx_line_colors ()
+{
+	if (!_fx_line) {
+		return;
+	}
+
+	if (_rdx_param != UINT32_MAX && _rfx_id != 0) {
+		_fx_line->set_line_color ("region automation line");
+	} else if (audio_region()->envelope_active()) {
+		_fx_line->set_line_color ("gain line");
+	} else {
+		_fx_line->set_line_color ("gain line inactive", "gain line inactive");
+	}
+}
+
+void
 AudioRegionView::set_waveform_colors ()
 {
 	set_some_waveform_colors (waves);
@@ -1552,34 +1725,37 @@ AudioRegionView::set_waveform_colors ()
 void
 AudioRegionView::set_some_waveform_colors (vector<ArdourWaveView::WaveView*>& waves_to_color)
 {
-	Gtkmm2ext::Color fill;
-	Gtkmm2ext::Color outline;
+	Gtkmm2ext::Color fill = fill_color;
+	Gtkmm2ext::Color outline = fill;
+
 	Gtkmm2ext::Color clip = UIConfiguration::instance().color ("clipped waveform");
 	Gtkmm2ext::Color zero = UIConfiguration::instance().color ("zero line");
 
-	if (_selected) {
-		if (_region->muted()) {
-			/* hide outline with zero alpha */
-			outline = UINT_RGBA_CHANGE_A(UIConfiguration::instance().color ("selected waveform outline"), 0);
-			fill = UINT_RGBA_CHANGE_A(UIConfiguration::instance().color ("selected waveform fill"), MUTED_ALPHA);
-		} else {
-			outline = UIConfiguration::instance().color ("selected waveform outline");
-			fill = UIConfiguration::instance().color ("selected waveform fill");
-		}
-	} else {
-		if (_recregion) {
-			outline = UIConfiguration::instance().color ("recording waveform outline");
-			fill = UIConfiguration::instance().color ("recording waveform fill");
-		} else {
-			if (_region->muted()) {
-				/* hide outline with zero alpha */
-				outline = UINT_RGBA_CHANGE_A(UIConfiguration::instance().color ("waveform outline"), 0);
-				fill = UINT_RGBA_CHANGE_A(UIConfiguration::instance().color ("waveform fill"), MUTED_ALPHA);
-			} else {
-				outline = UIConfiguration::instance().color ("waveform outline");
-				fill = UIConfiguration::instance().color ("waveform fill");
-			}
-		}
+	/* use track/region color to fill wform */
+	fill = fill_color;
+	fill = UINT_INTERPOLATE (fill, UIConfiguration::instance().color ("waveform fill"), 0.5);
+
+	/* set outline */
+	outline = UIConfiguration::instance().color ("waveform outline");
+
+	if (_dragging) {
+		outline = UINT_RGBA_CHANGE_A(outline, 0xC0);
+		fill = UINT_RGBA_CHANGE_A(fill, 0xC0);
+	} else if (_selected) {
+		outline = UINT_RGBA_CHANGE_A(UIConfiguration::instance().color ("selected waveform outline"), 0xC0);
+		fill = UINT_RGBA_CHANGE_A(UIConfiguration::instance().color ("selected waveform fill"), 0xC0);
+	} else if (_region->muted()) {
+		outline = UINT_RGBA_CHANGE_A(outline, 0x40);
+		fill = UINT_RGBA_CHANGE_A (UINT_INTERPOLATE(fill_color, UIConfiguration::instance().color ("covered region"), 0.7), 0x40);
+	} else if (!_region->opaque() && trackview.layer_display () != Stacked) {
+		outline = UINT_RGBA_CHANGE_A(outline, 0x80);
+		fill = UINT_RGBA_CHANGE_A(UIConfiguration::instance().color ("waveform fill"), 0x80);
+	}
+
+	/* recorded region, override to red */
+	if (_recregion) {
+		outline = UIConfiguration::instance().color ("recording waveform outline");
+		fill = UIConfiguration::instance().color ("recording waveform fill");
 	}
 
 	for (vector<ArdourWaveView::WaveView*>::iterator w = waves_to_color.begin(); w != waves_to_color.end(); ++w) {
@@ -1591,13 +1767,13 @@ AudioRegionView::set_some_waveform_colors (vector<ArdourWaveView::WaveView*>& wa
 }
 
 void
-AudioRegionView::set_sample_color ()
+AudioRegionView::set_frame_color ()
 {
-	if (!sample) {
+	if (!frame) {
 		return;
 	}
 
-	RegionView::set_sample_color ();
+	RegionView::set_frame_color ();
 
 	set_waveform_colors ();
 }
@@ -1625,9 +1801,9 @@ AudioRegionView::set_fade_visibility (bool yn)
 }
 
 void
-AudioRegionView::update_coverage_samples (LayerDisplay d)
+AudioRegionView::update_coverage_frame (LayerDisplay d)
 {
-	RegionView::update_coverage_samples (d);
+	RegionView::update_coverage_frame (d);
 
 	if (d == Stacked) {
 		if (fade_in_handle)       { fade_in_handle->raise_to_top (); }
@@ -1638,22 +1814,11 @@ AudioRegionView::update_coverage_samples (LayerDisplay d)
 }
 
 void
-AudioRegionView::show_region_editor ()
-{
-	if (editor == 0) {
-		editor = new AudioRegionEditor (trackview.session(), audio_region());
-	}
-
-	editor->present ();
-	editor->show_all();
-}
-
-void
 AudioRegionView::transients_changed ()
 {
 	AnalysisFeatureList analysis_features;
 	_region->transients (analysis_features);
-	samplepos_t position = _region->position();
+	samplepos_t position = _region->position_sample();
 	samplepos_t first = _region->first_sample();
 	samplepos_t last = _region->last_sample();
 
@@ -1714,7 +1879,7 @@ AudioRegionView::transients_changed ()
 void
 AudioRegionView::update_transient(float /*old_pos*/, float new_pos)
 {
-	/* Find sample at old pos, calulate new sample then update region transients*/
+	/* Find sample at old pos, calculate new sample then update region transients*/
 	list<std::pair<samplepos_t, ArdourCanvas::Line*> >::iterator l;
 
 	for (l = feature_lines.begin(); l != feature_lines.end(); ++l) {
@@ -1724,7 +1889,7 @@ AudioRegionView::update_transient(float /*old_pos*/, float new_pos)
 		float* pos = (float*) (*l).second->get_data ("position");
 
 		if (rint(new_pos) == rint(*pos)) {
-			samplepos_t position = _region->position();
+			samplepos_t position = _region->position_sample();
 			samplepos_t old_sample = (*l).first;
 			samplepos_t new_sample = trackview.editor().pixel_to_sample (new_pos) + position;
 			_region->update_transient (old_sample, new_sample);
@@ -1739,7 +1904,7 @@ AudioRegionView::remove_transient (float pos)
 	/* this is called from Editor::remove_transient () with pos == get_data ("position")
 	 * which is the item's x-coordinate inside the ARV.
 	 *
-	 * Find sample at old pos, calulate new sample then update region transients
+	 * Find sample at old pos, calculate new sample then update region transients
 	 */
 	list<std::pair<samplepos_t, ArdourCanvas::Line*> >::iterator l;
 
@@ -1771,7 +1936,7 @@ AudioRegionView::show_xfades ()
 void
 AudioRegionView::drag_start ()
 {
-	TimeAxisViewItem::drag_start ();
+	RegionView::drag_start ();
 
 	//we used to hide xfades here.  I don't see the point with the new model, but we can re-implement if needed
 }
@@ -1783,7 +1948,7 @@ AudioRegionView::drag_end ()
 	//see comment for drag_start
 
 	if (fade_in_handle && fade_in_handle->visible()) {
-		// lenght of region or fade changed, re-check
+		// length of region or fade changed, re-check
 		// if fade_in_trim_handle or fade_out_trim_handle should
 		// be visible. -- If the fade_in_handle is visible
 		// we have focus and are not in internal edit mode.
@@ -1794,7 +1959,16 @@ AudioRegionView::drag_end ()
 void
 AudioRegionView::parameter_changed (string const & p)
 {
+	RegionView::parameter_changed (p);
 	if (p == "show-waveforms") {
 		setup_waveform_visibility ();
 	}
+}
+
+MergeableLine*
+AudioRegionView::make_merger ()
+{
+	return new MergeableLine (_fx_line, std::shared_ptr<AutomationControl>(),
+	                          [this](timepos_t const& t) { return timepos_t (_region->position().distance (t)); },
+	                          nullptr, nullptr);
 }

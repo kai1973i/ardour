@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2016 Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2018 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef PLATFORM_WINDOWS
 #define random() rand()
@@ -27,7 +27,7 @@
 
 #include "pbd/gstdio_compat.h"
 #include <glibmm/fileutils.h>
-#include <gtkmm/messagedialog.h>
+#include <ytkmm/messagedialog.h>
 
 #include "pbd/basename.h"
 #include "pbd/file_utils.h"
@@ -88,10 +88,8 @@ LuaWindow::instance ()
 }
 
 LuaWindow::LuaWindow ()
-	: Window (Gtk::WINDOW_TOPLEVEL)
-	, VisibilityTracker (*((Gtk::Window*) this))
+	: ArdourWindow ("Lua")
 	, lua (0)
-	, _visible (false)
 	, _menu_scratch (0)
 	, _menu_snippet (0)
 	, _menu_actions (0)
@@ -107,17 +105,7 @@ LuaWindow::LuaWindow ()
 
 	reinit_lua ();
 	update_title ();
-	set_wmclass (X_("ardour_mixer"), PROGRAM_NAME);
-
-#ifdef __APPLE__
-	set_type_hint (Gdk::WINDOW_TYPE_HINT_DIALOG);
-#else
-	if (UIConfiguration::instance().get_all_floating_windows_are_dialogs()) {
-		set_type_hint (Gdk::WINDOW_TYPE_HINT_DIALOG);
-	} else {
-		set_type_hint (Gdk::WINDOW_TYPE_HINT_UTILITY);
-	}
-#endif
+	set_wmclass (X_("ardour_lua"), PROGRAM_NAME);
 
 	script_select.disable_scrolling ();
 
@@ -127,7 +115,6 @@ LuaWindow::LuaWindow ()
 	outtext.set_wrap_mode (Gtk::WRAP_WORD);
 	outtext.set_cursor_visible (false);
 
-	signal_delete_event().connect (sigc::mem_fun (*this, &LuaWindow::hide_window));
 	signal_configure_event().connect (sigc::mem_fun (*ARDOUR_UI::instance(), &ARDOUR_UI::configure_handler));
 
 	_btn_run.signal_clicked.connect (sigc::mem_fun(*this, &LuaWindow::run_script));
@@ -178,7 +165,7 @@ LuaWindow::LuaWindow ()
 	ArdourWidgets::set_tooltip (script_select, _("Select Editor Buffer"));
 
 	setup_buffers ();
-	LuaScripting::instance().scripts_changed.connect (*this, invalidator (*this), boost::bind (&LuaWindow::refresh_scriptlist, this), gui_context());
+	LuaScripting::instance().scripts_changed.connect (*this, invalidator (*this), std::bind (&LuaWindow::refresh_scriptlist, this), gui_context());
 
 	Glib::RefPtr<Gtk::TextBuffer> tb (entry.get_buffer());
 	_script_changed_connection = tb->signal_changed().connect (sigc::mem_fun(*this, &LuaWindow::script_changed));
@@ -189,44 +176,31 @@ LuaWindow::~LuaWindow ()
 	delete lua;
 }
 
-void
-LuaWindow::show_window ()
-{
-	present();
-	_visible = true;
-}
-
-bool
-LuaWindow::hide_window (GdkEventAny *ev)
-{
-	if (!_visible) return 0;
-	_visible = false;
-	return ARDOUR_UI_UTILS::just_hide_it (ev, static_cast<Gtk::Window *>(this));
-}
-
 void LuaWindow::reinit_lua ()
 {
 	ENSURE_GUI_THREAD (*this, &LuaWindow::session_going_away);
 	delete lua;
-	lua = new LuaState();
+	lua = new LuaState (true, UIConfiguration::instance().get_sandbox_all_lua_scripts ());
 	lua->Print.connect (sigc::mem_fun (*this, &LuaWindow::append_text));
-	lua->sandbox (false);
 
 	lua_State* L = lua->getState();
-	LuaInstance::register_classes (L);
+	LuaInstance::register_classes (L, UIConfiguration::instance().get_sandbox_all_lua_scripts ());
 	luabridge::push <PublicEditor *> (L, &PublicEditor::instance());
 	lua_setglobal (L, "Editor");
 }
 
 void LuaWindow::set_session (Session* s)
 {
-	SessionHandlePtr::set_session (s);
-	if (!_session) {
+	if (!s) {
 		return;
 	}
+	/* only call SessionHandlePtr::set_session if session is not NULL,
+	 * otherwise LuaWindow::session_going_away will never be invoked.
+	 */
+	ArdourWindow::set_session (s);
 
 	update_title ();
-	_session->DirtyChanged.connect (_session_connections, invalidator (*this), boost::bind (&LuaWindow::update_title, this), gui_context());
+	_session->DirtyChanged.connect (_session_connections, invalidator (*this), std::bind (&LuaWindow::update_title, this), gui_context());
 
 	lua_State* L = lua->getState();
 	LuaBindings::set_session (L, _session);
@@ -238,7 +212,7 @@ LuaWindow::session_going_away ()
 	ENSURE_GUI_THREAD (*this, &LuaWindow::session_going_away);
 	reinit_lua (); // drop state (all variables, session references)
 
-	SessionHandlePtr::session_going_away ();
+	ArdourWindow::session_going_away ();
 	_session = 0;
 	update_title ();
 
@@ -329,6 +303,7 @@ LuaWindow::run_script ()
 			append_text (string_compose (_("C++ Exception: %1"), "..."));
 		}
 	}
+	lua->collect_garbage ();
 }
 
 void
@@ -355,7 +330,7 @@ LuaWindow::edit_script (const std::string& name, const std::string& script)
 	script_buffers.push_back (ScriptBufferPtr (sb));
 	script_selection_changed (script_buffers.back ());
 	refresh_scriptlist ();
-	show_window ();
+	ARDOUR_UI::instance()->show_lua_window ();
 }
 
 void
@@ -417,7 +392,7 @@ LuaWindow::import_script ()
 	// TODO convert a few URL (eg. pastebin) to raw.
 #if 0
 	char *url = "http://pastebin.com/raw/3UMkZ6nV";
-	char *rv = ArdourCurl::http_get (url, 0);
+	char *rv = ArdourCurl::http_get (url, 0. true);
 	if (rv) {
 		new_script ();
 		Glib::RefPtr<Gtk::TextBuffer> tb (entry.get_buffer());
@@ -495,7 +470,7 @@ LuaWindow::save_script ()
 	// 5) construct filename -- TODO ask user for name, ask to replace file.
 	do {
 		char tme[80];
-		char buf[80];
+		char buf[100];
 		time_t t = time(0);
 		struct tm * timeinfo = localtime (&t);
 		strftime (tme, sizeof(tme), "%s", timeinfo);

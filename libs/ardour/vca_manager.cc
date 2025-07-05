@@ -1,21 +1,21 @@
 /*
-  Copyright (C) 2016 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/error.h"
 #include "pbd/replace_all.h"
@@ -86,6 +86,7 @@ VCAManager::create_vca (uint32_t howmany, std::string const & name_template)
 	uint32_t n_stripables = _session.nstripables ();
 
 	{
+		PresentationInfo::ChangeSuspender cs;
 		Mutex::Lock lm (lock);
 
 		for (uint32_t n = 0; n < howmany; ++n) {
@@ -98,11 +99,11 @@ VCAManager::create_vca (uint32_t howmany, std::string const & name_template)
 				replace_all (name, "%n", sn);
 			}
 
-			boost::shared_ptr<VCA> vca = boost::shared_ptr<VCA> (new VCA (_session, num, name));
+			std::shared_ptr<VCA> vca = std::shared_ptr<VCA> (new VCA (_session, num, name));
 			BOOST_MARK_VCA (vca);
 
 			vca->init ();
-			vca->set_presentation_order (n + n_stripables);
+			vca->set_presentation_order (n + n_stripables); /* EMIT SIGNAL */
 
 			_vcas.push_back (vca);
 			vcal.push_back (vca);
@@ -111,13 +112,17 @@ VCAManager::create_vca (uint32_t howmany, std::string const & name_template)
 
 	VCAAdded (vcal); /* EMIT SIGNAL */
 
+	if (!vcal.empty ()) {
+		VCACreated (); /* EMIT SIGNAL */
+	}
+
 	_session.set_dirty ();
 
 	return vcal;
 }
 
 void
-VCAManager::remove_vca (boost::shared_ptr<VCA> vca)
+VCAManager::remove_vca (std::shared_ptr<VCA> vca)
 {
 	{
 		Mutex::Lock lm (lock);
@@ -137,7 +142,7 @@ VCAManager::remove_vca (boost::shared_ptr<VCA> vca)
 	_session.set_dirty ();
 }
 
-boost::shared_ptr<VCA>
+std::shared_ptr<VCA>
 VCAManager::vca_by_number (int32_t n) const
 {
 	Mutex::Lock lm (lock);
@@ -148,10 +153,10 @@ VCAManager::vca_by_number (int32_t n) const
 		}
 	}
 
-	return boost::shared_ptr<VCA>();
+	return std::shared_ptr<VCA>();
 }
 
-boost::shared_ptr<VCA>
+std::shared_ptr<VCA>
 VCAManager::vca_by_name (std::string const& name) const
 {
 	Mutex::Lock lm (lock);
@@ -162,11 +167,11 @@ VCAManager::vca_by_name (std::string const& name) const
 		}
 	}
 
-	return boost::shared_ptr<VCA>();
+	return std::shared_ptr<VCA>();
 }
 
 XMLNode&
-VCAManager::get_state ()
+VCAManager::get_state () const
 {
 	XMLNode* node = new XMLNode (xml_node_name);
 
@@ -195,7 +200,7 @@ VCAManager::set_state (XMLNode const& node, int version)
 
 	for (XMLNodeList::const_iterator i = children.begin(); i != children.end(); ++i) {
 		if ((*i)->name() == VCA::xml_node_name) {
-			boost::shared_ptr<VCA> vca = boost::shared_ptr<VCA> (new VCA (_session, 0, X_("tobereset")));
+			std::shared_ptr<VCA> vca = std::shared_ptr<VCA> (new VCA (_session, 0, X_("tobereset")));
 			BOOST_MARK_VCA (vca);
 
 			if (vca->init() || vca->set_state (**i, version)) {

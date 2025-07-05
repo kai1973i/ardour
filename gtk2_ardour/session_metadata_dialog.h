@@ -1,24 +1,28 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2013 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2015 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __session_metadata_dialog_h__
-#define __session_metadata_dialog_h__
+#include <memory>
 
 #include "ardour_dialog.h"
 
@@ -26,19 +30,17 @@
 #undef interface
 #endif
 
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/label.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/table.h>
-#include <gtkmm/textview.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treeview.h>
-
-#include <boost/shared_ptr.hpp>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/label.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/table.h>
+#include <ytkmm/textview.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treeview.h>
 
 #include <string>
 #include <list>
@@ -46,7 +48,7 @@
 #include "ardour/session_metadata.h"
 
 class MetadataField;
-typedef boost::shared_ptr<MetadataField> MetadataPtr;
+typedef std::shared_ptr<MetadataField> MetadataPtr;
 
 /// Wraps a metadata field to be used in a GUI
 class MetadataField
@@ -267,7 +269,7 @@ private:
 
 /// Metadata dialog interface
 /**
- * The DataSets are initalized in this class so that all
+ * The DataSets are initialized in this class so that all
  * Dialogs have the same sets of data in the same order.
  */
 template <typename DataSet>
@@ -288,7 +290,7 @@ protected:
 	void warn_user (std::string const & string);
 
 	typedef std::list<Gtk::Widget *> WidgetList;
-	typedef boost::shared_ptr<WidgetList> WidgetListPtr;
+	typedef std::shared_ptr<WidgetList> WidgetListPtr;
 	typedef Gtk::Widget & (DataSet::*WidgetFunc) ();
 
 	/// Returns list of widgets gathered by calling f for each data set
@@ -307,7 +309,7 @@ private:
 	void init_people_data ();
 	void init_school_data ();
 
-	typedef boost::shared_ptr<SessionMetadataSet> DataSetPtr;
+	typedef std::shared_ptr<SessionMetadataSet> DataSetPtr;
 	typedef std::list<DataSetPtr> DataSetList;
 	DataSetList data_list;
 
@@ -340,4 +342,3 @@ class SessionMetadataImporter : public SessionMetadataDialog<SessionMetadataSetI
 
 };
 
-#endif

@@ -1,21 +1,29 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2009 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2008-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2014-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2014 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2016-2017 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ * Copyright (C) 2017-2018 Johannes Mueller <github@johannes-mueller.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
@@ -27,7 +35,7 @@
 #include <string>
 #include <vector>
 
-#include <gtkmm/separator.h>
+#include <ytkmm/separator.h>
 
 #include "pbd/stl_delete.h"
 #include "pbd/unwind.h"
@@ -35,7 +43,7 @@
 #include "pbd/failed_constructor.h"
 
 #include "evoral/midi_events.h"
-#include "evoral/PatchChange.hpp"
+#include "evoral/PatchChange.h"
 
 #include "midi++/midnam_patch.h"
 
@@ -50,12 +58,15 @@
 #include "gtkmm2ext/utils.h"
 #include "gtkmm2ext/doi.h"
 
+#include "widgets/frame.h"
 #include "widgets/ardour_knob.h"
+#include "widgets/ardour_spacer.h"
 #include "widgets/fastmeter.h"
 #include "widgets/slider_controller.h"
 #include "widgets/tooltips.h"
 
 #include "plugin_ui.h"
+#include "plugin_presets_ui.h"
 #include "plugin_display.h"
 #include "gui_thread.h"
 #include "automation_controller.h"
@@ -73,68 +84,53 @@ using namespace ArdourWidgets;
 using namespace Gtk;
 using namespace ARDOUR_UI_UTILS;
 
-GenericPluginUI::GenericPluginUI (boost::shared_ptr<PluginInsert> pi, bool scrollable)
-	: PlugUIBase (pi)
+GenericPluginUI::GenericPluginUI (std::shared_ptr<PlugInsertBase> pib, bool scrollable, bool ctrls_only)
+	: PlugUIBase (pib)
 	, automation_menu (0)
 	, is_scrollable(scrollable)
-	, _plugin_pianokeyboard_expander (_("MIDI Keyboard"))
+	, want_ctrl_only(ctrls_only)
+	, _empty (true)
+	, _plugin_pianokeyboard_expander (_("MIDI Keyboard (audition only)"))
 	, _piano (0)
-	, _pianomm (0)
 	, _piano_velocity (*manage (new Adjustment (100, 1, 127, 1, 16)))
 	, _piano_channel (*manage (new Adjustment (0, 1, 16, 1, 1)))
 {
 	set_name ("PluginEditor");
-	set_border_width (10);
+	set_border_width (6);
 	//set_homogeneous (false);
 
 	pack_start (main_contents, true, true);
-	settings_box.set_homogeneous (false);
 
-	HBox* constraint_hbox = manage (new HBox);
 	HBox* smaller_hbox = manage (new HBox);
-	smaller_hbox->set_spacing (4);
-	Label* combo_label = manage (new Label (_("<span size=\"large\">Presets</span>")));
-	combo_label->set_use_markup (true);
+	smaller_hbox->set_spacing (6);
+	smaller_hbox->set_border_width (0);
 
-	latency_button.signal_clicked.connect (sigc::mem_fun (*this, &PlugUIBase::latency_button_clicked));
-	set_latency_label ();
-
-	smaller_hbox->pack_start (latency_button, false, false, 4);
-	smaller_hbox->pack_start (pin_management_button, false, false, 4);
-	smaller_hbox->pack_start (_preset_combo, false, false);
-	smaller_hbox->pack_start (_preset_modified, false, false);
-	smaller_hbox->pack_start (add_button, false, false);
-	smaller_hbox->pack_start (save_button, false, false);
-	smaller_hbox->pack_start (delete_button, false, false);
-	if (pi->controls().size() > 0) {
-		smaller_hbox->pack_start (reset_button, false, false, 4);
+	if (_pib->ui_elements () == PlugInsertBase::NoGUIToolbar) {
+		Gtk::Label* spacer = manage (new Gtk::Label());
+		smaller_hbox->pack_start(*spacer);
+	} else {
+		add_common_widgets (smaller_hbox, false);
 	}
-	smaller_hbox->pack_start (bypass_button, false, true, 4);
 
-	automation_manual_all_button.set_text(_("Manual"));
+	automation_manual_all_button.set_text (GainMeterBase::astate_string (ARDOUR::Off));
 	automation_manual_all_button.set_name (X_("generic button"));
-	automation_play_all_button.set_text(_("Play"));
+	automation_play_all_button.set_text (GainMeterBase::astate_string (ARDOUR::Play));
 	automation_play_all_button.set_name (X_("generic button"));
-	automation_write_all_button.set_text(_("Write"));
+	automation_write_all_button.set_text (GainMeterBase::astate_string (ARDOUR::Write));
 	automation_write_all_button.set_name (X_("generic button"));
-	automation_touch_all_button.set_text(_("Touch"));
+	automation_touch_all_button.set_text (GainMeterBase::astate_string (ARDOUR::Touch));
 	automation_touch_all_button.set_name (X_("generic button"));
-	automation_latch_all_button.set_text(_("Touch"));
+	automation_latch_all_button.set_text (GainMeterBase::astate_string (ARDOUR::Latch));
 	automation_latch_all_button.set_name (X_("generic button"));
 
-	constraint_hbox->set_spacing (5);
-	constraint_hbox->set_homogeneous (false);
+	if (ctrls_only) {
+		// relax
+	} else if (_pib->ui_elements () & PlugInsertBase::MIDIKeyboard) {
+		_piano = new APianoKeyboard ();
+		_piano->set_can_focus ();
 
-	VBox* v1_box = manage (new VBox);
-	VBox* v2_box = manage (new VBox);
-	if (pi->is_instrument ()) {
-		_piano = (PianoKeyboard*)piano_keyboard_new();
-		_pianomm = Glib::wrap((GtkWidget*)_piano);
-		_pianomm->set_flags(Gtk::CAN_FOCUS);
-		_pianomm->add_events(Gdk::KEY_PRESS_MASK|Gdk::KEY_RELEASE_MASK);
-
-		g_signal_connect (G_OBJECT (_piano), "note-on", G_CALLBACK (GenericPluginUI::_note_on_event_handler), this);
-		g_signal_connect (G_OBJECT (_piano), "note-off", G_CALLBACK (GenericPluginUI::_note_off_event_handler), this);
+		_piano->NoteOn.connect (sigc::mem_fun (*this, &GenericPluginUI::note_on_event_handler));
+		_piano->NoteOff.connect (sigc::mem_fun (*this, &GenericPluginUI::note_off_event_handler));
 
 		HBox* box = manage (new HBox);
 		box->pack_start (*manage (new Label (_("Channel:"))), false, false);
@@ -147,22 +143,30 @@ GenericPluginUI::GenericPluginUI (boost::shared_ptr<PluginInsert> pi, bool scrol
 
 		_pianobox.set_spacing (4);
 		_pianobox.pack_start (*box2, true, true);
-		_pianobox.pack_start (*_pianomm, true, true);
+		_pianobox.pack_start (*_piano, true, true);
 
 		_plugin_pianokeyboard_expander.set_expanded(false);
 		_plugin_pianokeyboard_expander.property_expanded().signal_changed().connect( sigc::mem_fun(*this, &GenericPluginUI::toggle_pianokeyboard));
 
 		pack_end (_plugin_pianokeyboard_expander, false, false);
-	} else {
+	} else if (_pi && _pi->ui_elements () != PlugInsertBase::NoGUIToolbar) {
 		pack_end (plugin_analysis_expander, false, false);
 	}
-	if (!plugin->get_docs().empty()) {
+
+	if (!ctrls_only && _pib->provides_stats ()) {
+		pack_end (cpuload_expander, false, false);
+	}
+
+	if (!ctrls_only && !plugin->get_docs().empty()) {
 		pack_end (description_expander, false, false);
 	}
 
-	v1_box->set_spacing (6);
-	v1_box->pack_start (*smaller_hbox, false, true);
-	if (pi->controls().size() > 0) {
+	settings_box.set_homogeneous (false);
+	settings_box.set_spacing (0);
+	settings_box.set_border_width (0);
+	settings_box.pack_start (*smaller_hbox, false, false);
+
+	if (_pi && _pi->has_automatables ()) {
 		HBox* automation_hbox = manage (new HBox);
 		automation_hbox->set_spacing (6);
 		Label* l = manage (new Label (_("All Automation")));
@@ -172,20 +176,19 @@ GenericPluginUI::GenericPluginUI (boost::shared_ptr<PluginInsert> pi, bool scrol
 		automation_hbox->pack_start (automation_play_all_button, false, false);
 		automation_hbox->pack_start (automation_write_all_button, false, false);
 		automation_hbox->pack_start (automation_touch_all_button, false, false);
-		v1_box->pack_start (*automation_hbox, false, true);
+		settings_box.pack_start (*automation_hbox, false, false, 6);
 	}
-	v2_box->pack_start (focus_button, false, true);
 
-	main_contents.pack_start (settings_box, false, false);
+	if (!ctrls_only) {
+		main_contents.pack_start (settings_box, false, false);
+	}
 
-	constraint_hbox->pack_end (*v2_box, false, false);
-	constraint_hbox->pack_end (*v1_box, false, false);
-
-	main_contents.pack_start (*constraint_hbox, false, false);
-
-	pi->ActiveChanged.connect (active_connection, invalidator (*this), boost::bind (&GenericPluginUI::processor_active_changed, this, boost::weak_ptr<Processor>(pi)), gui_context());
-
-	bypass_button.set_active (!pi->enabled());
+	if (_pi) {
+		_pi->ActiveChanged.connect (active_connection, invalidator (*this), std::bind (&GenericPluginUI::processor_active_changed, this, std::weak_ptr<Processor>(_pi)), gui_context());
+		_bypass_button.set_active (!_pi->enabled());
+	} else {
+		_bypass_button.set_sensitive (false);
+	}
 
 	/* ScrolledWindow will wrap hpacker in a Viewport */
 	scroller.add (hpacker);
@@ -194,10 +197,10 @@ GenericPluginUI::GenericPluginUI (boost::shared_ptr<PluginInsert> pi, bool scrol
 
 	main_contents.pack_start (scroller, true, true);
 
-	prefheight = 0;
+	prefheight = -1;
 	build ();
 
-	if (insert->plugin()->has_midnam() && insert->plugin()->knows_bank_patch()) {
+	if (_pib->plugin()->has_midnam() && _pib->plugin()->knows_bank_patch()) {
 		build_midi_table ();
 	}
 
@@ -206,6 +209,7 @@ GenericPluginUI::GenericPluginUI (boost::shared_ptr<PluginInsert> pi, bool scrol
 		scroller.set_name ("PluginEditor");
 	} else {
 		scroller.signal_size_request().connect (sigc::mem_fun(*this, &GenericPluginUI::scroller_size_request));
+		scroller.signal_realize().connect (sigc::mem_fun(scroller, &Widget::queue_resize));
 		scroller.set_policy (Gtk::POLICY_AUTOMATIC, Gtk::POLICY_NEVER);
 	}
 
@@ -217,7 +221,8 @@ GenericPluginUI::~GenericPluginUI ()
 	if (output_controls.size() > 0) {
 		screen_update_connection.disconnect();
 	}
-	delete _pianomm;
+	delete automation_menu;
+	delete _piano;
 }
 
 void
@@ -225,15 +230,15 @@ GenericPluginUI::scroller_size_request (Gtk::Requisition* a)
 {
 	GtkRequisition request = hpacker.size_request();
 
-	Glib::RefPtr<Gdk::Window> window (get_window());
+	Glib::RefPtr<Gdk::Window> window (scroller.get_window());
 	Glib::RefPtr<Gdk::Screen> screen;
 
 	if (window) {
-		screen = get_screen();
+		screen = window->get_screen();
 	}
 
 	if (!screen) {
-		a->width = request.width;
+		a->width = min(1024, request.width);
 		return;
 	}
 
@@ -297,8 +302,9 @@ std::size_t s1pos, s2pos, n = 0;
 	s1pos = s1.length();
 	s2pos = s2.length();
 	while (s1pos-- > 0 && s2pos-- > 0) {
-		if (!match_or_digit(s1[s1pos], s2[s2pos])	)
+		if (!match_or_digit(s1[s1pos], s2[s2pos])) {
 			break;
+		}
 		n++;
 	}
 	return n;
@@ -311,7 +317,6 @@ void
 GenericPluginUI::build ()
 {
 	std::vector<ControlUI *> control_uis;
-	bool grid = plugin->parameter_count() > 0;
 
 	// Build a ControlUI for each control port
 	for (size_t i = 0; i < plugin->parameter_count(); ++i) {
@@ -332,28 +337,18 @@ GenericPluginUI::build ()
 			const float value = plugin->get_parameter(i);
 
 			ControlUI* cui;
-			Plugin::UILayoutHint hint;
 
-			if (!plugin->get_layout(i, hint)) {
-				grid = false;
-			}
+			std::shared_ptr<ARDOUR::AutomationControl> c (std::dynamic_pointer_cast<ARDOUR::AutomationControl>(_pib->control (param)));
 
-			boost::shared_ptr<ARDOUR::AutomationControl> c
-				= boost::dynamic_pointer_cast<ARDOUR::AutomationControl>(
-					insert->control(param));
-
-			ParameterDescriptor desc;
-			plugin->get_parameter_descriptor(i, desc);
-			if ((cui = build_control_ui (param, desc, c, value, plugin->parameter_is_input(i), hint.knob)) == 0) {
-				error << string_compose(_("Plugin Editor: could not build control element for port %1"), i) << endmsg;
+			if (c && c->flags () & Controllable::HiddenControl) {
 				continue;
 			}
 
-			if (grid) {
-				cui->x0 = hint.x0;
-				cui->x1 = hint.x1;
-				cui->y0 = hint.y0;
-				cui->y1 = hint.y1;
+			ParameterDescriptor desc;
+			plugin->get_parameter_descriptor(i, desc);
+			if ((cui = build_control_ui (param, desc, c, value, plugin->parameter_is_input(i))) == 0) {
+				error << string_compose(_("Plugin Editor: could not build control element for port %1"), i) << endmsg;
+				continue;
 			}
 
 			const std::string param_docs = plugin->get_parameter_docs(i);
@@ -371,9 +366,11 @@ GenericPluginUI::build ()
 		const ParameterDescriptor& desc = d->second;
 		const Evoral::Parameter    param(PluginPropertyAutomation, 0, desc.key);
 
-		boost::shared_ptr<ARDOUR::AutomationControl> c
-			= boost::dynamic_pointer_cast<ARDOUR::AutomationControl>(
-				insert->control(param));
+		if (desc.label == X_("hidden")) {
+			continue;
+		}
+
+		std::shared_ptr<ARDOUR::AutomationControl> c (std::dynamic_pointer_cast<ARDOUR::AutomationControl>(_pib->control (param)));
 
 		if (!c) {
 			error << string_compose(_("Plugin Editor: no control for property %1"), desc.key) << endmsg;
@@ -394,15 +391,24 @@ GenericPluginUI::build ()
 		 * AutomationControl has only support for numeric values currently.
 		 * The only case is Variant::PATH for now */
 		plugin->PropertyChanged.connect(*this, invalidator(*this),
-				boost::bind(&GenericPluginUI::path_property_changed, this, _1, _2),
+				std::bind(&GenericPluginUI::path_property_changed, this, _1, _2),
 				gui_context());
 
 		/* and query current property value */
 		plugin->announce_property_values();
 	}
 
-	if (grid) {
-		custom_layout (control_uis);
+	if (control_uis.empty () && _pi) {
+		if (has_descriptive_presets ()) {
+			preset_gui = new PluginPresetsUI (_pi); // XXX
+			hpacker.pack_start (*preset_gui, true, true);
+			_empty = false;
+			if (is_scrollable) {
+				preset_gui->show_all ();
+				GtkRequisition request = preset_gui->size_request();
+				prefheight = std::max (prefheight, request.height);
+			}
+		}
 	} else {
 		automatic_layout (control_uis);
 	}
@@ -416,7 +422,7 @@ GenericPluginUI::build ()
 	automation_latch_all_button.signal_clicked.connect(sigc::bind (sigc::mem_fun (*this, &GenericPluginUI::set_all_automation), ARDOUR::Latch));
 
 	/* XXX This is a workaround for AutomationControl not knowing about preset loads */
-	plugin->PresetLoaded.connect (*this, invalidator (*this), boost::bind (&GenericPluginUI::update_input_displays, this), gui_context ());
+	plugin->PresetLoaded.connect (*this, invalidator (*this), std::bind (&GenericPluginUI::update_input_displays, this), gui_context ());
 }
 
 
@@ -424,6 +430,7 @@ void
 GenericPluginUI::automatic_layout (const std::vector<ControlUI*>& control_uis)
 {
 	guint32 x = 0;
+	bool in_property_box = is_scrollable && want_ctrl_only;
 
 	static const int32_t initial_button_rows = 12;
 	static const int32_t initial_button_cols = 1;
@@ -433,16 +440,22 @@ GenericPluginUI::automatic_layout (const std::vector<ControlUI*>& control_uis)
 	Gtk::Table* button_table = manage (new Gtk::Table (initial_button_rows, initial_button_cols));
 	Gtk::Table* output_table = manage (new Gtk::Table (initial_output_rows, initial_output_cols));
 
-	Frame* sample;
-	Frame* bt_sample;
+	Gtk::Frame* frame;
+	Gtk::Frame* bt_frame;
 	VBox* box;
 	int output_row, output_col;
 	int button_row, button_col;
 	int output_rows, output_cols;
 	int button_rows, button_cols;
 
-	hpacker.set_spacing (10);
-	hpacker.set_border_width (10);
+	if (in_property_box) {
+		/* don't add spacing in property box */
+		hpacker.set_spacing (5);
+		hpacker.set_border_width (0);
+	} else {
+		hpacker.set_spacing (10);
+		hpacker.set_border_width (10);
+	}
 
 	output_rows = initial_output_rows;
 	output_cols = initial_output_cols;
@@ -456,7 +469,11 @@ GenericPluginUI::automatic_layout (const std::vector<ControlUI*>& control_uis)
 	button_table->set_homogeneous (false);
 	button_table->set_row_spacings (2);
 	button_table->set_col_spacings (2);
-	button_table->set_border_width (5);
+	if (in_property_box) {
+		button_table->set_border_width (1);
+	} else {
+		button_table->set_border_width (5);
+	}
 
 	output_table->set_homogeneous (true);
 	output_table->set_row_spacings (2);
@@ -464,21 +481,26 @@ GenericPluginUI::automatic_layout (const std::vector<ControlUI*>& control_uis)
 	output_table->set_border_width (5);
 
 
-	bt_sample = manage (new Frame);
-	bt_sample->set_name ("BaseFrame");
-	bt_sample->set_label (_("Switches"));
-	bt_sample->add (*button_table);
-	hpacker.pack_start(*bt_sample, true, true);
+	bt_frame = manage (new Gtk::Frame);
+	bt_frame->set_name ("BaseFrame");
+	bt_frame->set_label (_("Switches"));
+	bt_frame->add (*button_table);
+	hpacker.pack_start(*bt_frame, true, true);
 
 	box = manage (new VBox);
-	box->set_border_width (5);
-	box->set_spacing (1);
+	if (in_property_box) {
+		box->set_border_width (1);
+		box->set_spacing (2);
+	} else {
+		box->set_border_width (5);
+		box->set_spacing (1);
+	}
 
-	sample = manage (new Frame);
-	sample->set_name ("BaseFrame");
-	sample->set_label (_("Controls"));
-	sample->add (*box);
-	hpacker.pack_start(*sample, true, true);
+	frame = manage (new Gtk::Frame);
+	frame->set_name ("BaseFrame");
+	frame->set_label (_("Controls"));
+	frame->add (*box);
+	hpacker.pack_start(*frame, true, true);
 
 	// Add special controls to UI, and build list of normal controls to be layed out later
 	std::vector<ControlUI *> cui_controls_list;
@@ -504,7 +526,7 @@ GenericPluginUI::automatic_layout (const std::vector<ControlUI*>& control_uis)
 			// we can lay them out a bit more nicely later.
 			cui_controls_list.push_back(cui);
 
-		} else if (cui->display) {
+		} else if (cui->display && !want_ctrl_only) {
 
 			output_table->attach (*cui, output_col, output_col + 1, output_row, output_row+1,
 			                     FILL|EXPAND, FILL);
@@ -580,16 +602,21 @@ GenericPluginUI::automatic_layout (const std::vector<ControlUI*>& control_uis)
 
 		if (x > max_controls_per_column || similarity_scores[i] <= similarity_threshold) {
 			if (x > min_controls_per_column) {
-				sample = manage (new Frame);
-				sample->set_name ("BaseFrame");
-				sample->set_label (_("Controls"));
+				frame = manage (new Gtk::Frame);
+				frame->set_name ("BaseFrame");
+				frame->set_label (_("Controls"));
 				box = manage (new VBox);
-				box->set_border_width (5);
-				box->set_spacing (1);
-				sample->add (*box);
-				hpacker.pack_start(*sample, true, true);
+				if (in_property_box) {
+					box->set_border_width (1);
+					box->set_spacing (2);
+				} else {
+					box->set_border_width (5);
+					box->set_spacing (1);
+				}
+				frame->add (*box);
+				hpacker.pack_start(*frame, true, true);
 				x = 0;
-			} else {
+			} else if (!in_property_box) {
 				HSeparator *split = new HSeparator();
 				split->set_size_request(-1, 5);
 				box->pack_start(*split, false, false, 0);
@@ -599,58 +626,44 @@ GenericPluginUI::automatic_layout (const std::vector<ControlUI*>& control_uis)
 		box->pack_start (*cui, false, false);
 	}
 
-	if (is_scrollable) {
-		prefheight = 30 * i;
+	if (i > 0) {
+		_empty = false;
+	}
+	if (is_scrollable && i > 0) {
+		prefheight = 30 * i * UIConfiguration::instance().get_ui_scale();
 	}
 
 	if (box->children().empty()) {
-		hpacker.remove (*sample);
+		hpacker.remove (*frame);
 	}
 
 	if (button_table->children().empty()) {
-		hpacker.remove (*bt_sample);
+		hpacker.remove (*bt_frame);
 		delete button_table;
 	} else {
 		button_table->show_all ();
+		_empty = false;
 	}
 
 	if (!output_table->children().empty()) {
-		sample = manage (new Frame);
-		sample->set_name ("BaseFrame");
-		sample->set_label(_("Meters"));
-		sample->add (*output_table);
-		hpacker.pack_end (*sample, true, true);
+		frame = manage (new Gtk::Frame);
+		frame->set_name ("BaseFrame");
+		frame->set_label(_("Meters"));
+		frame->add (*output_table);
+		hpacker.pack_end (*frame, true, true);
 		output_table->show_all ();
+		_empty = false;
 	} else {
 		delete output_table;
 	}
 
-	if (plugin->has_inline_display () && plugin->inline_display_in_gui ()) {
+	if (!want_ctrl_only && plugin->has_inline_display () && plugin->inline_display_in_gui ()) {
 		PluginDisplay* pd = manage (new PluginDisplay (plugin, 300));
 		hpacker.pack_end (*pd, true, true);
+		_empty = false;
 	}
 	show_all();
 
-}
-
-void
-GenericPluginUI::custom_layout (const std::vector<ControlUI*>& control_uis)
-{
-	Gtk::Table* layout = manage (new Gtk::Table ());
-
-	for (vector<ControlUI*>::const_iterator i = control_uis.begin(); i != control_uis.end(); ++i) {
-		ControlUI* cui = *i;
-		if (cui->x0 < 0 || cui->y0 < 0) {
-			continue;
-		}
-		layout->attach (*cui, cui->x0, cui->x1, cui->y0, cui->y1, FILL, SHRINK, 2, 2);
-	}
-	hpacker.pack_start (*layout, true, true);
-
-	if (plugin->has_inline_display () && plugin->inline_display_in_gui ()) {
-		PluginDisplay* pd = manage (new PluginDisplay (plugin, 300));
-		hpacker.pack_end (*pd, true, true);
-	}
 }
 
 void
@@ -664,15 +677,15 @@ GenericPluginUI::build_midi_table ()
 	pgm_table->set_border_width (5);
 	pgm_table->set_col_spacing (2, 10);
 
-	Frame* sample = manage (new Frame);
-	sample->set_name ("BaseFrame");
-	if (dynamic_cast<MidiTrack*> (insert->owner())) {
-		sample->set_label (_("MIDI Programs (sent to track)"));
+	ArdourWidgets::Frame* frame = manage (new ArdourWidgets::Frame);
+	frame->set_name ("BaseFrame");
+	if (_pi && dynamic_cast<MidiTrack*> (_pi->owner())) {
+		frame->set_label (_("MIDI Programs (sent to track)"));
 	} else {
-		sample->set_label (_("MIDI Programs (volatile)"));
+		frame->set_label (_("MIDI Programs (volatile)"));
 	}
-	sample->add (*pgm_table);
-	hpacker.pack_start (*sample, false, false);
+	frame->add (*pgm_table);
+	hpacker.pack_start (*frame, false, false);
 
 	for (uint8_t chn = 0; chn < 16; ++chn) {
 		int col = 3 * (chn / 8);
@@ -682,22 +695,30 @@ GenericPluginUI::build_midi_table ()
 		cui->set_text_ellipsize (Pango::ELLIPSIZE_END);
 		cui->set_layout_ellipsize_width (PANGO_SCALE * 112 * UIConfiguration::instance ().get_ui_scale ());
 		midi_pgmsel.push_back (cui);
-		pgm_table->attach (*manage (new Label (string_compose ("C%1:", (int)(chn + 1)), ALIGN_RIGHT)), col, col + 1, row, row+1, FILL, SHRINK);
+		pgm_table->attach (*manage (new Label (string_compose ("C%1:", (int)(chn + 1)), ALIGN_END)), col, col + 1, row, row+1, FILL, SHRINK);
 		pgm_table->attach (*cui, col + 1, col + 2, row, row+1, SHRINK, SHRINK);
 	}
 
-	insert->plugin ()->read_midnam();
+	_empty = false;
+
+	if (is_scrollable) {
+		frame->show_all ();
+		GtkRequisition request = frame->size_request();
+		prefheight = std::max (prefheight, request.height);
+	}
+
+	_pib->plugin ()->read_midnam();
 
 	midi_refill_patches ();
 
-	insert->plugin()->BankPatchChange.connect (
+	_pib->plugin()->BankPatchChange.connect (
 			midi_connections, invalidator (*this),
-			boost::bind (&GenericPluginUI::midi_bank_patch_change, this, _1),
+			std::bind (&GenericPluginUI::midi_bank_patch_change, this, _1),
 			gui_context());
 
-	insert->plugin()->UpdatedMidnam.connect (
+	_pib->plugin()->UpdatedMidnam.connect (
 			midi_connections, invalidator (*this),
-			boost::bind (&GenericPluginUI::midi_refill_patches, this),
+			std::bind (&GenericPluginUI::midi_refill_patches, this),
 			gui_context());
 }
 
@@ -708,7 +729,7 @@ GenericPluginUI::midi_refill_patches ()
 
 	pgm_names.clear ();
 
-	const std::string model = insert->plugin ()->midnam_model ();
+	const std::string model = _pib->plugin ()->midnam_model ();
 	std::string mode;
 	const std::list<std::string> device_modes = MIDI::Name::MidiPatchManager::instance().custom_device_mode_names_by_model (model);
 	if (device_modes.size() > 0) {
@@ -717,7 +738,7 @@ GenericPluginUI::midi_refill_patches ()
 
 	for (uint8_t chn = 0; chn < 16; ++chn) {
 		midi_pgmsel[chn]->clear_items ();
-		boost::shared_ptr<MIDI::Name::ChannelNameSet> cns =
+		std::shared_ptr<MIDI::Name::ChannelNameSet> cns =
 			MIDI::Name::MidiPatchManager::instance().find_channel_name_set (model, mode, chn);
 
 		if (cns) {
@@ -729,7 +750,6 @@ GenericPluginUI::midi_refill_patches ()
 				for (MIDI::Name::PatchNameList::const_iterator j = patches.begin(); j != patches.end(); ++j) {
 					const std::string pgm = (*j)->name ();
 					MIDI::Name::PatchPrimaryKey const& key = (*j)->patch_primary_key ();
-					assert ((*i)->number () == key.bank());
 					const uint32_t bp = (key.bank() << 7) | key.program();
 					midi_pgmsel[chn]->AddMenuElem (MenuElemNoMnemonic (pgm, sigc::bind (sigc::mem_fun (*this, &GenericPluginUI::midi_bank_patch_select), chn, bp)));
 					pgm_names[bp] = pgm;
@@ -745,7 +765,7 @@ void
 GenericPluginUI::midi_bank_patch_change (uint8_t chn)
 {
 	assert (chn < 16 && midi_pgmsel.size() == 16);
-	uint32_t bankpgm = insert->plugin()->bank_patch (chn);
+	uint32_t bankpgm = _pib->plugin()->bank_patch (chn);
 	if (bankpgm == UINT32_MAX) {
 		midi_pgmsel[chn]->set_text (_("--Unset--"));
 	} else {
@@ -765,12 +785,12 @@ GenericPluginUI::midi_bank_patch_select (uint8_t chn, uint32_t bankpgm)
 {
 	int bank = bankpgm >> 7;
 	int pgm = bankpgm & 127;
-	MidiTrack* mt = dynamic_cast<MidiTrack*> (insert->owner());
+	MidiTrack* mt = _pi ? dynamic_cast<MidiTrack*> (_pi->owner()) : NULL;
 	if (mt) {
 		/* send to track */
-		boost::shared_ptr<AutomationControl> bank_msb = mt->automation_control(Evoral::Parameter (MidiCCAutomation, chn, MIDI_CTL_MSB_BANK), true);
-		boost::shared_ptr<AutomationControl> bank_lsb = mt->automation_control(Evoral::Parameter (MidiCCAutomation, chn, MIDI_CTL_LSB_BANK), true);
-		boost::shared_ptr<AutomationControl> program = mt->automation_control(Evoral::Parameter (MidiPgmChangeAutomation, chn), true);
+		std::shared_ptr<AutomationControl> bank_msb = mt->automation_control(Evoral::Parameter (MidiCCAutomation, chn, MIDI_CTL_MSB_BANK), true);
+		std::shared_ptr<AutomationControl> bank_lsb = mt->automation_control(Evoral::Parameter (MidiCCAutomation, chn, MIDI_CTL_LSB_BANK), true);
+		std::shared_ptr<AutomationControl> program = mt->automation_control(Evoral::Parameter (MidiPgmChangeAutomation, chn), true);
 
 		bank_msb->set_value (bank >> 7, PBD::Controllable::NoGroup);
 		bank_lsb->set_value (bank & 127, PBD::Controllable::NoGroup);
@@ -780,15 +800,15 @@ GenericPluginUI::midi_bank_patch_select (uint8_t chn, uint32_t bankpgm)
 		event[0] = (MIDI_CMD_CONTROL | chn);
 		event[1] = 0x00;
 		event[2] = bank >> 7;
-		insert->write_immediate_event (3, event);
+		_pib->write_immediate_event (Evoral::MIDI_EVENT, 3, event);
 
 		event[1] = 0x20;
 		event[2] = bank & 127;
-		insert->write_immediate_event (3, event);
+		_pib->write_immediate_event (Evoral::MIDI_EVENT, 3, event);
 
 		event[0] = (MIDI_CMD_PGM_CHANGE | chn);
 		event[1] = pgm;
-		insert->write_immediate_event (2, event);
+		_pib->write_immediate_event (Evoral::MIDI_EVENT, 2, event);
 	}
 }
 
@@ -802,7 +822,6 @@ GenericPluginUI::ControlUI::ControlUI (const Evoral::Parameter& p)
 	, hbox (0)
 	, vbox (0)
 	, meterinfo (0)
-	, knobtable (0)
 {
 	automate_button.set_name ("plugin automation state button");
 	set_tooltip (automate_button, _("Automation control"));
@@ -810,8 +829,6 @@ GenericPluginUI::ControlUI::ControlUI (const Evoral::Parameter& p)
 	ignore_change = false;
 	update_pending = false;
 	button = false;
-
-	x0 = x1 = y0 = y1 = -1;
 }
 
 GenericPluginUI::ControlUI::~ControlUI()
@@ -840,67 +857,25 @@ GenericPluginUI::set_short_autostate (ControlUI* cui, bool value)
 void
 GenericPluginUI::automation_state_changed (ControlUI* cui)
 {
+	AutoState state;
+	if (_pi) {
+		/* don't lock to avoid deadlock because we're triggered by
+		 * AutomationControl::Changed() while the automation lock is taken
+		 */
+		state = _pi->get_parameter_automation_state (cui->parameter());
+	} else {
+		state = ARDOUR::Off;
+	}
+
 	/* update button label */
-
-	// don't lock to avoid deadlock because we're triggered by
-	// AutomationControl::Changed() while the automation lock is taken
-
-	AutoState state = insert->get_parameter_automation_state (cui->parameter());
 
 	cui->automate_button.set_active((state != ARDOUR::Off));
 
 	if (cui->short_autostate) {
-		cui->automate_button.set_text (
-				GainMeterBase::astate_string (state));
-		return;
+		cui->automate_button.set_text (GainMeterBase::short_astate_string (state));
+	} else {
+		cui->automate_button.set_text (GainMeterBase::astate_string (state));
 	}
-
-	switch (state & (ARDOUR::Off|Play|Touch|Write|Latch)) {
-	case ARDOUR::Off:
-		cui->automate_button.set_text (S_("Automation|Manual"));
-		break;
-	case Play:
-		cui->automate_button.set_text (_("Play"));
-		break;
-	case Write:
-		cui->automate_button.set_text (_("Write"));
-		break;
-	case Touch:
-		cui->automate_button.set_text (_("Touch"));
-		break;
-	case Latch:
-		cui->automate_button.set_text (_("Latch"));
-		break;
-	default:
-		cui->automate_button.set_text (_("???"));
-		break;
-	}
-}
-
-bool
-GenericPluginUI::integer_printer (char buf[32], Adjustment &adj, ControlUI* cui)
-{
-	float const        v   = cui->control->interface_to_internal(adj.get_value ());
-	const std::string& str = ARDOUR::value_as_string(cui->control->desc(), Variant(v));
-	const size_t       len = str.copy(buf, 31);
-	buf[len] = '\0';
-	return true;
-}
-
-bool
-GenericPluginUI::midinote_printer (char buf[32], Adjustment &adj, ControlUI* cui)
-{
-	float const        v   = cui->control->interface_to_internal(adj.get_value ());
-	const std::string& str = ARDOUR::value_as_string(cui->control->desc(), Variant(v));
-	const size_t       len = str.copy(buf, 31);
-	buf[len] = '\0';
-	return true;
-}
-
-void
-GenericPluginUI::print_parameter (char *buf, uint32_t len, uint32_t param)
-{
-	plugin->print_parameter (param, buf, len);
 }
 
 /** Build a ControlUI for a parameter/property.
@@ -909,11 +884,12 @@ GenericPluginUI::print_parameter (char *buf, uint32_t len, uint32_t param)
 GenericPluginUI::ControlUI*
 GenericPluginUI::build_control_ui (const Evoral::Parameter&             param,
                                    const ParameterDescriptor&           desc,
-                                   boost::shared_ptr<AutomationControl> mcontrol,
+                                   std::shared_ptr<AutomationControl>   mcontrol,
                                    float                                value,
-                                   bool                                 is_input,
-                                   bool                                 use_knob)
+                                   bool                                 is_input)
 {
+	bool use_knob = is_scrollable && want_ctrl_only; /* route property box */
+
 	ControlUI* control_ui = 0;
 
 	control_ui = manage (new ControlUI (param));
@@ -937,16 +913,10 @@ GenericPluginUI::build_control_ui (const Evoral::Parameter&             param,
 			// Create/add controller
 			control_ui->file_button = manage(new Gtk::FileChooserButton(Gtk::FILE_CHOOSER_ACTION_OPEN));
 			control_ui->file_button->set_title(desc.label);
+			Gtkmm2ext::add_volume_shortcuts (*control_ui->file_button);
 
-			if (use_knob) {
-				control_ui->knobtable = manage (new Table());
-				control_ui->pack_start(*control_ui->knobtable, true, false);
-				control_ui->knobtable->attach (control_ui->label, 0, 1, 0, 1);
-				control_ui->knobtable->attach (*control_ui->file_button, 0, 1, 1, 2);
-			} else {
-				control_ui->pack_start (control_ui->label, false, true);
-				control_ui->pack_start (*control_ui->file_button, true, true);
-			}
+			control_ui->pack_start (control_ui->label, false, true);
+			control_ui->pack_start (*control_ui->file_button, true, true);
 
 			// Monitor changes from the user.
 			control_ui->file_button->signal_file_set().connect(
@@ -1041,31 +1011,42 @@ GenericPluginUI::build_control_ui (const Evoral::Parameter&             param,
 		if (use_knob) {
 			set_short_autostate(control_ui, true);
 
-			control_ui->label.set_alignment (0.5, 0.5);
-			control_ui->knobtable = manage (new Table());
-			control_ui->pack_start(*control_ui->knobtable, true, true);
+			control_ui->label.set_alignment (0.0, 0.5);
+			control_ui->label.set_ellipsize (Pango::ELLIPSIZE_END);
+			control_ui->label.set_max_width_chars (11);
 
 			if (control_ui->combo) {
-				control_ui->knobtable->attach (control_ui->label, 0, 1, 0, 1);
-				control_ui->knobtable->attach (*control_ui->combo, 0, 1, 1, 2);
+				control_ui->pack_start (control_ui->label, true, true);
+				control_ui->pack_start(*control_ui->combo, false, true);
+
 			} else if (control_ui->spin_box) {
+				control_ui->pack_start (control_ui->label, true, true);
+#if 1
 				ArdourKnob* knob = dynamic_cast<ArdourKnob*>(control_ui->controller->widget ());
 				knob->set_tooltip_prefix (desc.label + ": ");
+
 				Alignment *align = manage (new Alignment (.5, .5, 0, 0));
 				align->add (*control_ui->controller);
-				control_ui->knobtable->attach (*align, 0, 1, 0, 1, EXPAND, SHRINK, 1, 2);
-				control_ui->knobtable->attach (*control_ui->spin_box, 0, 2, 1, 2);
-				control_ui->knobtable->attach (control_ui->automate_button, 1, 2, 0, 1, SHRINK, SHRINK, 2, 0);
+				delete control_ui->spin_box;
+				control_ui->pack_start (*align, false, false);
+#else
+				control_ui->pack_start (*control_ui->spin_box, false, true);
+#endif
+				control_ui->pack_start (control_ui->automate_button, false, true);
 			} else if (desc.toggled) {
 				Alignment *align = manage (new Alignment (.5, .5, 0, 0));
 				align->add (*control_ui->controller);
-				control_ui->knobtable->attach (*align, 0, 2, 0, 1, EXPAND, SHRINK, 2, 2);
-				control_ui->knobtable->attach (control_ui->label, 0, 1, 1, 2, FILL, SHRINK);
-				control_ui->knobtable->attach (control_ui->automate_button, 1, 2, 1, 2, SHRINK, SHRINK, 2, 0);
+				control_ui->pack_start (control_ui->label, true, true);
+				control_ui->pack_start (*align, false, true);
+				control_ui->pack_start (control_ui->automate_button, false, true);
 			} else {
-				control_ui->knobtable->attach (*control_ui->controller, 0, 2, 0, 1);
-				control_ui->knobtable->attach (control_ui->label, 0, 1, 1, 2, FILL, SHRINK);
-				control_ui->knobtable->attach (control_ui->automate_button, 1, 2, 1, 2, SHRINK, SHRINK, 2, 0);
+				ArdourKnob* knob = dynamic_cast<ArdourKnob*>(control_ui->controller->widget ());
+				if (knob) {
+					knob->set_tooltip_prefix (desc.label + ": ");
+				}
+				control_ui->pack_start (control_ui->label, true, true);
+				control_ui->pack_start (*control_ui->controller, false, true);
+				control_ui->pack_start (control_ui->automate_button, false, true);
 			}
 
 		} else {
@@ -1083,7 +1064,10 @@ GenericPluginUI::build_control_ui (const Evoral::Parameter&             param,
 		}
 
 
-		if (mcontrol->flags () & Controllable::NotAutomatable) {
+		if (!_pi) {
+			control_ui->automate_button.set_no_show_all ();
+			control_ui->automate_button.hide ();
+		} else if (mcontrol->flags () & Controllable::NotAutomatable) {
 			control_ui->automate_button.set_sensitive (false);
 			set_tooltip(control_ui->automate_button, _("This control cannot be automated"));
 		} else {
@@ -1094,7 +1078,7 @@ GenericPluginUI::build_control_ui (const Evoral::Parameter&             param,
 			mcontrol->alist()->automation_state_changed.connect (
 					control_connections,
 					invalidator (*this),
-					boost::bind (&GenericPluginUI::automation_state_changed, this, control_ui),
+					std::bind (&GenericPluginUI::automation_state_changed, this, control_ui),
 					gui_context());
 			input_controls_with_automation.push_back (control_ui);
 		}
@@ -1179,7 +1163,7 @@ GenericPluginUI::build_control_ui (const Evoral::Parameter&             param,
 
 	if (mcontrol) {
 		mcontrol->Changed.connect(control_connections, invalidator(*this),
-		                          boost::bind(&GenericPluginUI::ui_parameter_changed,
+		                          std::bind(&GenericPluginUI::ui_parameter_changed,
 		                                      this, control_ui),
 		                          gui_context());
 	}
@@ -1199,6 +1183,7 @@ GenericPluginUI::knob_size_request(Gtk::Requisition* req, ControlUI* cui) {
 bool
 GenericPluginUI::astate_button_event (GdkEventButton* ev, ControlUI* cui)
 {
+	assert (_pi);
 	if (ev->button != 1) {
 		return true;
 	}
@@ -1214,19 +1199,20 @@ GenericPluginUI::astate_button_event (GdkEventButton* ev, ControlUI* cui)
 	MenuList& items (automation_menu->items());
 
 	items.clear ();
-	items.push_back (MenuElem (S_("Automation|Manual"),
+	items.push_back (MenuElem (GainMeterBase::astate_string (ARDOUR::Off),
 				   sigc::bind (sigc::mem_fun(*this, &GenericPluginUI::set_automation_state), (AutoState) ARDOUR::Off, cui)));
-	items.push_back (MenuElem (_("Play"),
+	items.push_back (MenuElem (GainMeterBase::astate_string (Play),
 				   sigc::bind (sigc::mem_fun(*this, &GenericPluginUI::set_automation_state), (AutoState) Play, cui)));
-	items.push_back (MenuElem (_("Write"),
+	items.push_back (MenuElem (GainMeterBase::astate_string (Write),
 				   sigc::bind (sigc::mem_fun(*this, &GenericPluginUI::set_automation_state), (AutoState) Write, cui)));
-	items.push_back (MenuElem (_("Touch"),
+	items.push_back (MenuElem (GainMeterBase::astate_string (Touch),
 				   sigc::bind (sigc::mem_fun(*this, &GenericPluginUI::set_automation_state), (AutoState) Touch, cui)));
-	items.push_back (MenuElem (_("Latch"),
+	items.push_back (MenuElem (GainMeterBase::astate_string (Latch),
 				   sigc::bind (sigc::mem_fun(*this, &GenericPluginUI::set_automation_state), (AutoState) Latch, cui)));
 
-	anchored_menu_popup(automation_menu, &cui->automate_button, cui->automate_button.get_text(),
-	                    1, ev->time);
+	anchored_menu_popup (automation_menu, &cui->automate_button,
+	                     GainMeterBase::astate_string (_pi->get_parameter_automation_state (cui->parameter())),
+	                     1, ev->time);
 
 	return true;
 }
@@ -1242,7 +1228,9 @@ GenericPluginUI::set_all_automation (AutoState as)
 void
 GenericPluginUI::set_automation_state (AutoState state, ControlUI* cui)
 {
-	insert->set_parameter_automation_state (cui->parameter(), state);
+	if (_pi) {
+		_pi->set_parameter_automation_state (cui->parameter(), state);
+	}
 }
 
 void
@@ -1250,7 +1238,7 @@ GenericPluginUI::ui_parameter_changed (ControlUI* cui)
 {
 	if (!cui->update_pending) {
 		cui->update_pending = true;
-		Gtkmm2ext::UI::instance()->call_slot (MISSING_INVALIDATOR, boost::bind (&GenericPluginUI::update_control_display, this, cui));
+		Gtkmm2ext::UI::instance()->call_slot (MISSING_INVALIDATOR, std::bind (&GenericPluginUI::update_control_display, this, cui));
 	}
 }
 
@@ -1307,7 +1295,7 @@ void
 GenericPluginUI::control_combo_changed (ControlUI* cui, float value)
 {
 	if (!cui->ignore_change) {
-		insert->automation_control (cui->parameter())->set_value (value, Controllable::NoGroup);
+		cui->combo->get_controllable ()->set_value (value, Controllable::NoGroup);
 	}
 }
 
@@ -1334,9 +1322,9 @@ void
 GenericPluginUI::output_update ()
 {
 	for (vector<ControlUI*>::iterator i = output_controls.begin(); i != output_controls.end(); ++i) {
-		float val = plugin->get_parameter ((*i)->parameter().id());
 		char buf[32];
-		boost::shared_ptr<ReadOnlyControl> c = insert->control_output ((*i)->parameter().id());
+		std::shared_ptr<ReadOnlyControl> c = _pib->control_output ((*i)->parameter().id());
+		float val = c->get_parameter ();
 		const std::string& str = ARDOUR::value_as_string(c->desc(), Variant(val));
 		size_t len = str.copy(buf, 31);
 		buf[len] = '\0';
@@ -1388,46 +1376,34 @@ GenericPluginUI::toggle_pianokeyboard ()
 }
 
 void
-GenericPluginUI::_note_on_event_handler(GtkWidget*, int note, gpointer arg)
+GenericPluginUI::note_on_event_handler (int note, int)
 {
-	((GenericPluginUI*)arg)->note_on_event_handler(note);
-}
-
-void
-GenericPluginUI::_note_off_event_handler(GtkWidget*, int note, gpointer arg)
-{
-	((GenericPluginUI*)arg)->note_off_event_handler(note);
-}
-
-void
-GenericPluginUI::note_on_event_handler (int note)
-{
-	MidiTrack* mt = dynamic_cast<MidiTrack*> (insert->owner());
-	_pianomm->grab_focus ();
+	MidiTrack* mt = _pi ? dynamic_cast<MidiTrack*> (_pi->owner()) : NULL;
+	_piano->grab_focus ();
 	uint8_t channel = _piano_channel.get_value_as_int () - 1;
 	uint8_t event[3];
 	event[0] = (MIDI_CMD_NOTE_ON | channel);
 	event[1] = note;
 	event[2] = _piano_velocity.get_value_as_int ();
 	if (mt) {
-		mt->write_immediate_event (3, event);
+		mt->write_user_immediate_event (Evoral::MIDI_EVENT, 3, event);
 	} else {
-		insert->write_immediate_event (3, event);
+		_pib->write_immediate_event (Evoral::MIDI_EVENT, 3, event);
 	}
 }
 
 void
 GenericPluginUI::note_off_event_handler (int note)
 {
-	MidiTrack* mt = dynamic_cast<MidiTrack*> (insert->owner());
+	MidiTrack* mt = _pi ? dynamic_cast<MidiTrack*> (_pi->owner()) : NULL;
 	uint8_t channel = _piano_channel.get_value_as_int () - 1;
 	uint8_t event[3];
 	event[0] = (MIDI_CMD_NOTE_OFF | channel);
 	event[1] = note;
 	event[2] = 0;
 	if (mt) {
-		mt->write_immediate_event (3, event);
+		mt->write_user_immediate_event (Evoral::MIDI_EVENT, 3, event);
 	} else {
-		insert->write_immediate_event (3, event);
+		_pib->write_immediate_event (Evoral::MIDI_EVENT, 3, event);
 	}
 }

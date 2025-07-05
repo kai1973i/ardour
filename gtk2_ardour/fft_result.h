@@ -1,20 +1,20 @@
 /*
- * Copyright (C) 2006, 2016 Paul Davis
- * Written by Sampo Savolainen & Robin Gareus
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef __ardour_fft_result_h
@@ -23,9 +23,10 @@
 #include <math.h>
 #include <fftw3.h>
 
-#include <gdkmm/color.h>
+#include <ydkmm/color.h>
 
 #include <string>
+#include <vector>
 
 class FFTGraph;
 
@@ -33,7 +34,7 @@ class FFTResult
 {
 public:
 
-	~FFTResult ();
+	~FFTResult () = default;
 
 	void analyzeWindow (float *window);
 	void finalize ();
@@ -58,24 +59,24 @@ private:
 	FFTResult (FFTGraph *graph, Gdk::Color color, std::string trackname);
 	friend class FFTGraph;
 
-	int _averages;
-
-	float* _data_flat_avg;
-	float* _data_flat_max;
-	float* _data_flat_min;
-	float* _data_prop_avg;
-	float* _data_prop_max;
-	float* _data_prop_min;
+	FFTGraph *_graph;
 
 	unsigned int _windowSize;
 	unsigned int _dataSize;
+
+	int _averages;
 
 	float _min_flat;
 	float _max_flat;
 	float _min_prop;
 	float _max_prop;
 
-	FFTGraph *_graph;
+	std::vector<float> _data_flat_avg;
+	std::vector<float> _data_flat_max;
+	std::vector<float> _data_flat_min;
+	std::vector<float> _data_prop_avg;
+	std::vector<float> _data_prop_max;
+	std::vector<float> _data_prop_min;
 
 	Gdk::Color _color;
 	std::string _trackname;

@@ -1,29 +1,30 @@
 /*
-    Copyright (C) 2002 Paul Davis
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2007-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-    $Id: port.h 712 2006-07-28 01:08:57Z drobilla $
-*/
-
-#ifndef __ardour_midi_port_h__
-#define __ardour_midi_port_h__
+#pragma once
 
 #include "midi++/parser.h"
 
 #include "ardour/port.h"
+#include "ardour/midi_buffer.h"
 
 namespace ARDOUR {
 
@@ -31,7 +32,7 @@ class MidiBuffer;
 class MidiEngine;
 
 class LIBARDOUR_API MidiPort : public Port {
-   public:
+  public:
 	~MidiPort();
 
 	DataType type () const {
@@ -44,59 +45,48 @@ class LIBARDOUR_API MidiPort : public Port {
 
 	void flush_buffers (pframes_t nframes);
 	void transport_stopped ();
-	void realtime_locate ();
+	void realtime_locate (bool);
 	void reset ();
 	void require_resolve ();
 
 	bool input_active() const { return _input_active; }
 	void set_input_active (bool yn);
 
-	Buffer& get_buffer (pframes_t nframes);
+	Buffer& get_buffer (pframes_t nframes) {
+		return get_midi_buffer (nframes);
+	}
 
 	MidiBuffer& get_midi_buffer (pframes_t nframes);
 
-	void set_always_parse (bool yn);
-	void set_trace_on (bool yn);
+	void set_trace (std::weak_ptr<MIDI::Parser> trace_parser);
+	std::shared_ptr<MIDI::Parser> trace_parser() const;
 
-	typedef boost::function<bool(MidiBuffer&,MidiBuffer&)> MidiFilter;
+	typedef std::function<bool(MidiBuffer&,MidiBuffer&)> MidiFilter;
 	void set_inbound_filter (MidiFilter);
 	int add_shadow_port (std::string const &, MidiFilter);
-	boost::shared_ptr<MidiPort> shadow_port() const { return _shadow_port; }
+	std::shared_ptr<MidiPort> shadow_port() const { return _shadow_port; }
 
-	MIDI::Parser& self_parser() { return _self_parser; }
+	void read_and_parse_entire_midi_buffer_with_no_speed_adjustment (pframes_t nframes, MIDI::Parser& parser, samplepos_t now);
 
-  protected:
+protected:
 	friend class PortManager;
 
 	MidiPort (const std::string& name, PortFlags);
 
-  private:
-	MidiBuffer* _buffer;
-	bool        _has_been_mixed_down;
-	bool        _resolve_required;
-	bool        _input_active;
-	bool        _always_parse;
-	bool        _trace_on;
-	MidiFilter   inbound_midi_filter;
-	boost::shared_ptr<MidiPort> _shadow_port;
-	MidiFilter   shadow_midi_filter;
-
-	/* Naming this is tricky. AsyncMIDIPort inherits (for now, aug 2013) from
-	 * both MIDI::Port, which has _parser, and this (ARDOUR::MidiPort). We
-	 * need parsing support in this object, independently of what the
-	 * MIDI::Port/AsyncMIDIPort stuff does. Rather than risk errors coming
-	 * from not explicitly naming which _parser we want, we will call this
-	 * _self_parser for now.
-	 *
-	 * Ultimately, MIDI::Port should probably go away or be fully integrated
-	 * into this object, somehow.
-	 */
-
-	MIDI::Parser _self_parser;
+private:
+	MidiBuffer*                 _buffer;
+	bool                        _resolve_required;
+	bool                        _input_active;
+	MidiFilter                  _inbound_midi_filter;
+	std::shared_ptr<MidiPort> _shadow_port;
+	MidiFilter                  _shadow_midi_filter;
+	std::weak_ptr<MIDI::Parser> _trace_parser;
+	bool                        _data_fetched_for_cycle;
 
 	void resolve_notes (void* buffer, samplepos_t when);
+	void pull_input (pframes_t nframes, bool adjust_speed);
+	void parse_input (pframes_t nframes, MIDI::Parser& parser);
 };
 
 } // namespace ARDOUR
 
-#endif /* __ardour_midi_port_h__ */

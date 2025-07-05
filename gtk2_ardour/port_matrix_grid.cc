@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2002-2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2013 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <cairo.h>
@@ -185,16 +186,15 @@ PortMatrixGrid::render (cairo_t* cr)
 
 				x = bx;
 				for (uint32_t k = 0; k < _matrix->count_of_our_type ((*i)->bundle->nchannels()); ++k) {
+					ARDOUR::BundleChannel c[2];
+
+					c[_matrix->column_index()] = ARDOUR::BundleChannel (
+						(*i)->bundle,
+						(*i)->bundle->type_channel_to_overall (_matrix->type (), k)
+						);
 
 					y = by;
 					for (uint32_t l = 0; l < _matrix->count_of_our_type ((*j)->bundle->nchannels()); ++l) {
-
-						ARDOUR::BundleChannel c[2];
-
-						c[_matrix->column_index()] = ARDOUR::BundleChannel (
-							(*i)->bundle,
-							(*i)->bundle->type_channel_to_overall (_matrix->type (), k)
-							);
 
 						c[_matrix->row_index()] = ARDOUR::BundleChannel (
 							(*j)->bundle,

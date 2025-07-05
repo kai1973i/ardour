@@ -11,17 +11,21 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef __libbackend_alsa_slave_h__
 #define __libbackend_alsa_slave_h__
 
+#include <atomic>
+
 #include <pthread.h>
 
 #include "pbd/ringbuffer.h"
+#include "pbd/signals.h"
+
 #include "zita-resampler/vresampler.h"
 #include "zita-alsa-pcmi.h"
 
@@ -57,7 +61,7 @@ public:
 	uint32_t nplay (void) const { return _pcmi.nplay (); }
 	uint32_t ncapt (void) const { return _pcmi.ncapt (); }
 
-	PBD::Signal0<void> Halted;
+	PBD::Signal<void()> Halted;
 
 protected:
 	virtual void update_latencies (uint32_t, uint32_t) = 0;
@@ -81,7 +85,8 @@ private:
 	double   _play_latency;
 
 	volatile double _slave_speed;
-	volatile gint   _draining;
+
+	std::atomic<int> _draining;
 
 	PBD::RingBuffer<float> _rb_capture;
 	PBD::RingBuffer<float> _rb_playback;

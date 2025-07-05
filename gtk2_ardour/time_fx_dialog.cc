@@ -1,21 +1,23 @@
 /*
-    Copyright (C) 2000-2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 
 #include <iostream>
@@ -23,13 +25,12 @@
 #include <cmath>
 #include <string>
 
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/error.h"
 #include "pbd/pthread_utils.h"
 #include "pbd/memento_command.h"
 #include "pbd/unwind.h"
-#include "pbd/stacktrace.h"
 
 #include "gtkmm2ext/utils.h"
 
@@ -54,7 +55,7 @@ using namespace PBD;
 using namespace Gtk;
 using namespace Gtkmm2ext;
 
-TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, samplecnt_t oldlen, samplecnt_t new_length, samplepos_t position)
+TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, timecnt_t const & oldlen, timecnt_t const & new_length, Temporal::ratio_t const & ratio, timepos_t const & position, bool fixed_end)
 	: ArdourDialog (X_("time fx dialog"))
 	, editor (e)
 	, pitching (pitch)
@@ -63,6 +64,7 @@ TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, samplecnt_t oldlen, samplecnt
 	, stretch_opts_label (_("Contents"))
 	, precise_button (_("Minimize time distortion"))
 	, preserve_formants_button(_("Preserve Formants"))
+	, fixed_end (fixed_end)
 	, original_length (oldlen)
 	, pitch_octave_adjustment (0.0, -4.0, 4.0, 1, 2.0)
 	, pitch_semitone_adjustment (0.0, -12.0, 12.0, 1.0, 4.0)
@@ -70,6 +72,7 @@ TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, samplecnt_t oldlen, samplecnt
 	, pitch_octave_spinner (pitch_octave_adjustment)
 	, pitch_semitone_spinner (pitch_semitone_adjustment)
 	, pitch_cent_spinner (pitch_cent_adjustment)
+	, duration_ratio (ratio)
 	, duration_adjustment (100.0, -1000.0, 1000.0, 1.0, 10.0)
 	, duration_clock (0)
 	, ignore_adjustment_change (false)
@@ -99,30 +102,32 @@ TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, samplecnt_t oldlen, samplecnt
 
 	upper_button_box.set_spacing (6);
 
-	l = manage (new Label (_("<b>Options</b>"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false ));
+	l = manage (new Label (_("<b>Options</b>"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false ));
 	l->set_use_markup ();
 
 	upper_button_box.pack_start (*l, false, false);
+
+	/* if the ratio is already set, do not allow adjustment */
 
 	if (pitching) {
 		Table* table = manage (new Table (4, 3, false));
 		table->set_row_spacings	(6);
 		table->set_col_spacing	(1, 6);
-		l = manage (new Label ("", Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false )); //Common gnome way for padding
+		l = manage (new Label ("", Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false )); //Common gnome way for padding
 		l->set_padding (8, 0);
 		table->attach (*l, 0, 1, 0, 4, Gtk::FILL, Gtk::FILL, 0, 0);
 
-		l = manage (new Label (_("Octaves:"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+		l = manage (new Label (_("Octaves:"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 		table->attach (*l, 1, 2, 0, 1, Gtk::FILL, Gtk::EXPAND, 0, 0);
 		table->attach (pitch_octave_spinner, 2, 3, 0, 1, Gtk::FILL, Gtk::EXPAND & Gtk::FILL, 0, 0);
 		pitch_octave_spinner.set_activates_default ();
 
-		l = manage (new Label (_("Semitones:"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+		l = manage (new Label (_("Semitones:"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 		table->attach (*l, 1, 2, 1, 2, Gtk::FILL, Gtk::EXPAND, 0, 0);
 		table->attach (pitch_semitone_spinner, 2, 3, 1, 2, Gtk::FILL, Gtk::EXPAND & Gtk::FILL, 0, 0);
 		pitch_semitone_spinner.set_activates_default ();
 
-		l = manage (new Label (_("Cents:"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+		l = manage (new Label (_("Cents:"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 		pitch_cent_spinner.set_digits (1);
 		table->attach (*l, 1, 2, 2, 3, Gtk::FILL, Gtk::EXPAND, 0, 0);
 		table->attach (pitch_cent_spinner, 2, 3, 2, 3, Gtk::FILL, Gtk::EXPAND & Gtk::FILL, 0, 0);
@@ -144,9 +149,8 @@ TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, samplecnt_t oldlen, samplecnt
 		vector<string> strings;
 		duration_clock = manage (new AudioClock (X_("stretch"), true, X_("stretch"), true, false, true, false, true));
 		duration_clock->set_session (e.session());
-		duration_clock->set (new_length, true);
 		duration_clock->set_mode (AudioClock::BBT);
-		duration_clock->set_bbt_reference (position);
+		duration_clock->set_duration (timecnt_t (new_length, position), true);
 
 		Gtk::Alignment* clock_align = manage (new Gtk::Alignment);
 		clock_align->add (*duration_clock);
@@ -157,10 +161,14 @@ TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, samplecnt_t oldlen, samplecnt
 		table->attach (*clock_align, 1, 2, row, row+1, Gtk::AttachOptions (Gtk::EXPAND|Gtk::FILL), Gtk::FILL, 0, 0);
 		row++;
 
-		const double fract = ((double) new_length) / original_length;
 		/* note the *100.0 to convert fract into a percentage */
-		duration_adjustment.set_value (fract*100.0);
+		duration_adjustment.set_value (duration_ratio.to_double() * 100.0);
+
 		Gtk::SpinButton* spinner = manage (new Gtk::SpinButton (duration_adjustment, 1.0, 3));
+
+		if (duration_ratio != Temporal::ratio_t (1, 1)) {
+			spinner->set_sensitive (false);
+		}
 
 		l = manage (new Gtk::Label (_("Percent")));
 		table->attach (*l, 0, 1, row, row+1, Gtk::FILL, Gtk::FILL, 0, 0);
@@ -201,7 +209,7 @@ TimeFXDialog::TimeFXDialog (Editor& e, bool pitch, samplecnt_t oldlen, samplecnt
 	VBox* progress_box = manage (new VBox);
 	progress_box->set_spacing (6);
 
-	l = manage (new Label (_("<b>Progress</b>"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("<b>Progress</b>"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	l->set_use_markup ();
 
 	progress_box->pack_start (*l, false, false);
@@ -246,7 +254,6 @@ TimeFXDialog::timer_update ()
 void
 TimeFXDialog::cancel_in_progress ()
 {
-	status = -2;
 	request.cancel = true;
 	first_cancel.disconnect();
 }
@@ -254,20 +261,23 @@ TimeFXDialog::cancel_in_progress ()
 gint
 TimeFXDialog::delete_in_progress (GdkEventAny*)
 {
-	status = -2;
 	request.cancel = true;
 	first_delete.disconnect();
 	return TRUE;
 }
 
-float
+Temporal::ratio_t
 TimeFXDialog::get_time_fraction () const
 {
 	if (pitching) {
-		return 1.0;
+		return Temporal::ratio_t (1, 1);
 	}
 
-	return duration_adjustment.get_value() / 100.0;
+	if (duration_ratio != Temporal::ratio_t (1, 1)) {
+		return duration_ratio;
+	}
+
+	return Temporal::ratio_t (duration_adjustment.get_value(), 100);
 }
 
 float
@@ -300,9 +310,14 @@ TimeFXDialog::duration_adjustment_changed ()
 		return;
 	}
 
-	PBD::Unwinder<bool> uw (ignore_clock_change, true);
+	if (duration_adjustment.get_value() == 0.0) {
+		return;
+	}
 
-	duration_clock->set ((samplecnt_t) (original_length * (duration_adjustment.get_value()/ 100.0)));
+	PBD::Unwinder<bool> uw (ignore_clock_change, true);
+	timecnt_t dur = original_length.scale (Temporal::ratio_t (duration_adjustment.get_value(), 100.0));
+
+	duration_clock->set_duration (dur);
 }
 
 void
@@ -314,5 +329,5 @@ TimeFXDialog::duration_clock_changed ()
 
 	PBD::Unwinder<bool> uw (ignore_adjustment_change, true);
 
-	duration_adjustment.set_value (100.0 * (duration_clock->current_duration() / (double) original_length));
+	duration_adjustment.set_value (100.0 * (duration_clock->current_duration() / original_length).to_double());
 }

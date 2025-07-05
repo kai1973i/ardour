@@ -1,19 +1,20 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2018 Ben Loftis <ben@harrisonconsoles.com>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "ardour/audioengine.h"
@@ -23,6 +24,7 @@
 #include "gtkmm2ext/colors.h"
 #include "gtkmm2ext/gui_thread.h"
 #include "gtkmm2ext/keyboard.h"
+#include "gtkmm2ext/utils.h"
 
 #include "widgets/tooltips.h"
 
@@ -39,6 +41,7 @@
 #define BBT_BAR_CHAR "|"
 
 using namespace ARDOUR;
+using namespace Gtkmm2ext;
 
 MiniTimeline::MiniTimeline ()
 	: _last_update_sample (-1)
@@ -59,21 +62,27 @@ MiniTimeline::MiniTimeline ()
 	_layout = Pango::Layout::create (get_pango_context());
 
 	UIConfiguration::instance().ColorsChanged.connect (sigc::mem_fun (*this, &MiniTimeline::set_colors));
-	UIConfiguration::instance().DPIReset.connect (sigc::mem_fun (*this, &MiniTimeline::on_name_changed));
-	UIConfiguration::instance().DPIReset.connect (sigc::mem_fun (*this, &MiniTimeline::on_name_changed));
+	UIConfiguration::instance().DPIReset.connect (sigc::mem_fun (*this, &MiniTimeline::dpi_changed));
+	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &MiniTimeline::parameter_changed));
 
 	set_name ("minitimeline");
 
-	Location::name_changed.connect (marker_connection, invalidator (*this), boost::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
-	Location::end_changed.connect (marker_connection, invalidator (*this), boost::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
-	Location::start_changed.connect (marker_connection, invalidator (*this), boost::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
-	Location::flags_changed.connect (marker_connection, invalidator (*this), boost::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
+	Location::cue_change.connect (marker_connection, invalidator (*this), std::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
+	Location::name_changed.connect (marker_connection, invalidator (*this), std::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
+	Location::end_changed.connect (marker_connection, invalidator (*this), std::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
+	Location::start_changed.connect (marker_connection, invalidator (*this), std::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
+	Location::changed.connect (marker_connection, invalidator (*this), std::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
+	Location::flags_changed.connect (marker_connection, invalidator (*this), std::bind (&MiniTimeline::update_minitimeline, this), gui_context ());
+
+	Temporal::TempoMap::MapChanged.connect (tempo_map_connection, invalidator (*this), std::bind (&MiniTimeline::update_minitimeline, this), gui_context());
 
 	ArdourWidgets::set_tooltip (*this,
 			string_compose (_("<b>Navigation Timeline</b>. Use left-click to locate to time position or marker; scroll-wheel to jump, hold %1 for fine grained and %2 + %3 for extra-fine grained control. Right-click to set display range. The display unit is defined by the primary clock."),
 				Gtkmm2ext::Keyboard::primary_modifier_name(),
 				Gtkmm2ext::Keyboard::primary_modifier_name (),
 				Gtkmm2ext::Keyboard::secondary_modifier_name ()));
+
+	set_colors ();
 }
 
 MiniTimeline::~MiniTimeline ()
@@ -108,19 +117,19 @@ MiniTimeline::set_session (Session* s)
 
 	_session->config.ParameterChanged.connect (session_connection,
 			invalidator (*this),
-			boost::bind (&MiniTimeline::parameter_changed, this, _1), gui_context()
+			std::bind (&MiniTimeline::parameter_changed, this, _1), gui_context()
 			);
 	_session->locations()->added.connect (session_connection,
 			invalidator (*this),
-			boost::bind (&MiniTimeline::update_minitimeline, this), gui_context()
+			std::bind (&MiniTimeline::update_minitimeline, this), gui_context()
 			);
 	_session->locations()->removed.connect (session_connection,
 			invalidator (*this),
-			boost::bind (&MiniTimeline::update_minitimeline, this), gui_context()
+			std::bind (&MiniTimeline::update_minitimeline, this), gui_context()
 			);
 	_session->locations()->changed.connect (session_connection,
 			invalidator (*this),
-			boost::bind (&MiniTimeline::update_minitimeline, this), gui_context()
+			std::bind (&MiniTimeline::update_minitimeline, this), gui_context()
 			);
 
 	_jumplist.clear ();
@@ -129,20 +138,12 @@ MiniTimeline::set_session (Session* s)
 }
 
 void
-MiniTimeline::on_style_changed (const Glib::RefPtr<Gtk::Style>& old_style)
+MiniTimeline::dpi_changed ()
 {
-	CairoWidget::on_style_changed (old_style);
-	set_colors ();
-	calculate_time_width ();
-}
-
-void
-MiniTimeline::on_name_changed ()
-{
-	set_colors ();
+	_layout->set_font_description (ARDOUR_UI_UTILS::get_font_for_style (N_("MarkerText")));
 	calculate_time_width ();
 
-	if (is_realized()) {
+	if (get_realized()) {
 		queue_resize ();
 	}
 }
@@ -157,6 +158,9 @@ MiniTimeline::set_colors ()
 void
 MiniTimeline::parameter_changed (std::string const& p)
 {
+	if (p == "cue-behavior") {
+		update_minitimeline ();
+	}
 	if (p == "minitimeline-span") {
 		calculate_time_spacing ();
 		update_minitimeline ();
@@ -196,7 +200,7 @@ MiniTimeline::set_span (samplecnt_t ts)
 void
 MiniTimeline::super_rapid_update ()
 {
-	if (!_session || !_session->engine().running() || !is_mapped ()) {
+	if (!_session || !_session->engine().running() || !get_mapped ()) {
 		return;
 	}
 	samplepos_t const sample = PublicEditor::instance().playhead_cursor_sample ();
@@ -210,11 +214,6 @@ MiniTimeline::super_rapid_update ()
 	if (m != _clock_mode) {
 		_clock_mode = m;
 		calculate_time_width ();
-		change = true;
-	}
-
-	if (_clock_mode == AudioClock::BBT) {
-		// TODO check if tempo-map changed
 		change = true;
 	}
 
@@ -238,7 +237,7 @@ MiniTimeline::calculate_time_width ()
 			_layout->set_text (" 88:88:88,888 ");
 			break;
 		case AudioClock::BBT:
-			_layout->set_text ("888|88|8888");
+			_layout->set_text ("888|00|00");
 			break;
 		case AudioClock::MinSec:
 			_layout->set_text ("88:88:88,88");
@@ -282,9 +281,8 @@ MiniTimeline::format_time (samplepos_t when)
 		case AudioClock::BBT:
 			{
 				char buf[64];
-				Timecode::BBT_Time BBT = _session->tempo_map().bbt_at_sample (when);
-				snprintf (buf, sizeof (buf), "%03" PRIu32 BBT_BAR_CHAR "%02" PRIu32 BBT_BAR_CHAR "%04" PRIu32,
-						BBT.bars, BBT.beats, BBT.ticks);
+				Temporal::BBT_Time BBT = Temporal::TempoMap::use()->bbt_at (timepos_t (when));
+				snprintf (buf, sizeof (buf), "%d" BBT_BAR_CHAR "00" BBT_BAR_CHAR "00", BBT.bars);
 				_layout->set_text (buf);
 			}
 			break;
@@ -330,7 +328,7 @@ MiniTimeline::draw_dots (cairo_t* cr, int left, int right, int y, Gtkmm2ext::Col
 }
 
 int
-MiniTimeline::draw_mark (cairo_t* cr, int x0, int x1, const std::string& label, bool& prelight)
+MiniTimeline::draw_mark (cairo_t* cr, int marker_loc, int marker_right_edge, const std::string& label, bool& prelight)
 {
 	int h = _marker_height;
 	/* ArdourMarker shape
@@ -348,66 +346,138 @@ MiniTimeline::draw_mark (cairo_t* cr, int x0, int x1, const std::string& label, 
 
 	const int y = PADDING;
 	int w2 = (h - 1) / 4;
-	double h0 = h * .4;
+	double h0 = h * .6;
 	double h1 = h - h0;
 
 	int lw, lh;
 	_layout->set_text (label);
 	_layout->get_pixel_size (lw, lh);
-	int rw = std::min (x1, x0 + w2 + lw + 2);
+	int rw = std::min (marker_right_edge, marker_loc + w2 + lw + 2);
 
-	if (_pointer_y >= 0 && _pointer_y <= y + h && _pointer_x >= x0 - w2 && _pointer_x <= rw) {
+	if (_pointer_y >= 0 && _pointer_y <= y + h && _pointer_x >= marker_loc - w2 && _pointer_x <= rw) {
 		prelight = true;
 	}
 
-	// TODO cache in set_colors()
+	const double scale = UIConfiguration::instance ().get_ui_scale ();
 	uint32_t color = UIConfiguration::instance().color (
-			prelight ? "entered marker" : "location marker");
+		prelight ? "entered marker" : "location marker");
 
-	double r, g, b, a;
-	Gtkmm2ext::color_to_rgba (color, r, g, b, a);
+	//shrink the height of the 'flag' part, a bit.
+	h -= 4*scale;
 
-	if (rw < x0) {
-		rw = x1;
-	} else {
-		cairo_save (cr);
-		cairo_rectangle (cr, x0, y, rw - x0, h);
-		cairo_set_source_rgba (cr, r, g, b, 0.5); // this should use a shaded color
-		cairo_fill_preserve (cr);
-		cairo_clip (cr);
-
-		// marker label
-		cairo_move_to (cr, x0 + w2, y + .5 * (h - lh));
-		cairo_set_source_rgb (cr, 0, 0, 0);
-		pango_cairo_show_layout (cr, _layout->gobj());
-		cairo_restore (cr);
-	}
-
-	// draw marker on top
-	cairo_move_to (cr, x0 - .5, y + .5);
+	// draw marker first
+	cairo_move_to (cr, marker_loc - .5, y + .5);
 	cairo_rel_line_to (cr, -w2 , 0);
 	cairo_rel_line_to (cr, 0, h0);
 	cairo_rel_line_to (cr, w2, h1);
 	cairo_rel_line_to (cr, w2, -h1);
 	cairo_rel_line_to (cr, 0, -h0);
 	cairo_close_path (cr);
-	cairo_set_source_rgba (cr, r, g, b, 1.0);
+	set_source_rgba (cr, color);
 	cairo_set_line_width (cr, 1.0);
 	cairo_stroke_preserve (cr);
 	cairo_fill (cr);
+
+	if (rw < marker_loc) {
+		rw = marker_right_edge;
+	} else {
+		cairo_save (cr);
+		set_source_rgba (cr, color);
+		cairo_rectangle (cr, marker_loc-5*scale, y, rw - marker_loc + 4*scale, h);
+		cairo_fill_preserve (cr);
+		cairo_clip (cr);
+
+		// marker label
+		cairo_move_to (cr, marker_loc + w2 - 4*scale, y + .5 * (h - lh));
+		cairo_set_source_rgb (cr, 0, 0, 0);
+		pango_cairo_show_layout (cr, _layout->gobj());
+		cairo_restore (cr);
+
+		/* right line */
+		cairo_rectangle (cr, rw-2*scale, y, 1*scale, h);
+		cairo_set_source_rgba (cr, 0, 0, 0, 0.7);
+		cairo_fill (cr);
+	}
 
 	return rw;
 }
 
 int
+MiniTimeline::draw_cue (cairo_t* cr, int marker_loc, int next_cue_left_edge, int tl_width, int cue_index, bool& prelight)
+{
+	const double scale = UIConfiguration::instance ().get_ui_scale ();
+
+	int h = _marker_height;
+
+	int y_center = PADDING + _marker_height + 2*scale + h/2;
+
+	int marker_left_edge = marker_loc - h/2;  //left side of circle
+	int marker_right_edge = marker_loc + h/2;  //right side of circle (we ignore the arg, which is the next marker's edge)
+
+	if (_pointer_y >= y_center-h/2 && _pointer_y <= y_center+h/2 && _pointer_x >= marker_left_edge && _pointer_x <= marker_right_edge) {
+		prelight = true;
+	}
+
+	uint32_t color = UIConfiguration::instance().color (
+		prelight ? "entered marker" : "location marker");
+
+	CueBehavior cb (_session->config.get_cue_behavior());
+	if (!(cb & ARDOUR::FollowCues)) {
+		color = Gtkmm2ext::HSV(color).darker(0.5).color();
+	};
+
+	// draw a bar to show that the Cue continues forever
+	if (cue_index!=CueRecord::stop_all) {
+		cairo_rectangle (cr, marker_loc, y_center-2*scale, next_cue_left_edge - marker_loc, 4*scale);
+		set_source_rgba (cr, color);
+		cairo_fill (cr);
+	}
+
+	// draw the Cue
+	if (cue_index!=CueRecord::stop_all) {  //regular cues are a circle
+		cairo_arc(cr, marker_loc, y_center, (h/2), 0, 2*M_PI);
+		cairo_set_source_rgb (cr, 0, 0, 0);  //black
+		cairo_fill (cr);
+		cairo_arc(cr, marker_loc, y_center, (h/2)-1*scale, 0, 2*M_PI);
+		set_source_rgba (cr, color);
+		cairo_fill (cr);
+	} else {  //'Stop' cues are a square
+		float size = h- 4*scale;
+		cairo_rectangle(cr, marker_loc - (size/2), y_center-(size/2), size, size);
+		cairo_set_source_rgb (cr, 0, 0, 0);  //black
+		cairo_fill (cr);
+		size -= 1*scale;
+		cairo_rectangle(cr, marker_loc - (size/2), y_center-(size/2), size, size);
+		set_source_rgba (cr, color);
+		cairo_fill (cr);
+	}
+
+	//draw cue letter
+	if (cue_index!=CueRecord::stop_all) {
+		_layout->set_text (cue_marker_name (cue_index));
+		cairo_set_source_rgb (cr, 0, 0, 0);  //black
+		cairo_move_to (cr, marker_loc, y_center);  //move to center of circle
+		int tw, th;
+		_layout->get_pixel_size (tw, th);
+		cairo_rel_move_to (cr, -tw/2, -th/2);  //move to top-left of text
+		pango_cairo_show_layout (cr, _layout->gobj());
+	}
+
+	return marker_right_edge;
+}
+
+int
 MiniTimeline::draw_edge (cairo_t* cr, int x0, int x1, bool left, const std::string& label, bool& prelight)
 {
-	int h = _marker_height;
+	const double scale = UIConfiguration::instance ().get_ui_scale ();
+
+	int h = _marker_height - 4*scale;
+
 	int w2 = (h - 1) / 4;
 
 	const int y = PADDING;
-	const double yc = rint (h * .5);
-	const double dy = h * .4;
+	const double dy = (0.5*h);  //half the triangle pointer's height
+	const double yc = dy;
 
 	bool with_label;
 	int lw, lh, lx;
@@ -447,7 +517,6 @@ MiniTimeline::draw_edge (cairo_t* cr, int x0, int x1, bool left, const std::stri
 		prelight = true;
 	}
 
-	// TODO cache in set_colors()
 	uint32_t color = UIConfiguration::instance().color (
 			prelight ? "entered marker" : "location marker");
 
@@ -458,23 +527,23 @@ MiniTimeline::draw_edge (cairo_t* cr, int x0, int x1, bool left, const std::stri
 		const int y = PADDING;
 		cairo_save (cr);
 		cairo_rectangle (cr, lx, y, lw + 2, h);
-		cairo_set_source_rgba (cr, r, g, b, 0.5); // this should use a shaded color
+		set_source_rgba (cr, color);
 		cairo_fill_preserve (cr);
 		cairo_clip (cr);
 
 		// marker label
 		cairo_move_to (cr, lx + 1, y + .5 * (h - lh));
-		cairo_set_source_rgb (cr, 0, 0, 0);
+		cairo_set_source_rgb (cr, 0, 0, 0);  //black text
 		pango_cairo_show_layout (cr, _layout->gobj());
 		cairo_restore (cr);
 	}
 
 	// draw arrow
-	cairo_move_to (cr, px - .5, PADDING + yc - .5);
+	cairo_move_to (cr, px - .5*scale, PADDING + yc - .5*scale);
 	cairo_rel_line_to (cr, dx , dy);
 	cairo_rel_line_to (cr, 0, -2. * dy);
 	cairo_close_path (cr);
-	cairo_set_source_rgba (cr, r, g, b, 1.0);
+	set_source_rgba (cr, color);
 	cairo_set_line_width (cr, 1.0);
 	cairo_stroke_preserve (cr);
 	cairo_fill (cr);
@@ -484,10 +553,11 @@ MiniTimeline::draw_edge (cairo_t* cr, int x0, int x1, bool left, const std::stri
 
 
 struct LocationMarker {
-	LocationMarker (const std::string& l, samplepos_t w)
-		: label (l), when (w) {}
+	LocationMarker (int idx, const std::string& l, Temporal::timepos_t const & w)
+		: cue_index(idx), label (l), when (w) {}
+	int cue_index;
 	std::string label;
-	samplepos_t  when;
+	Temporal::timepos_t  when;
 };
 
 struct LocationMarkerSort {
@@ -504,9 +574,13 @@ MiniTimeline::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_
 	Gtkmm2ext::Color base = UIConfiguration::instance().color ("ruler base");
 	Gtkmm2ext::Color text = UIConfiguration::instance().color ("ruler text");
 
+	const double scale = UIConfiguration::instance ().get_ui_scale ();
+
 	if (_n_labels == 0) {
 		return;
 	}
+
+	cairo_push_group (cr);
 
 	const int width = get_width ();
 	const int height = get_height ();
@@ -519,17 +593,27 @@ MiniTimeline::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_
 	cairo_clip (cr);
 
 	if (_session == 0) {
+		cairo_pop_group_to_source (cr);
+		cairo_paint (cr);
 		return;
 	}
 
 	/* time */
-	const samplepos_t p = _last_update_sample;
-	const samplepos_t lower = (std::max ((samplepos_t)0, (p - _time_span_samples)) / _time_granularity) * _time_granularity;
+	const samplepos_t phead = _last_update_sample;  //playhead location
+	const samplepos_t lower = (std::max ((samplepos_t)0, (phead - _time_span_samples)) / _time_granularity) * _time_granularity;
 
-	int dot_left = width * .5 + (lower - p) * _px_per_sample;
+	int dot_left = width * .5 + (lower - phead) * _px_per_sample;
 	for (int i = 0; i < 2 + _n_labels; ++i) {
 		samplepos_t when = lower + i * _time_granularity;
-		double xpos = width * .5 + (when - p) * _px_per_sample;
+
+		/* in BBT, we should round to the nearest bar */
+		if (_clock_mode == AudioClock::BBT) {
+			Temporal::TempoMap::SharedPtr tmap (Temporal::TempoMap::use());
+			timepos_t rounded = timepos_t (tmap->quarters_at (tmap->round_to_bar (tmap->bbt_at (timepos_t(when)))));
+			when = tmap->sample_at(rounded);
+		}
+
+		double xpos = width * .5 + (when - phead) * _px_per_sample;
 
 		// TODO round to nearest display TC in +/- 1px
 		// prefer to display BBT |0  or .0
@@ -550,9 +634,24 @@ MiniTimeline::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_
 	}
 	draw_dots (cr, dot_left, width, height - PADDING - _time_height * .5, text);
 
+	/* playhead beneath locations */
+	int xc = width * 0.5f;
+	cairo_set_line_width (cr, 1.0);
+	double r,g,b,a;  Gtkmm2ext::color_to_rgba(_phead_color, r,g,b,a);
+	cairo_set_source_rgb (cr, r,g,b); // playhead color
+	cairo_move_to (cr, xc + .5, 0);
+	cairo_rel_line_to (cr, 0, height);
+	cairo_stroke (cr);
+	cairo_move_to (cr, xc + .5, height - PADDING );
+	cairo_rel_line_to (cr, -3,  0);
+	cairo_rel_line_to (cr,  3, -4);
+	cairo_rel_line_to (cr,  3,  4);
+	cairo_close_path (cr);
+	cairo_fill (cr);
+
 	/* locations */
-	samplepos_t lmin = std::max ((samplepos_t)0, (p - _time_span_samples));
-	samplepos_t lmax = p + _time_span_samples;
+	samplepos_t left_edge_samples = std::max ((samplepos_t)0, (phead - _time_span_samples));
+	samplepos_t right_edge_samples = phead + _time_span_samples;
 
 	int tw, th;
 	_layout->set_text (X_("Marker@"));
@@ -560,18 +659,18 @@ MiniTimeline::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_
 
 	_marker_height = th + 2;
 	assert (_marker_height > 4);
-	const int mw = (_marker_height - 1) / 4;
+	const int marker_width = (_marker_height - 1) / 4;
 
-	lmin -= mw / _px_per_sample;
-	lmax += mw / _px_per_sample;
+	left_edge_samples -= marker_width / _px_per_sample;
+	right_edge_samples += marker_width / _px_per_sample;
 
 	std::vector<LocationMarker> lm;
 
 	const Locations::LocationList& ll (_session->locations ()->list ());
 	for (Locations::LocationList::const_iterator l = ll.begin(); l != ll.end(); ++l) {
 		if ((*l)->is_session_range ()) {
-			lm.push_back (LocationMarker(_("start"), (*l)->start ()));
-			lm.push_back (LocationMarker(_("end"), (*l)->end ()));
+			lm.push_back (LocationMarker(-1, _("start"), (*l)->start ()));
+			lm.push_back (LocationMarker(-1, _("end"), (*l)->end ()));
 			continue;
 		}
 
@@ -579,7 +678,8 @@ MiniTimeline::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_
 			continue;
 		}
 
-		lm.push_back (LocationMarker((*l)->name(), (*l)->start ()));
+		int cue_idx = (*l)->is_cue_marker () ? (*l)->cue_id() : -1;
+		lm.push_back (LocationMarker(cue_idx, (*l)->name(), (*l)->start ()));
 	}
 
 	_jumplist.clear ();
@@ -587,79 +687,129 @@ MiniTimeline::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_
 	LocationMarkerSort location_marker_sort;
 	std::sort (lm.begin(), lm.end(), location_marker_sort);
 
-	std::vector<LocationMarker>::const_iterator outside_left = lm.end();
-	std::vector<LocationMarker>::const_iterator outside_right = lm.end();
-	int left_limit = 0;
-	int right_limit = width * .5 + mw;
+	std::vector<LocationMarker>::const_iterator outside_left_marker = lm.end();
+	std::vector<LocationMarker>::const_iterator outside_right_marker = lm.end();
+	int rightmost_marker_right_edge = width * .5 + marker_width;
 	int id = 0;
+	int leftmost_marker_left_edge = width;
 
-	for (std::vector<LocationMarker>::const_iterator l = lm.begin(); l != lm.end(); ++id) {
-		samplepos_t when = (*l).when;
-		if (when < lmin) {
-			outside_left = l;
-			if (++l != lm.end()) {
-				left_limit = floor (width * .5 + ((*l).when - p) * _px_per_sample) - 1 - mw;
+	/* calculate positions of cue markers immediately before and inside my width*/
+	int prior_cue_pos = width;
+	int prior_cue_idx = -1;
+	int first_shown_cue_pos = width;
+	for (std::vector<LocationMarker>::const_iterator l = lm.begin(); l != lm.end(); l++) {
+		if ((*l).cue_index >=0 ) {
+			const samplepos_t when = (*l).when.samples();
+			int cue_pos = floor (width * .5 + (when - phead) * _px_per_sample);
+			if (cue_pos < 0) {
+				prior_cue_pos = cue_pos;
+				prior_cue_idx = (*l).cue_index;
+			} else if (cue_pos < width) {
+				first_shown_cue_pos = cue_pos;
+				break;
 			} else {
-				left_limit = width * .5 - mw;
+				break;
 			}
+		}
+	}
+
+	/* if there is a cue off-window immediately to the left, we need to draw its bar to show that Cues are continuous */
+	if (prior_cue_pos < 0 && prior_cue_idx != INT32_MAX) {
+		uint32_t color = UIConfiguration::instance().color ("location marker");
+		CueBehavior cb (_session->config.get_cue_behavior());
+		if (!(cb & ARDOUR::FollowCues)) {
+			color = Gtkmm2ext::HSV(color).darker(0.5).color();
+		};
+		int y_center = PADDING + _marker_height + 2*scale + _marker_height/2;
+		cairo_rectangle (cr, 0, y_center-2*scale, first_shown_cue_pos, 4*scale);
+		set_source_rgba (cr, color);
+		cairo_fill (cr);
+	}
+
+	/* draw the location and cue markers */
+	for (std::vector<LocationMarker>::const_iterator l = lm.begin(); l != lm.end(); ++id) {
+		const std::string& label = (*l).label;
+		const int cue_index = (*l).cue_index;
+		const samplepos_t when = (*l).when.samples();
+
+		if (when < left_edge_samples && cue_index==-1) {
+			outside_left_marker = l;
+			++l;
 			continue;
 		}
-		if (when > lmax) {
-			outside_right = l;
+		if (when > right_edge_samples && cue_index==-1) {
+			outside_right_marker = l;
 			break;
 		}
-		int x0 = floor (width * .5 + (when - p) * _px_per_sample);
-		int x1 = width;
-		const std::string& label = (*l).label;
-		if (++l != lm.end()) {
-			x1 = floor (width * .5 + ((*l).when - p) * _px_per_sample) - 1 - mw;
+		int marker_loc = floor (width * .5 + (when - phead) * _px_per_sample);
+
+		//peek forward to set our marker's right-side limit
+		int next_marker_left_edge = width;
+		std::vector<LocationMarker>::const_iterator peek = l;
+		for (peek++; peek != lm.end(); peek++) {
+			if ((*peek).cue_index == -1) {
+				next_marker_left_edge = floor (width * .5 + ((*peek).when.samples() - phead) * _px_per_sample) - 1 - marker_width;
+				break;
+			}
 		}
-		bool prelight = false;
-		x1 = draw_mark (cr, x0, x1, label, prelight);
-		_jumplist.push_back (JumpRange (x0 - mw, x1, when, prelight));
-		right_limit = std::max (x1, right_limit);
+
+		//peek forward to set our cue's right side limit
+		int next_cue_left_edge = width;
+		peek = l;
+		for (peek++; peek != lm.end(); peek++) {
+			if ((*peek).cue_index >= 0) {
+				next_cue_left_edge = floor (width * .5 + ((*peek).when.samples() - phead) * _px_per_sample) - 1 - marker_width;
+				break;
+			}
+		}
+
+		//draw the mark
+		if (when > left_edge_samples) {
+			bool prelight = false;
+			int marker_left_edge = marker_loc - marker_width/2;
+			int marker_right_edge = 0;
+			if (cue_index >= 0) {
+				marker_right_edge = draw_cue (cr, marker_loc, next_cue_left_edge, width, cue_index, prelight);
+			} else {
+				marker_right_edge = draw_mark (cr, marker_loc, next_marker_left_edge, label, prelight);
+				leftmost_marker_left_edge = std::min(marker_left_edge, leftmost_marker_left_edge);
+				rightmost_marker_right_edge = std::max (marker_right_edge, rightmost_marker_right_edge);
+			}
+
+			_jumplist.push_back (JumpRange (marker_left_edge, marker_right_edge, when, prelight));
+		}
+
+		l++;
 	}
 
-	if (outside_left != lm.end ()) {
-		if (left_limit > 3 * mw + PADDING) {
+	if (outside_left_marker != lm.end ()) {
+		if ( leftmost_marker_left_edge > 3 * marker_width) {
 			int x0 = PADDING + 1;
-			int x1 = left_limit - mw;
+			int x1 = leftmost_marker_left_edge;
 			bool prelight = false;
-			x1 = draw_edge (cr, x0, x1, true, (*outside_left).label, prelight);
+			x1 = draw_edge (cr, x0, x1, true, (*outside_left_marker).label, prelight);
 			if (x0 != x1) {
-				_jumplist.push_back (JumpRange (x0, x1, (*outside_left).when, prelight));
-				right_limit = std::max (x1, right_limit);
+				_jumplist.push_back (JumpRange (x0, x1, (*outside_left_marker).when.samples(), prelight));
+				rightmost_marker_right_edge = std::max (x1, rightmost_marker_right_edge);
 			}
 		}
 	}
 
-	if (outside_right != lm.end ()) {
-		if (right_limit + PADDING < width - 3 * mw) {
-			int x0 = right_limit;
+	if (outside_right_marker != lm.end ()) {
+		if (rightmost_marker_right_edge + PADDING < width - 3 * marker_width) {
+			int x0 = rightmost_marker_right_edge;
 			int x1 = width - PADDING;
 			bool prelight = false;
-			x0 = draw_edge (cr, x0, x1, false, (*outside_right).label, prelight);
+			x0 = draw_edge (cr, x0, x1, false, (*outside_right_marker).label, prelight);
 			if (x0 != x1) {
-				_jumplist.push_back (JumpRange (x0, x1, (*outside_right).when, prelight));
+				_jumplist.push_back (JumpRange (x0, x1, (*outside_right_marker).when.samples(), prelight));
 			}
 		}
 	}
 
 
-	/* playhead on top */
-	int xc = width * 0.5f;
-	cairo_set_line_width (cr, 1.0);
-	double r,g,b,a;  Gtkmm2ext::color_to_rgba(_phead_color, r,g,b,a);
-	cairo_set_source_rgb (cr, r,g,b); // playhead color
-	cairo_move_to (cr, xc - .5, 0);
-	cairo_rel_line_to (cr, 0, height);
-	cairo_stroke (cr);
-	cairo_move_to (cr, xc - .5, height);
-	cairo_rel_line_to (cr, -3,  0);
-	cairo_rel_line_to (cr,  3, -4);
-	cairo_rel_line_to (cr,  3,  4);
-	cairo_close_path (cr);
-	cairo_fill (cr);
+	cairo_pop_group_to_source (cr);
+	cairo_paint (cr);
 }
 
 void
@@ -713,22 +863,23 @@ MiniTimeline::on_button_release_event (GdkEventButton *ev)
 {
 	if (!_session) { return true; }
 	if (_session->actively_recording ()) { return true; }
+
+	/* check that the release is still inside the timeline */
 	if (ev->y < 0 || ev->y > get_height () || ev->x < 0 || ev->x > get_width ()) {
 		return true;
 	}
 
-	if (ev->y <= PADDING + _marker_height) {
-		for (JumpList::const_iterator i = _jumplist.begin (); i != _jumplist.end(); ++i) {
-			if (i->left <= ev->x && ev->x <= i->right) {
-				_session->request_locate (i->to, _session->transport_rolling ());
-				return true;
-			}
+	/* check whether any marker was prelighted; if so, that's where the user will expect to jump */
+	for (JumpList::const_iterator i = _jumplist.begin (); i != _jumplist.end(); ++i) {
+		if (i->prelight) {
+			_session->request_locate (i->to);
+			return true;
 		}
 	}
 
 	if (ev->button == 1) {
 		samplepos_t when = _last_update_sample + (ev->x - get_width() * .5) / _px_per_sample;
-		_session->request_locate (std::max ((samplepos_t)0, when), _session->transport_rolling ());
+		_session->request_locate (std::max ((samplepos_t)0, when));
 	}
 
 	return true;
@@ -746,7 +897,7 @@ MiniTimeline::on_motion_notify_event (GdkEventMotion *ev)
 	bool need_expose = false;
 
 	for (JumpList::const_iterator i = _jumplist.begin (); i != _jumplist.end(); ++i) {
-		if (i->left < ev->x && ev->x < i->right && ev->y <= PADDING + _marker_height) {
+		if (i->left < ev->x && ev->x < i->right && ev->y <= PADDING + _marker_height*3) {
 			if (!(*i).prelight) {
 				need_expose = true;
 				break;
@@ -758,6 +909,7 @@ MiniTimeline::on_motion_notify_event (GdkEventMotion *ev)
 			}
 		}
 	}
+
 	if (need_expose) {
 		update_minitimeline ();
 	}
@@ -810,6 +962,6 @@ MiniTimeline::on_scroll_event (GdkEventScroll *ev)
 			return true;
 			break;
 	}
-	_session->request_locate (std::max ((samplepos_t)0, when), _session->transport_rolling ());
+	_session->request_locate (std::max ((samplepos_t)0, when));
 	return true;
 }

@@ -1,22 +1,24 @@
-/* Faderport 8 Control Surface
- * This is the button "View" of the MVC surface inteface,
- * see actions.cc for the "Controller"
- *
+/*
  * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+/* Faderport 8 Control Surface
+ * This is the button "View" of the MVC surface inteface,
+ * see actions.cc for the "Controller"
  */
 
 #include "ardour/plugin_insert.h"
@@ -36,20 +38,20 @@ using namespace ArdourSurface::FP_NAMESPACE::FP8Types;
 void
 FaderPort8::connect_session_signals ()
 {
-	 session->RouteAdded.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_stripable_added_or_removed, this), this);
-	 PresentationInfo::Change.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_pi_property_changed, this, _1), this);
+	 session->RouteAdded.connect(session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_stripable_added_or_removed, this), this);
+	 PresentationInfo::Change.connect(session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_pi_property_changed, this, _1), this);
 
-	Config->ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_parameter_changed, this, _1), this);
-	session->config.ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_parameter_changed, this, _1), this);
+	Config->ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_parameter_changed, this, _1), this);
+	session->config.ParameterChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_parameter_changed, this, _1), this);
 
-	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_transport_state_changed, this), this);
-	session->TransportLooped.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_loop_state_changed, this), this);
-	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_record_state_changed, this), this);
+	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_transport_state_changed, this), this);
+	session->TransportLooped.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_loop_state_changed, this), this);
+	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_record_state_changed, this), this);
 
-	session->DirtyChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_session_dirty_changed, this), this);
-	session->SoloChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_solo_changed, this), this);
-	session->MuteChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_mute_changed, this), this);
-	session->history().Changed.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&FaderPort8::notify_history_changed, this), this);
+	session->DirtyChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_session_dirty_changed, this), this);
+	session->SoloChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_solo_changed, this), this);
+	session->MuteChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_mute_changed, this), this);
+	session->history().Changed.connect (session_connections, MISSING_INVALIDATOR, std::bind (&FaderPort8::notify_history_changed, this), this);
 }
 
 void
@@ -63,16 +65,16 @@ FaderPort8::send_session_state ()
 	notify_mute_changed ();
 	notify_parameter_changed ("clicking");
 
-	notify_automation_mode_changed (); // XXX (stip specific, see below)
+	notify_route_state_changed (); // XXX (stip specific, see below)
 }
 
 // TODO: AutomationState display of plugin & send automation
 // TODO: link/lock control AS.
 void
-FaderPort8::notify_automation_mode_changed ()
+FaderPort8::notify_route_state_changed ()
 {
-	boost::shared_ptr<Stripable> s = first_selected_stripable();
-	boost::shared_ptr<AutomationControl> ac;
+	std::shared_ptr<Stripable> s = first_selected_stripable();
+	std::shared_ptr<AutomationControl> ac;
 	if (s) {
 		switch (_ctrls.fader_mode ()) {
 			case ModeTrack:
@@ -92,6 +94,9 @@ FaderPort8::notify_automation_mode_changed ()
 		_ctrls.button (FP8Controls::BtnATouch).set_active (false);
 		_ctrls.button (FP8Controls::BtnARead).set_active (false);
 		_ctrls.button (FP8Controls::BtnAWrite).set_active (false);
+#ifdef FADERPORT2
+		_ctrls.button (FP8Controls::BtnArm).set_active (false);
+#endif
 		return;
 	}
 
@@ -101,6 +106,12 @@ FaderPort8::notify_automation_mode_changed ()
 	_ctrls.button (FP8Controls::BtnARead).set_active (as == Play);
 	_ctrls.button (FP8Controls::BtnAWrite).set_active (as == Write);
 	_ctrls.button (FP8Controls::BtnALatch).set_active (as == Latch);
+
+#ifdef FADERPORT2
+	/* handle the Faderport's track-arm button */
+	ac = s->rec_enable_control ();
+	_ctrls.button (FP8Controls::BtnArm).set_active (ac ? ac->get_value() : false);
+#endif
 }
 
 void
@@ -114,16 +125,11 @@ FaderPort8::notify_parameter_changed (std::string param)
 void
 FaderPort8::notify_transport_state_changed ()
 {
-	if (session->transport_rolling ()) {
-		_ctrls.button (FP8Controls::BtnPlay).set_active (true);
-		_ctrls.button (FP8Controls::BtnStop).set_active (false);
-	} else {
-		_ctrls.button (FP8Controls::BtnPlay).set_active (false);
-		_ctrls.button (FP8Controls::BtnStop).set_active (true);
-	}
+	_ctrls.button (FP8Controls::BtnPlay).set_active (get_transport_speed()==1.0);
+	_ctrls.button (FP8Controls::BtnStop).set_active (get_transport_speed()==0.0);
 
 	/* set rewind/fastforward lights */
-	const float ts = session->transport_speed ();
+	const float ts = get_transport_speed();
 	FP8ButtonInterface& b_rew = _ctrls.button (FP8Controls::BtnRewind);
 	FP8ButtonInterface& b_ffw = _ctrls.button (FP8Controls::BtnFastForward);
 
@@ -143,15 +149,15 @@ void
 FaderPort8::notify_record_state_changed ()
 {
 	switch (session->record_status ()) {
-		case Session::Disabled:
+		case Disabled:
 			_ctrls.button (FP8Controls::BtnRecord).set_active (0);
 			_ctrls.button (FP8Controls::BtnRecord).set_blinking (false);
 			break;
-		case Session::Enabled:
+		case Enabled:
 			_ctrls.button (FP8Controls::BtnRecord).set_active (true);
 			_ctrls.button (FP8Controls::BtnRecord).set_blinking (true);
 			break;
-		case Session::Recording:
+		case Recording:
 			_ctrls.button (FP8Controls::BtnRecord).set_active (true);
 			_ctrls.button (FP8Controls::BtnRecord).set_blinking (false);
 			break;
@@ -214,7 +220,7 @@ FaderPort8::notify_mute_changed ()
 void
 FaderPort8::notify_plugin_active_changed ()
 {
-	boost::shared_ptr<PluginInsert> pi = _plugin_insert.lock();
+	std::shared_ptr<PluginInsert> pi = _plugin_insert.lock();
 	if (pi) {
 		_ctrls.button (FP8Controls::BtnBypass).set_active (true);
 		_ctrls.button (FP8Controls::BtnBypass).set_color (pi->enabled () ? 0x00ff00ff : 0xff0000ff);
@@ -225,13 +231,13 @@ FaderPort8::notify_plugin_active_changed ()
 }
 
 void
-FaderPort8::nofity_focus_control (boost::weak_ptr<PBD::Controllable> c)
+FaderPort8::nofity_focus_control (std::weak_ptr<PBD::Controllable> c)
 {
 	assert (_link_enabled && !_link_locked);
 	// TODO consider subscribing to c's DropReferences
 	// (in case the control goes away while it has focus, update the BtnColor)
 	_link_control = c;
-	if (c.expired () || 0 == boost::dynamic_pointer_cast<AutomationControl> (_link_control.lock ())) {
+	if (c.expired () || 0 == std::dynamic_pointer_cast<AutomationControl> (_link_control.lock ())) {
 		_ctrls.button (FP8Controls::BtnLink).set_color (0xff8800ff);
 		_ctrls.button (FP8Controls::BtnLock).set_color (0xff0000ff);
 	} else {

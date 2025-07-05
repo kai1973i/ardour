@@ -28,13 +28,14 @@
 */
 //==============================================================================
 
+#include <memory>
+
 #ifdef LUABINDINGDOC
 #include <iostream>
 #include <typeinfo>
 #include <execinfo.h>
 #include <type_traits>
 #include <cxxabi.h>
-#include <memory>
 #include <string>
 #include <cstdlib>
 
@@ -485,8 +486,8 @@ private:
     template <class T>
     static int ctorNilPtrPlacementProxy (lua_State* L)
     {
-      const T* newobject = new T ();
-      Stack<T>::push (L, *newobject);
+      const T newobject;
+      Stack<T>::push (L, newobject);
       return 1;
     }
 
@@ -744,6 +745,52 @@ private:
       return *this;
     }
 #endif
+
+    /**
+      Add or replace a Metatable Metamethod calling a lua_CFunction.
+    */
+    Class <T>& addOperator (char const* name, int (*const fp)(lua_State*))
+    {
+      /* get metatable */
+      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <T>::getClassKey ());
+      lua_pushcfunction (L, fp);
+      rawsetfield (L, -2, name);
+      lua_pop (L, 1);
+
+      /* reset stack */
+      lua_pop (L, 3);
+      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <T>::getStaticKey ());
+      rawgetfield (L, -1, "__class");
+      rawgetfield (L, -1, "__const");
+      lua_insert (L, -3);
+      lua_insert (L, -2);
+
+      return *this;
+    }
+
+    /**
+      Add or replace a Metamethod Metamethod, evaluate a const class-member method
+    */
+    template <class FP>
+    Class <T>& addMetamethod (char const* name, FP const fp)
+    {
+      /* get metatable */
+      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <T>::getClassKey ());
+      new (lua_newuserdata (L, sizeof (FP))) FP (fp);
+      lua_pushcclosure (L, &CFunc::CallConstMember <FP>::f, 1);
+      rawsetfield (L, -2, name);
+      lua_pop (L, 1);
+
+      /* reset stack */
+      lua_pop (L, 3);
+      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <T>::getStaticKey ());
+      rawgetfield (L, -1, "__class");
+      rawgetfield (L, -1, "__const");
+      lua_insert (L, -3);
+      lua_insert (L, -2);
+
+      return *this;
+    }
 
     //--------------------------------------------------------------------------
     /**
@@ -1229,6 +1276,7 @@ private:
     WSPtrClass (char const* name, Namespace const* parent)
       : ClassBase (parent->L)
       , shared (name, parent)
+      , shared_const (name, parent)
       , weak (name, parent)
     {
 #ifdef LUABINDINGDOC
@@ -1239,13 +1287,14 @@ private:
           parent->_name + name,
           std::string(), type_name <T>())
       m_stackSize = shared.m_stackSize;
-      parent->m_stackSize = weak.m_stackSize = shared.m_stackSize = 0;
-      lua_pop (L, 3);
+      parent->m_stackSize = weak.m_stackSize = shared.m_stackSize = shared_const.m_stackSize = 0;
+      lua_pop (L, 6);
     }
 
-    WSPtrClass (char const* name, Namespace const* parent, void const* const sharedkey, void const* const weakkey)
+    WSPtrClass (char const* name, Namespace const* parent, void const* const sharedkey, void const* const sharedconstkey, void const* const weakkey)
       : ClassBase (parent->L)
       , shared (name, parent, sharedkey)
+      , shared_const (name, parent, sharedconstkey)
       , weak (name, parent, weakkey)
     {
 #ifdef LUABINDINGDOC
@@ -1253,8 +1302,8 @@ private:
       _name = parent->_name + name + ":";
 #endif
       m_stackSize = shared.m_stackSize;
-      parent->m_stackSize = weak.m_stackSize = shared.m_stackSize = 0;
-      lua_pop (L, 3);
+      parent->m_stackSize = weak.m_stackSize = shared.m_stackSize = shared_const.m_stackSize = 0;
+      lua_pop (L, 6);
     }
 
     template <class MemFn>
@@ -1263,6 +1312,9 @@ private:
       FUNDOC ("Weak/Shared Pointer Function", name, MemFn)
       set_shared_class ();
       CFunc::CallMemberPtrFunctionHelper <MemFn>::add (L, name, mf);
+
+      set_const_shared_class ();
+      CFunc::CallMemberCPtrFunctionHelper <MemFn>::add (L, name, mf);
 
       set_weak_class ();
       CFunc::CallMemberWPtrFunctionHelper <MemFn>::add (L, name, mf);
@@ -1276,6 +1328,9 @@ private:
       set_shared_class ();
       CFunc::CallMemberRefPtrFunctionHelper <MemFn>::add (L, name, mf);
 
+      set_const_shared_class ();
+      CFunc::CallMemberRefCPtrFunctionHelper <MemFn>::add (L, name, mf);
+
       set_weak_class ();
       CFunc::CallMemberRefWPtrFunctionHelper <MemFn>::add (L, name, mf);
       return *this;
@@ -1287,14 +1342,19 @@ private:
       FUNDOC ("Weak/Shared Pointer Constructor", "", MemFn)
       set_shared_class ();
       lua_pushcclosure (L,
-          &shared. template ctorPtrPlacementProxy <typename FuncTraits <MemFn>::Params, boost::shared_ptr<T>, T >, 0);
+          &shared. template ctorPtrPlacementProxy <typename FuncTraits <MemFn>::Params, std::shared_ptr<T>, T >, 0);
+      rawsetfield(L, -2, "__call");
+
+      set_const_shared_class ();
+      lua_pushcclosure (L,
+          &shared_const. template ctorPtrPlacementProxy <typename FuncTraits <MemFn>::Params, std::shared_ptr<T const>, T >, 0);
       rawsetfield(L, -2, "__call");
 
       set_weak_class ();
       // NOTE: this constructs an empty weak-ptr,
       // ideally we'd construct a weak-ptr from a referenced shared-ptr
       lua_pushcclosure (L,
-          &weak. template ctorPlacementProxy <typename FuncTraits <MemFn>::Params, boost::weak_ptr<T> >, 0);
+          &weak. template ctorPlacementProxy <typename FuncTraits <MemFn>::Params, std::weak_ptr<T> >, 0);
       rawsetfield(L, -2, "__call");
       return *this;
     }
@@ -1304,19 +1364,45 @@ private:
       return addConstructor <void (*) ()> ();
     }
 
+    template <class FP>
+    WSPtrClass <T>& addStaticFunction (char const* name, FP const fp)
+    {
+      FUNDOC ("Static Member Function", name, FP)
+      set_shared_class ();
+      new (lua_newuserdata (L, sizeof (fp))) FP (fp);
+      lua_pushcclosure (L, &CFunc::Call <FP>::f, 1);
+      rawsetfield (L, -2, name);
+
+      set_const_shared_class ();
+      new (lua_newuserdata (L, sizeof (fp))) FP (fp);
+      lua_pushcclosure (L, &CFunc::Call <FP>::f, 1);
+      rawsetfield (L, -2, name);
+
+      set_weak_class ();
+      new (lua_newuserdata (L, sizeof (fp))) FP (fp);
+      lua_pushcclosure (L, &CFunc::Call <FP>::f, 1);
+      rawsetfield (L, -2, name);
+      return *this;
+    }
+
     WSPtrClass <T>& addNilPtrConstructor ()
     {
       FUNDOC ("Weak/Shared Pointer NIL Constructor", "", void (*) ())
       set_shared_class ();
       lua_pushcclosure (L,
-          &shared. template ctorNilPtrPlacementProxy <boost::shared_ptr<T> >, 0);
+          &shared. template ctorNilPtrPlacementProxy <std::shared_ptr<T> >, 0);
+      rawsetfield(L, -2, "__call");
+
+      set_const_shared_class ();
+      lua_pushcclosure (L,
+          &shared_const. template ctorNilPtrPlacementProxy <std::shared_ptr<T const> >, 0);
       rawsetfield(L, -2, "__call");
 
       set_weak_class ();
       // NOTE: this constructs an empty weak-ptr,
       // ideally we'd construct a weak-ptr from a referenced shared-ptr
       lua_pushcclosure (L,
-          &weak. template ctorNilPtrPlacementProxy <boost::weak_ptr<T> >, 0);
+          &weak. template ctorNilPtrPlacementProxy <std::weak_ptr<T> >, 0);
       rawsetfield(L, -2, "__call");
 
       return *this;
@@ -1326,6 +1412,13 @@ private:
     {
       DATADOC ("Weak/Shared Ext C Function", name, fp)
       set_shared_class ();
+      assert (lua_istable (L, -1));
+      lua_pushcclosure (L, fp, 0);
+      lua_pushvalue (L, -1);
+      rawsetfield (L, -5, name); // const table
+      rawsetfield (L, -3, name); // class table
+
+      set_const_shared_class ();
       assert (lua_istable (L, -1));
       lua_pushcclosure (L, fp, 0);
       lua_pushvalue (L, -1);
@@ -1354,6 +1447,12 @@ private:
       assert (lua_istable (L, -1));
       lua_pushcclosure (L, &CFunc::CastMemberPtr <T, U>::f, 0);
       rawsetfield (L, -3, name); // class table
+
+      set_const_shared_class ();
+      assert (lua_istable (L, -1));
+      lua_pushcclosure (L, &CFunc::CastMemberPtr <T const, U const>::f, 0);
+      rawsetfield (L, -3, name); // class table
+
       return *this;
     }
 
@@ -1363,6 +1462,11 @@ private:
       set_shared_class ();
       assert (lua_istable (L, -1));
       lua_pushcclosure (L, &CFunc::PtrNullCheck <T>::f, 0);
+      rawsetfield (L, -3, "isnil"); // class table
+
+      set_const_shared_class ();
+      assert (lua_istable (L, -1));
+      lua_pushcclosure (L, &CFunc::PtrNullCheck <T const>::f, 0);
       rawsetfield (L, -3, "isnil"); // class table
 
       set_weak_class ();
@@ -1378,6 +1482,11 @@ private:
       set_shared_class ();
       assert (lua_istable (L, -1));
       lua_pushcclosure (L, &CFunc::PtrEqualCheck <T>::f, 0);
+      rawsetfield (L, -3, "sameinstance"); // class table
+
+      set_const_shared_class ();
+      assert (lua_istable (L, -1));
+      lua_pushcclosure (L, &CFunc::PtrEqualCheck <T const>::f, 0);
       rawsetfield (L, -3, "sameinstance"); // class table
 
       set_weak_class ();
@@ -1419,6 +1528,20 @@ private:
         lua_pop (L, 1);
       }
 
+      set_const_shared_class ();
+      assert (lua_istable (L, -1));
+      // Add to __propget in class and const tables.
+      {
+        rawgetfield (L, -2, "__propget");
+        rawgetfield (L, -4, "__propget");
+        new (lua_newuserdata (L, sizeof (mp_t))) mp_t (mp);
+        lua_pushcclosure (L, &CFunc::getPtrProperty <T const,U>, 1);
+        lua_pushvalue (L, -1);
+        rawsetfield (L, -4, name);
+        rawsetfield (L, -2, name);
+        lua_pop (L, 2);
+      }
+
       set_shared_class ();
       assert (lua_istable (L, -1));
       // Add to __propget in class and const tables.
@@ -1456,7 +1579,7 @@ private:
   private:
     void set_weak_class () {
       lua_pop (L, 3);
-      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <boost::weak_ptr<T> >::getStaticKey ());
+      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <std::weak_ptr<T> >::getStaticKey ());
       rawgetfield (L, -1, "__class");
       rawgetfield (L, -1, "__const");
       lua_insert (L, -3);
@@ -1464,14 +1587,24 @@ private:
     }
     void set_shared_class () {
       lua_pop (L, 3);
-      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <boost::shared_ptr<T> >::getStaticKey ());
+      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <std::shared_ptr<T> >::getStaticKey ());
       rawgetfield (L, -1, "__class");
       rawgetfield (L, -1, "__const");
       lua_insert (L, -3);
       lua_insert (L, -2);
     }
-    Class<boost::shared_ptr<T> > shared;
-    Class<boost::weak_ptr<T> > weak;
+    void set_const_shared_class () {
+      lua_pop (L, 3);
+      lua_rawgetp (L, LUA_REGISTRYINDEX, ClassInfo <std::shared_ptr<T const> >::getStaticKey ());
+      rawgetfield (L, -1, "__class");
+      rawgetfield (L, -1, "__const");
+      lua_insert (L, -3);
+      lua_insert (L, -2);
+    }
+
+    Class<std::shared_ptr<T> > shared;
+    Class<std::shared_ptr<T const> > shared_const;
+    Class<std::weak_ptr<T> > weak;
   };
 
 
@@ -1823,8 +1956,8 @@ public:
 
     return beginClass<LT> (name)
       .addVoidConstructor ()
-      .addFunction ("empty", &LT::empty)
-      .addFunction ("size", &LT::size)
+      .addFunction ("empty", (bool (LT::*)()const)&LT::empty)
+      .addFunction ("size", (T_SIZE (LT::*)()const)&LT::size)
       .addFunction ("clear", (void (LT::*)())&LT::clear)
       .addFunction ("count", (T_SIZE (LT::*)(const K&) const)&LT::count)
       .addExtCFunction ("add", &CFunc::tableToMap<K, V>)
@@ -1837,11 +1970,15 @@ public:
   Class<std::set<T> > beginStdSet (char const* name)
   {
     typedef std::set<T> LT;
+    typedef typename LT::size_type T_SIZE;
     return beginClass<LT> (name)
       .addVoidConstructor ()
       .addFunction ("clear", (void (LT::*)())&LT::clear)
-      .addFunction ("empty", &LT::empty)
-      .addFunction ("size", &LT::size)
+      .addFunction ("empty", (bool (LT::*)()const)&LT::empty)
+      .addFunction ("size", (T_SIZE (LT::*)()const)&LT::size)
+#if 0 // needs work for AutomationTypeSet (T is-a enum not a class instance)
+      .addExtCFunction ("insert", &CFunc::setInsert<T, LT>)
+#endif
       .addExtCFunction ("iter", &CFunc::setIter<T, LT>)
       .addExtCFunction ("table", &CFunc::setToTable<T, LT>);
   }
@@ -1854,11 +1991,11 @@ public:
       .addVoidConstructor ()
       .addFunction ("reset", (BS& (BS::*)())&BS::reset)
       .addFunction ("set", (BS& (BS::*)(size_t, bool))&BS::set)
-      .addFunction ("count", &BS::count)
-      .addFunction ("any", &BS::any)
-      .addFunction ("none", &BS::none)
+      .addFunction ("count", (size_t (BS::*)()const)&BS::count)
+      .addFunction ("size", (size_t (BS::*)()const)&BS::size)
+      .addFunction ("any", (bool (BS::*)()const)&BS::any)
+      .addFunction ("none", (bool (BS::*)()const)&BS::none)
       .addFunction ("test", &BS::test)
-      .addFunction ("size", &BS::size)
       .addExtCFunction ("add", &CFunc::tableToBitSet<T>)
       .addExtCFunction ("table", &CFunc::bitSetToTable<T>);
   }
@@ -1867,13 +2004,14 @@ public:
   Class<std::list<T> > beginConstStdList (char const* name)
   {
     typedef std::list<T> LT;
+    typedef typename LT::size_type T_SIZE;
     return beginClass<LT> (name)
       .addVoidConstructor ()
-      .addFunction ("empty", &LT::empty)
-      .addFunction ("size", &LT::size)
-      .addFunction ("reverse", &LT::reverse)
-      .addFunction ("front", static_cast<const T& (LT::*)() const>(&LT::front))
-      .addFunction ("back", static_cast<const T& (LT::*)() const>(&LT::back))
+      .addFunction ("empty", static_cast<bool (LT::*)() const>(&LT::empty))
+      .addFunction ("size", static_cast<T_SIZE (LT::*)() const>(&LT::size))
+      .addFunction ("reverse", static_cast<void (LT::*)()>(&LT::reverse))
+      .addFunction ("front", static_cast<T& (LT::*)()>(&LT::front))
+      .addFunction ("back", static_cast<T& (LT::*)()>(&LT::back))
       .addExtCFunction ("iter", &CFunc::listIter<T, LT>)
       .addExtCFunction ("table", &CFunc::listToTable<T, LT>);
   }
@@ -1882,8 +2020,17 @@ public:
   Class<std::list<T> > beginStdList (char const* name)
   {
     typedef std::list<T> LT;
+    typedef typename LT::size_type T_SIZE;
     return beginConstStdList<T> (name)
+#if !defined(_MSC_VER) || (_MSC_VER < 1900)
+	  /* std::list::unique() got broken in later versions of MSVC */
+# if (defined(__cplusplus) &&  __cplusplus >= 201709L)
+      .addFunction ("unique", (T_SIZE (LT::*)())&LT::unique)
+# else
       .addFunction ("unique", (void (LT::*)())&LT::unique)
+# endif
+#endif
+      .addFunction ("clear", (void (LT::*)())&LT::clear)
       .addFunction ("push_back", (void (LT::*)(const T&))&LT::push_back)
       .addExtCFunction ("add", &CFunc::tableToList<T, LT>);
   }
@@ -1893,11 +2040,12 @@ public:
   {
     typedef T* TP;
     typedef std::list<TP> LT;
+    typedef typename LT::size_type T_SIZE;
     return beginClass<LT> (name)
       .addVoidConstructor ()
-      .addFunction ("empty", &LT::empty)
-      .addFunction ("size", &LT::size)
-      .addFunction ("reverse", &LT::reverse)
+      .addFunction ("empty", static_cast<bool (LT::*)() const>(&LT::empty))
+      .addFunction ("size", static_cast<T_SIZE (LT::*)() const>(&LT::size))
+      .addFunction ("reverse", static_cast<void (LT::*)()>(&LT::reverse))
       .addFunction ("front", static_cast<const TP& (LT::*)() const>(&LT::front))
       .addFunction ("back", static_cast<const TP& (LT::*)() const>(&LT::back))
       .addExtCFunction ("iter", &CFunc::listIter<T*, LT>)
@@ -1909,9 +2057,18 @@ public:
   {
     typedef T* TP;
     typedef std::list<TP> LT;
+    typedef typename LT::size_type T_SIZE;
     return beginConstStdCPtrList<T> (name)
+#if !defined(_MSC_VER) || (_MSC_VER < 1900)
+	  /* std::list::unique() got broken in later versions of MSVC */
+# if (defined(__cplusplus) &&  __cplusplus >= 201709L)
+      .addFunction ("unique", (T_SIZE (LT::*)())&LT::unique)
+# else
       .addFunction ("unique", (void (LT::*)())&LT::unique)
-      .addFunction ("push_back", (void (LT::*)(const TP&))&LT::push_back);
+# endif
+#endif
+      .addFunction ("clear", (void (LT::*)())&LT::clear)
+      .addExtCFunction ("push_back", &CFunc::pushbackptr<T, LT>);
   }
 
 
@@ -1924,8 +2081,8 @@ public:
 
     return beginClass<LT> (name)
       .addVoidConstructor ()
-      .addFunction ("empty", &LT::empty)
-      .addFunction ("size", &LT::size)
+      .addFunction ("empty", (bool (LT::*)()const)&LT::empty)
+      .addFunction ("size", (T_SIZE (LT::*)()const)&LT::size)
       .addFunction ("at", (T_REF (LT::*)(T_SIZE))&LT::at)
       .addExtCFunction ("iter", &CFunc::listIter<T, LT>)
       .addExtCFunction ("table", &CFunc::listToTable<T, LT>);
@@ -1935,26 +2092,50 @@ public:
   Class<std::vector<T> > beginStdVector (char const* name)
   {
     typedef std::vector<T> LT;
+    typedef typename std::vector<T>::size_type T_SIZE;
     return beginConstStdVector<T> (name)
       .addVoidConstructor ()
       .addFunction ("push_back", (void (LT::*)(const T&))&LT::push_back)
+      .addFunction ("clear", (void (LT::*)())&LT::clear)
+      .addFunction ("reserve", (void (LT::*)(T_SIZE))&LT::reserve)
+      .addExtCFunction ("to_array", &CFunc::vectorToArray<T, LT>)
       .addExtCFunction ("add", &CFunc::tableToList<T, LT>);
   }
-
-
 
   //----------------------------------------------------------------------------
 
   template <class T>
-  Class<boost::shared_ptr<std::list<T> > > beginPtrStdList (char const* name)
+  Class<std::shared_ptr<const std::list<T> > > beginPtrConstStdList (char const* name)
+  {
+    typedef std::list<T> const LT;
+    typedef typename LT::size_type T_SIZE;
+    return beginClass<std::shared_ptr<LT> > (name)
+      .addPtrFunction ("empty", (bool (LT::*)()const)&LT::empty)
+      .addPtrFunction ("size", (T_SIZE (LT::*)()const)&LT::size)
+      .addPtrFunction ("reverse", (void (LT::*)())&LT::reverse)
+      .addExtCFunction ("iter", &CFunc::ptrListIter<T, LT>)
+      .addExtCFunction ("table", &CFunc::ptrListToTable<T, LT>);
+  }
+
+  template <class T>
+  Class<std::shared_ptr<std::list<T> > > beginPtrStdList (char const* name)
   {
     typedef std::list<T> LT;
-    return beginClass<boost::shared_ptr<LT> > (name)
+    typedef typename LT::size_type T_SIZE;
+    return beginClass<std::shared_ptr<LT> > (name)
       //.addVoidPtrConstructor<LT> ()
-      .addPtrFunction ("empty", &LT::empty)
-      .addPtrFunction ("size", &LT::size)
-      .addPtrFunction ("reverse", &LT::reverse)
+      .addPtrFunction ("empty", (bool (LT::*)()const)&LT::empty)
+      .addPtrFunction ("size", (T_SIZE (LT::*)()const)&LT::size)
+      .addPtrFunction ("reverse", (void (LT::*)())&LT::reverse)
+#if !defined(_MSC_VER) || (_MSC_VER < 1900)
+	  /* std::list::unique() got broken in later versions of MSVC */
+# if (defined(__cplusplus) &&  __cplusplus >= 201709L)
+      .addPtrFunction ("unique", (T_SIZE (LT::*)())&LT::unique)
+# else
       .addPtrFunction ("unique", (void (LT::*)())&LT::unique)
+# endif
+#endif
+      .addPtrFunction ("clear", (void (LT::*)())&LT::clear)
       .addPtrFunction ("push_back", (void (LT::*)(const T&))&LT::push_back)
       .addExtCFunction ("add", &CFunc::ptrTableToList<T, LT>)
       .addExtCFunction ("iter", &CFunc::ptrListIter<T, LT>)
@@ -1962,17 +2143,32 @@ public:
   }
 
   template <class T>
-  Class<boost::shared_ptr<std::vector<T> > > beginPtrStdVector (char const* name)
+  Class<std::shared_ptr<const std::vector<T> > > beginPtrConstStdVector (char const* name)
+  {
+    typedef std::vector<T> const LT;
+    typedef typename std::vector<T>::reference T_REF;
+    typedef typename std::vector<T>::size_type T_SIZE;
+
+    return beginClass<std::shared_ptr<LT> > (name)
+      .addPtrFunction ("empty", (bool (LT::*)()const)&LT::empty)
+      .addPtrFunction ("size", (T_SIZE (LT::*)()const)&LT::size)
+      .addPtrFunction ("at", (T_REF (LT::*)(T_SIZE))&LT::at)
+      .addExtCFunction ("iter", &CFunc::ptrListIter<T, LT>)
+      .addExtCFunction ("table", &CFunc::ptrListToTable<T, LT>);
+  }
+
+  template <class T>
+  Class<std::shared_ptr<std::vector<T> > > beginPtrStdVector (char const* name)
   {
     typedef std::vector<T> LT;
     typedef typename std::vector<T>::reference T_REF;
     typedef typename std::vector<T>::size_type T_SIZE;
 
-    return beginClass<boost::shared_ptr<LT> > (name)
+    return beginClass<std::shared_ptr<LT> > (name)
       //.addVoidPtrConstructor<LT> ()
-      .addPtrFunction ("empty", &LT::empty)
-      .addPtrFunction ("empty", &LT::empty)
-      .addPtrFunction ("size", &LT::size)
+      .addPtrFunction ("empty", (bool (LT::*)()const)&LT::empty)
+      .addPtrFunction ("size", (T_SIZE (LT::*)()const)&LT::size)
+      .addPtrFunction ("clear", (void (LT::*)())&LT::clear)
       .addPtrFunction ("push_back", (void (LT::*)(const T&))&LT::push_back)
       .addPtrFunction ("at", (T_REF (LT::*)(T_SIZE))&LT::at)
       .addExtCFunction ("add", &CFunc::ptrTableToList<T, LT>)
@@ -1998,12 +2194,13 @@ public:
   WSPtrClass <T> deriveWSPtrClass (char const* name)
   {
 
-    CLASSDOC ("[C] Derived Class", _name << name, type_name <boost::shared_ptr<T> >(), type_name <boost::shared_ptr<U> >())
-    CLASSDOC ("[C] Derived Class", _name << name, type_name <boost::weak_ptr<T> >(), type_name <boost::weak_ptr<U> >())
+    CLASSDOC ("[C] Derived Class", _name << name, type_name <std::shared_ptr<T> >(), type_name <std::shared_ptr<U> >())
+    CLASSDOC ("[C] Derived Class", _name << name, type_name <std::weak_ptr<T> >(), type_name <std::weak_ptr<U> >())
     CLASSDOC ("[C] Derived Pointer Class", _name << name, type_name <T>(), type_name <U>())
     return WSPtrClass <T> (name, this,
-        ClassInfo <boost::shared_ptr<U> >::getStaticKey (),
-        ClassInfo <boost::weak_ptr<U> >::getStaticKey ())
+        ClassInfo <std::shared_ptr<U> >::getStaticKey (),
+        ClassInfo <std::shared_ptr<U const> >::getStaticKey (),
+        ClassInfo <std::weak_ptr<U> >::getStaticKey ())
       .addNullCheck()
       .addEqualCheck();
   }

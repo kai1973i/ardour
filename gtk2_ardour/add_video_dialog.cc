@@ -1,32 +1,32 @@
 /*
-    Copyright (C) 2010-2013 Paul Davis
-    Author: Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include <cstdio>
 #include <cmath>
 
 #include <sigc++/bind.h>
 #include <curl/curl.h>
 
-#include <gtkmm/box.h>
-#include <gtkmm/filechooserdialog.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/filechooserdialog.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/error.h"
 #include "pbd/convert.h"
@@ -60,10 +60,10 @@ AddVideoDialog::AddVideoDialog (Session* s)
 	: ArdourDialog (_("Set Video Track"))
 	, seek_slider (0,1000,1)
 	, preview_path ("")
-	, pi_tcin ("-", Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false)
-	, pi_tcout ("-", Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false)
-	, pi_aspect ("-", Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false)
-	, pi_fps ("-", Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false)
+	, pi_tcin ("-", Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false)
+	, pi_tcout ("-", Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false)
+	, pi_aspect ("-", Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false)
+	, pi_fps ("-", Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false)
 	, chooser (FILE_CHOOSER_ACTION_OPEN)
 	, xjadeo_checkbox (_("Open Video Monitor Window"))
 	, set_session_fps_checkbox (_("Adjust Session Framerate to Match Video Framerate"))
@@ -114,6 +114,7 @@ AddVideoDialog::AddVideoDialog (Session* s)
 
 	/* file chooser */
 	chooser.set_border_width (4);
+	Gtkmm2ext::add_volume_shortcuts (chooser);
 #ifdef __APPLE__
 	/* some broken redraw behaviour - this is a bandaid */
 	chooser.signal_selection_changed().connect (mem_fun (chooser, &Widget::queue_draw));
@@ -138,7 +139,7 @@ AddVideoDialog::AddVideoDialog (Session* s)
 	Gtk::Label* l;
 	VBox* options_box = manage (new VBox);
 
-	l = manage (new Label (_("<b>Options</b>"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("<b>Options</b>"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	l->set_use_markup ();
 
 	options_box->pack_start (*l, false, true, 4);
@@ -155,16 +156,16 @@ AddVideoDialog::AddVideoDialog (Session* s)
 	l = manage (new Label (_("<b>Video Information</b>"), Gtk::ALIGN_CENTER, Gtk::ALIGN_CENTER, false));
 	l->set_use_markup ();
 	table->attach (*l, 0, 2, 0, 1, FILL, FILL);
-	l = manage (new Label (_("Start:"), Gtk::ALIGN_RIGHT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("Start:"), Gtk::ALIGN_END, Gtk::ALIGN_CENTER, false));
 	table->attach (*l, 0, 1, 1, 2, FILL, FILL);
 	table->attach (pi_tcin, 1, 2, 1, 2, FILL, FILL);
-	l = manage (new Label (_("End:"), Gtk::ALIGN_RIGHT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("End:"), Gtk::ALIGN_END, Gtk::ALIGN_CENTER, false));
 	table->attach (*l, 0, 1, 2, 3, FILL, FILL);
 	table->attach (pi_tcout, 1, 2, 2, 3, FILL, FILL);
-	l = manage (new Label (_("Frame rate:"), Gtk::ALIGN_RIGHT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("Frame rate:"), Gtk::ALIGN_END, Gtk::ALIGN_CENTER, false));
 	table->attach (*l, 0, 1, 3, 4, FILL, FILL);
 	table->attach (pi_fps, 1, 2, 3, 4, FILL, FILL);
-	l = manage (new Label (_("Aspect Ratio:"), Gtk::ALIGN_RIGHT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("Aspect Ratio:"), Gtk::ALIGN_END, Gtk::ALIGN_CENTER, false));
 	table->attach (*l, 0, 1, 4, 5, FILL, FILL);
 	table->attach (pi_aspect, 1, 2, 4, 5, FILL, FILL);
 
@@ -219,7 +220,7 @@ AddVideoDialog::AddVideoDialog (Session* s)
 	//ok_button->set_sensitive(false);
 	set_action_ok(false);
 
-	/* connect signals after eveything has been initialized */
+	/* connect signals after everything has been initialized */
 	chooser.signal_selection_changed().connect (mem_fun (*this, &AddVideoDialog::file_selection_changed));
 	chooser.signal_file_activated().connect (mem_fun (*this, &AddVideoDialog::file_activated));
 	//chooser.signal_update_preview().connect(sigc::mem_fun(*this, &AddVideoDialog::update_preview));
@@ -519,7 +520,7 @@ AddVideoDialog::harvid_request(std::string u)
 
 	harvid_list->clear();
 
-	char* res = ArdourCurl::http_get (url, &status);
+	char* res = ArdourCurl::http_get (url, &status, false);
 	if (status != 200) {
 		printf("request failed\n"); // XXX
 		harvid_path.set_text(" - request failed -");
@@ -699,7 +700,7 @@ AddVideoDialog::request_preview(std::string u)
 		, (long long) (video_duration * seek_slider.get_value() / 1000.0)
 		, clip_width, clip_height, u.c_str());
 
-	char* data = ArdourCurl::http_get (url, NULL);
+	char* data = ArdourCurl::http_get (url, NULL, false);
 	if (!data) {
 		printf("image preview request failed %s\n", url);
 		imgbuf->fill(RGBA_TO_UINT(0,0,0,255));

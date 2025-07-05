@@ -1,30 +1,32 @@
 /*
-    Copyright (C) 2014 Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include <cstdio>
 
-#include <gtkmm/filechooserdialog.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/treestore.h>
+#include <ytkmm/filechooserdialog.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/treestore.h>
 
 #include "pbd/i18n.h"
 #include "pbd/pathexpand.h"
+
+#include "gtkmm2ext/utils.h"
+
 #include "widgets/paths_dialog.h"
 
 using namespace Gtk;
@@ -55,7 +57,7 @@ PathsDialog::PathsDialog (Gtk::Window& parent, std::string title, std::string cu
 
 	std::vector <std::string> a = PBD::parse_path(current_paths);
 	for(vector<std::string>::const_iterator i = a.begin(); i != a.end(); ++i) {
-		paths_list_view.append_text(*i);
+		paths_list_view.append(*i);
 	}
 
 	paths_list_view.get_selection()->signal_changed().connect (mem_fun (*this, &PathsDialog::selection_changed));
@@ -112,6 +114,7 @@ PathsDialog::selection_changed () {
 void
 PathsDialog::add_path() {
 	Gtk::FileChooserDialog d (_("Add folder to search path"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+	Gtkmm2ext::add_volume_shortcuts (d);
 
 	std::vector<int> selection = paths_list_view.get_selected();
 	if (selection.size() == 1 ) {
@@ -132,7 +135,7 @@ PathsDialog::add_path() {
 				}
 			}
 			if (!dup) {
-				paths_list_view.prepend_text(dir);
+				paths_list_view.prepend(dir);
 			}
 		}
 	}
@@ -164,6 +167,6 @@ PathsDialog::set_default() {
 	paths_list_view.clear_items();
 	std::vector <std::string> a = PBD::parse_path(_default_paths);
 	for(vector<std::string>::const_iterator i = a.begin(); i != a.end(); ++i) {
-		paths_list_view.append_text(*i);
+		paths_list_view.append(*i);
 	}
 }

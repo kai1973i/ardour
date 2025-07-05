@@ -52,7 +52,9 @@
 //#define TLSF_STATISTIC 1
 
 #ifndef USE_PRINTF
+#if TLSF_STATISTIC
 #define USE_PRINTF      (1)
+#endif
 #endif
 
 #include <assert.h>
@@ -138,9 +140,11 @@
 # define ERROR_MSG(fmt, args...) printf(fmt, ## args)
 #else
 # if !defined(PRINT_MSG)
-#  define PRINT_MSG(fmt, args...)
+#  if TLSF_STATISTIC
+#    define PRINT_MSG(fmt, args...)
+#  endif
 # endif
-# if !defined(ERROR_MSG)
+# if !defined(ERROR_MSG) && !defined(COMPILER_MSVC)
 #  define ERROR_MSG(fmt, args...)
 # endif
 #endif
@@ -300,14 +304,14 @@ static __inline__ void MAPPING_INSERT(size_t _r, int *_fl, int *_sl)
 
 static __inline__ bhdr_t *FIND_SUITABLE_BLOCK(tlsf_t * _tlsf, int *_fl, int *_sl)
 {
-	u32_t _tmp = _tlsf->sl_bitmap[*_fl] & (~0 << *_sl);
+	u32_t _tmp = _tlsf->sl_bitmap[*_fl] & (~((u32_t)0) << *_sl);
 	bhdr_t *_b = NULL;
 
 	if (_tmp) {
 		*_sl = ls_bit(_tmp);
 		_b = _tlsf->matrix[*_fl][*_sl];
 	} else {
-		*_fl = ls_bit(_tlsf->fl_bitmap & (~0 << (*_fl + 1)));
+		*_fl = ls_bit(_tlsf->fl_bitmap & (~((u32_t)0) << (*_fl + 1)));
 		if (*_fl > 0) {         /* likely */
 			*_sl = ls_bit(_tlsf->sl_bitmap[*_fl]);
 			_b = _tlsf->matrix[*_fl][*_sl];

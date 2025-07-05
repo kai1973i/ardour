@@ -1,22 +1,22 @@
 /*
-    Copyright (C) 2012 Paul Davis
-    Inspired by code from Ben Loftis @ Harrison Consoles
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2015 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2013-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <string>
 #include <cstring>
@@ -24,6 +24,7 @@
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
 #include <glibmm.h>
+#include "pbd/windows_special_dirs.h"
 #else
 #include <sys/utsname.h>
 #endif
@@ -39,6 +40,7 @@
 
 #include "ardour_http.h"
 #include "pingback.h"
+#include "ui_config.h"
 #include "utils.h"
 
 using std::string;
@@ -52,52 +54,66 @@ struct ping_call {
 	    : version (v), announce_path (a) {}
 };
 
+#ifndef MIXBUS /* Ardour */
+
+/* As of October 2022, Ardour only sends system (OS) name */
+
 #ifdef PLATFORM_WINDOWS
-static bool
-_query_registry (const char *regkey, const char *regval, std::string &rv) {
-	HKEY key;
-	DWORD size = PATH_MAX;
-	char tmp[PATH_MAX+1];
 
-	if (   (ERROR_SUCCESS == RegOpenKeyExA (HKEY_LOCAL_MACHINE, regkey, 0, KEY_READ, &key))
-	    && (ERROR_SUCCESS == RegQueryValueExA (key, regval, 0, NULL, reinterpret_cast<LPBYTE>(tmp), &size))
-		 )
-	{
-		rv = Glib::locale_to_utf8 (tmp);
-		return true;
-	}
-
-	if (   (ERROR_SUCCESS == RegOpenKeyExA (HKEY_LOCAL_MACHINE, regkey, 0, KEY_READ | KEY_WOW64_32KEY, &key))
-	    && (ERROR_SUCCESS == RegQueryValueExA (key, regval, 0, NULL, reinterpret_cast<LPBYTE>(tmp), &size))
-		 )
-	{
-		rv = Glib::locale_to_utf8 (tmp);
-		return true;
-	}
-
-	return false;
+static std::string
+build_query_string (ArdourCurl::HttpGet const & h)
+{
+# if ( defined(__x86_64__) || defined(_M_X64) )
+	return  "s=Windows64";
+# else
+	return "s=Windows32";
+# endif
 }
-#endif
 
+#else /* POSIX: use uname */
+
+static std::string
+build_query_string (ArdourCurl::HttpGet const & h)
+{
+	string qs;
+	struct utsname utb;
+
+	if (uname (&utb)) {
+		return qs;
+	}
+
+	char* query;
+
+	query = h.escape (utb.sysname, strlen (utb.sysname));
+	qs = string_compose ("s=%1", query);
+	h.free (query);
+
+	return qs;
+}
+
+#endif // ! Windows
+#endif // ! MIXBUS
 
 static void*
 _pingback (void *arg)
 {
 	ArdourCurl::HttpGet h;
 
-	ping_call* cm = static_cast<ping_call*> (arg);
-	string return_str;
 	//initialize curl
 
+#ifdef MIXBUS
+	curl_easy_setopt (h.curl (), CURLOPT_FOLLOWLOCATION, 1);
+	/* do not check cert */
+	curl_easy_setopt (h.curl (), CURLOPT_SSL_VERIFYPEER, 0);
+	curl_easy_setopt (h.curl (), CURLOPT_SSL_VERIFYHOST, 0);
+#endif
+
+	ping_call* cm = static_cast<ping_call*> (arg);
+	string return_str;
+	string qs;
 	string url;
 
-#ifdef __APPLE__
-	url = Config->get_osx_pingback_url ();
-#elif defined PLATFORM_WINDOWS
-	url = Config->get_windows_pingback_url ();
-#else
-	url = Config->get_linux_pingback_url ();
-#endif
+	url = Config->get_pingback_url ();
 
 	if (url.compare (0, 4, "http") != 0) {
 		delete cm;
@@ -106,79 +122,25 @@ _pingback (void *arg)
 
 	char* v = h.escape (cm->version.c_str(), cm->version.length());
 	url += v;
-	url += '?';
 	h.free (v);
 
-#ifndef PLATFORM_WINDOWS
-	struct utsname utb;
+	qs = build_query_string (h);
 
-	if (uname (&utb)) {
+	if (qs.empty()) {
 		delete cm;
 		return 0;
 	}
 
-	//string uts = string_compose ("%1 %2 %3 %4", utb.sysname, utb.release, utb.version, utb.machine);
-	string s;
-	char* query;
+	url += '?';
+	url += qs;
 
-	query = h.escape (utb.sysname, strlen (utb.sysname));
-	s = string_compose ("s=%1", query);
-	url += s;
-	url += '&';
-	h.free (query);
-
-	query = h.escape (utb.release, strlen (utb.release));
-	s = string_compose ("r=%1", query);
-	url += s;
-	url += '&';
-	h.free (query);
-
-	query = h.escape (utb.machine, strlen (utb.machine));
-	s = string_compose ("m=%1", query);
-	url += s;
-	h.free (query);
-#else
-	std::string val;
-	if (_query_registry("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "ProductName", val)) {
-		char* query = h.escape (val.c_str(), strlen (val.c_str()));
-		url += "r=";
-		url += query;
-		url += '&';
-		h.free (query);
-	} else {
-		url += "r=&";
-	}
-
-	if (_query_registry("Hardware\\Description\\System\\CentralProcessor\\0", "Identifier", val)) {
-		// remove "Family X Model YY Stepping Z" tail
-		size_t cut = val.find (" Family ");
-		if (string::npos != cut) {
-			val = val.substr (0, cut);
-		}
-		char* query = h.escape (val.c_str(), strlen (val.c_str()));
-		url += "m=";
-		url += query;
-		url += '&';
-		h.free (query);
-	} else {
-		url += "m=&";
-	}
-
-# if ( defined(__x86_64__) || defined(_M_X64) )
-	url += "s=Windows64";
-# else
-	url += "s=Windows32";
-# endif
-
-#endif /* PLATFORM_WINDOWS */
-
-	return_str = h.get (url);
+	return_str = h.get (url, false);
 
 	if (!return_str.empty ()) {
 		if ( return_str.length() > 140 ) { // like a tweet :)
 			std::cerr << "Announcement string is too long (probably behind a proxy)." << std::endl;
 		} else {
-			std::cerr << "Announcement is: " << return_str << std::endl;
+			std::cout << "Announcement is: " << return_str << std::endl;
 
 			//write announcements to local file, even if the
 			//announcement is empty
@@ -214,7 +176,7 @@ void pingback (const string& version, const string& announce_path)
 	ping_call* cm = new ping_call (version, announce_path);
 	pthread_t thread;
 
-	pthread_create_and_store ("pingback", &thread, _pingback, cm);
+	pthread_create_and_store ("Pingback", &thread, _pingback, cm);
 }
 
 }

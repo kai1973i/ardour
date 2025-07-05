@@ -1,24 +1,24 @@
 /*
-    Copyright (C) 2006 Paul Davis
-    Copyright (C) 2016 W.P. van Paassen
-
-    Thanks to Rolf Meyerhoff for reverse engineering the CC121 protocol.
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016 W.P. van Paass
+ * Copyright (C) 2017-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2018 Robin Gareus <robin@gareus.org>
+ *
+ * Thanks to Rolf Meyerhoff for reverse engineering the CC121 protocol.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef ardour_surface_cc121_h
 #define ardour_surface_cc121_h
@@ -37,7 +37,6 @@
 
 namespace PBD {
 	class Controllable;
-	class ControllableDescriptor;
 }
 
 #include <midi++/types.h>
@@ -46,7 +45,7 @@ namespace PBD {
 
 
 //#include "midi_byte_array.h"
-#include "types.h"
+#include "control_protocol/types.h"
 
 #include "glibmm/main.h"
 
@@ -84,13 +83,7 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 
 	int set_active (bool yn);
 
-	/* we probe for a device when our ports are connected. Before that,
-	   there's no way to know if the device exists or not.
-	 */
-	static bool probe() { return true; }
-	static void* request_factory (uint32_t);
-
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
 	bool has_editor () const { return true; }
@@ -108,10 +101,10 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 
 	void thread_init ();
 
-	PBD::Signal0<void> ConnectionChange;
+	PBD::Signal<void()> ConnectionChange;
 
-	boost::shared_ptr<ARDOUR::Port> input_port();
-	boost::shared_ptr<ARDOUR::Port> output_port();
+	std::shared_ptr<ARDOUR::Port> input_port();
+	std::shared_ptr<ARDOUR::Port> output_port();
 
 	enum ButtonID {
 		Rec = 0x00,
@@ -151,7 +144,7 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 	};
 
 	enum ButtonState {
-	  ShiftDown = 0x1,
+		ShiftDown = 0x1,
 		RewindDown = 0x2,
 		StopDown = 0x4,
 		UserDown = 0x8,
@@ -161,29 +154,31 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 	void set_action (ButtonID, std::string const& action_name, bool on_press, CC121::ButtonState = ButtonState (0));
 	std::string get_action (ButtonID, bool on_press, CC121::ButtonState = ButtonState (0));
 
-	std::list<boost::shared_ptr<ARDOUR::Bundle> > bundles ();
+	std::list<std::shared_ptr<ARDOUR::Bundle> > bundles ();
+
+	CONTROL_PROTOCOL_THREADS_NEED_TEMPO_MAP_DECL();
 
   private:
-	boost::shared_ptr<ARDOUR::Stripable> _current_stripable;
-	boost::weak_ptr<ARDOUR::Stripable> pre_master_stripable;
-	boost::weak_ptr<ARDOUR::Stripable> pre_monitor_stripable;
+	std::shared_ptr<ARDOUR::Stripable> _current_stripable;
+	std::weak_ptr<ARDOUR::Stripable> pre_master_stripable;
+	std::weak_ptr<ARDOUR::Stripable> pre_monitor_stripable;
 
-	boost::shared_ptr<ARDOUR::AsyncMIDIPort> _input_port;
-	boost::shared_ptr<ARDOUR::AsyncMIDIPort> _output_port;
+	std::shared_ptr<ARDOUR::AsyncMIDIPort> _input_port;
+	std::shared_ptr<ARDOUR::AsyncMIDIPort> _output_port;
 
 	// Bundle to represent our input ports
-	boost::shared_ptr<ARDOUR::Bundle> _input_bundle;
+	std::shared_ptr<ARDOUR::Bundle> _input_bundle;
 	// Bundle to represent our output ports
-	boost::shared_ptr<ARDOUR::Bundle> _output_bundle;
+	std::shared_ptr<ARDOUR::Bundle> _output_bundle;
 
 	PBD::ScopedConnectionList midi_connections;
 
-	bool midi_input_handler (Glib::IOCondition ioc, boost::shared_ptr<ARDOUR::AsyncMIDIPort> port);
+	bool midi_input_handler (Glib::IOCondition ioc, std::shared_ptr<ARDOUR::AsyncMIDIPort> port);
 
 	mutable void *gui;
 	void build_gui ();
 
-	bool connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, boost::weak_ptr<ARDOUR::Port>, std::string name2, bool yn);
+	bool connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool yn);
 	PBD::ScopedConnection port_connection;
 
 	enum ConnectionState {
@@ -200,7 +195,7 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 	enum JogMode { scroll=1, zoom=2 };
 	JogMode _jogmode;
 
-	ARDOUR::microseconds_t last_encoder_time;
+	PBD::microseconds_t last_encoder_time;
 	int last_good_encoder_delta;
 	int last_encoder_delta, last_last_encoder_delta;
 
@@ -230,10 +225,10 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 		{}
 
 		void set_action (std::string const& action_name, bool on_press, CC121::ButtonState = ButtonState (0));
-		void set_action (boost::function<void()> function, bool on_press, CC121::ButtonState = ButtonState (0));
+		void set_action (std::function<void()> function, bool on_press, CC121::ButtonState = ButtonState (0));
 		std::string get_action (bool press, CC121::ButtonState bs = ButtonState (0));
 
-		void set_led_state (boost::shared_ptr<MIDI::Port>, bool onoff);
+		void set_led_state (std::shared_ptr<MIDI::Port>, bool onoff);
 		void invoke (ButtonState bs, bool press);
 		bool uses_flash () const { return flash; }
 		void set_flash (bool yn) { flash = yn; }
@@ -251,11 +246,11 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 
 		struct ToDo {
 			ActionType type;
-			/* could be a union if boost::function didn't require a
+			/* could be a union if std::function didn't require a
 			 * constructor
 			 */
 			std::string action_name;
-			boost::function<void()> function;
+			std::function<void()> function;
 		};
 
 		typedef std::map<CC121::ButtonState,ToDo> ToDoMap;
@@ -294,7 +289,7 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 	void start_blinking (ButtonID);
 	void stop_blinking (ButtonID);
 
-	void set_current_stripable (boost::shared_ptr<ARDOUR::Stripable>);
+	void set_current_stripable (std::shared_ptr<ARDOUR::Stripable>);
 	void drop_current_stripable ();
 	void use_master ();
 	void use_monitor ();
@@ -310,6 +305,7 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 	void map_gain ();
 	void map_cut ();
 	void map_auto ();
+	void map_monitoring ();
 
 	/* operations (defined in operations.cc) */
 
@@ -330,9 +326,7 @@ class CC121 : public ARDOUR::ControlProtocol, public AbstractUI<CC121Request> {
 	void jog ();
 	void rec_enable ();
 
-	void ardour_pan_azimuth (float);
-	void ardour_pan_width (float);
-	void mixbus_pan (float);
+	void set_controllable (std::shared_ptr<ARDOUR::AutomationControl>, float);
 
 	void punch ();
 };

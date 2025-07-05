@@ -1,21 +1,19 @@
-/* Faderport 8 Control Surface
- * Abstraction of Surface Control Elements.
+/*
+ * Copyright (C) 2017-2018 Robin Gareus <robin@gareus.org>
  *
- * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "fp8_controls.h"
@@ -61,7 +59,11 @@ bool FP8ButtonInterface::force_change = false;
 
 FP8Controls::FP8Controls (FP8Base& b)
 	: _fadermode (ModeTrack)
+#ifdef FADERPORT2
+	, _navmode (NavScroll)
+#else
 	, _navmode (NavMaster)
+#endif
 	, _mixmode (MixAll)
 	, _display_timecode (false)
 {
@@ -72,6 +74,38 @@ FP8Controls::FP8Controls (FP8Base& b)
 	NEWBUTTON (0x5e, BtnPlay, false);
 	NEWBUTTON (0x5f, BtnRecord, false);
 
+#ifdef FADERPORT2
+
+	NEWSHIFTBUTTON (0x4a, BtnARead, BtnAOff, true);
+	NEWSHIFTBUTTON (0x4b, BtnAWrite, BtnATrim, true);
+	NEWSHIFTBUTTON (0x4d, BtnATouch, BtnALatch, true);
+
+	NEWSHIFTBUTTON (0x2e, BtnPrev, BtnUndo, false);
+	NEWSHIFTBUTTON (0x2f, BtnNext, BtnRedo, false);
+
+	NEWSHIFTBUTTON (0x2a, BtnPan, BtnFlip, true);  //TODO: Flip Pan knob to fader ...?
+
+	NEWSHIFTBUTTON (0x36, BtnChannel, BtnChanLock, true);
+
+	NEWSHIFTBUTTON (0x38, BtnScroll,  BtnZoom, true);
+
+	NEWSHIFTBUTTON (0x3a, BtnMaster,  BtnF1, false);
+	NEWSHIFTBUTTON (0x3b, BtnClick,   BtnF2, false);
+	NEWSHIFTBUTTON (0x3c, BtnSection, BtnF3, false);
+	NEWSHIFTBUTTON (0x3d, BtnMarker,  BtnF4, false);
+
+	//these buttons do not exist in FP2, but they need to exist in the ctrlmap:
+	NEWBUTTON (0x71, BtnBank, false);
+	NEWBUTTON (0x72, BtnF5, false);
+	NEWBUTTON (0x73, BtnF6, false);
+	NEWBUTTON (0x74, BtnF7, false);
+	NEWBUTTON (0x75, BtnF8, false);
+	NEWBUTTON (0x76, BtnUser1, false);
+	NEWBUTTON (0x77, BtnUser2, false);
+	NEWBUTTON (0x78, BtnUser3, false);
+	NEWBUTTON (0x79, BtnSave, false);
+
+#else
 	NEWSHIFTBUTTON (0x4a, BtnARead, BtnUser3, true);
 	NEWSHIFTBUTTON (0x4b, BtnAWrite, BtnUser2, true);
 	NEWSHIFTBUTTON (0x4c, BtnATrim, BtnRedo, true);
@@ -91,10 +125,12 @@ FP8Controls::FP8Controls (FP8Base& b)
 	NEWSHIFTBUTTON (0x3c, BtnSection, BtnF7, false);
 	NEWSHIFTBUTTON (0x3d, BtnMarker,  BtnF8, false);
 
+	NEWBUTTON (0x2a, BtnPan, false);
+#endif
+
 	NEWSHIFTBUTTON (0x28, BtnTrack, BtnTimecode, false);
 	NEWBUTTON (0x2b, BtnPlugins, false);
 	NEWBUTTON (0x29, BtnSend, false);
-	NEWBUTTON (0x2a, BtnPan, false);
 
 	NEWSHIFTBUTTON (0x00, BtnArm, BtnArmAll, false);
 	NEWBUTTON (0x01, BtnSoloClear, false);
@@ -117,12 +153,12 @@ FP8Controls::FP8Controls (FP8Base& b)
 	/* internal bindings */
 
 #define BindMethod(ID, CB) \
-	button (ID).released.connect_same_thread (button_connections, boost::bind (&FP8Controls:: CB, this));
+	button (ID).released.connect_same_thread (button_connections, std::bind (&FP8Controls:: CB, this));
 
 	BindMethod (FP8Controls::BtnTimecode, toggle_timecode);
 
 #define BindNav(BTN, MODE)\
-	button (BTN).released.connect_same_thread (button_connections, boost::bind (&FP8Controls::set_nav_mode, this, MODE))
+	button (BTN).released.connect_same_thread (button_connections, std::bind (&FP8Controls::set_nav_mode, this, MODE))
 
 	BindNav (BtnChannel, NavChannel);
 	BindNav (BtnZoom,    NavZoom);
@@ -131,18 +167,23 @@ FP8Controls::FP8Controls (FP8Base& b)
 	BindNav (BtnMaster,  NavMaster);
 	BindNav (BtnSection, NavSection);
 	BindNav (BtnMarker,  NavMarker);
+#ifdef FADERPORT2
+	BindNav (BtnPan,     NavPan);
+#endif
 
 #define BindFader(BTN, MODE)\
-	button (BTN).released.connect_same_thread (button_connections, boost::bind (&FP8Controls::set_fader_mode, this, MODE))
+	button (BTN).released.connect_same_thread (button_connections, std::bind (&FP8Controls::set_fader_mode, this, MODE))
 
 	BindFader (BtnTrack,   ModeTrack);
 	BindFader (BtnPlugins, ModePlugins);
 	BindFader (BtnSend,    ModeSend);
+#ifndef FADERPORT2
 	BindFader (BtnPan,     ModePan);
+#endif
 
 
 #define BindMix(BTN, MODE)\
-	button (BTN).released.connect_same_thread (button_connections, boost::bind (&FP8Controls::set_mix_mode, this, MODE))
+	button (BTN).released.connect_same_thread (button_connections, std::bind (&FP8Controls::set_mix_mode, this, MODE))
 
 	BindMix (BtnMAudio,   MixAudio);
 	BindMix (BtnMVI,      MixInstrument);
@@ -170,6 +211,13 @@ FP8Controls::FP8Controls (FP8Base& b)
 	_user_enum_to_str[ID]  = #ID; \
 	_user_buttons[ID]      = NAME;
 
+#ifdef FADERPORT2
+	REGISTER_ENUM (BtnF1        , "F1");
+	REGISTER_ENUM (BtnF2        , "F2");
+	REGISTER_ENUM (BtnF3        , "F3");
+	REGISTER_ENUM (BtnF4        , "F4");
+	REGISTER_ENUM (BtnFootswitch, "Footswitch");
+#else
 	REGISTER_ENUM (BtnFootswitch, "Footswitch");
 	REGISTER_ENUM (BtnUser1     , "User 1");
 	REGISTER_ENUM (BtnUser2     , "User 2");
@@ -182,6 +230,8 @@ FP8Controls::FP8Controls (FP8Base& b)
 	REGISTER_ENUM (BtnF6        , "F6");
 	REGISTER_ENUM (BtnF7        , "F7");
 	REGISTER_ENUM (BtnF8        , "F8");
+#endif
+
 #undef REGISTER_ENUM
 }
 
@@ -260,6 +310,14 @@ FP8Controls::initialize ()
 	button (BtnMFX).set_color (0x0000ffff);
 	button (BtnMUser).set_color (0x0000ffff);
 
+#ifdef FADERPORT2
+	/* encoder mode-switches are orange, to match the Master switch physical color */
+	button (BtnLink).set_color (0x000000ff);
+	button (BtnChannel).set_color (0x0000ffff);
+	button (BtnScroll).set_color (0x0000ffff);
+	button (BtnPan).set_color (0xffffffff);
+#endif
+
 	for (uint8_t id = 0; id < N_STRIPS; ++id) {
 		chanstrip[id]->initialize ();
 	}
@@ -268,7 +326,11 @@ FP8Controls::initialize ()
 	all_lights_off ();
 
 	/* default modes */
+#ifdef FADERPORT2
+	button (BtnScroll).set_active (true);
+#else
 	button (BtnMaster).set_active (true);
+#endif
 	button (BtnTrack).set_active (true);
 	button (BtnMAll).set_active (true);
 	button (BtnTimecode).set_active (_display_timecode);
@@ -357,6 +419,9 @@ FP8Controls::set_nav_mode (NavigationMode m)
 	button (BtnMaster).set_active (m == NavMaster);
 	button (BtnSection).set_active (m == NavSection);
 	button (BtnMarker).set_active (m == NavMarker);
+#ifdef FADERPORT2
+	button (BtnPan).set_active (m == NavPan);
+#endif
 	_navmode = m;
 }
 

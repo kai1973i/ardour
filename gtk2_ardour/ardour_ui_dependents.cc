@@ -1,21 +1,26 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2007-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
@@ -30,24 +35,34 @@
 #include "pbd/error.h"
 
 #include "ardour/session.h"
+#include "ardour/lv2_plugin.h"
 
 #include "gtkmm2ext/bindings.h"
 
 #include "actions.h"
+#include "ardour_message.h"
 #include "ardour_ui.h"
+#include "audio_clip_editor.h"
 #include "public_editor.h"
 #include "meterbridge.h"
 #include "luainstance.h"
 #include "luawindow.h"
 #include "mixer_ui.h"
+#include "recorder_ui.h"
+#include "trigger_page.h"
 #include "keyboard.h"
 #include "keyeditor.h"
-#include "splash.h"
 #include "rc_option_editor.h"
+#include "region_editor.h"
+#include "rta_manager.h"
 #include "route_params_ui.h"
-#include "time_info_box.h"
+#include "trigger_ui.h"
+#include "step_entry.h"
 #include "opts.h"
-#include "utils.h"
+
+#ifdef GDK_WINDOWING_X11
+#include <ydk/gdkx.h>
+#endif
 
 #include "pbd/i18n.h"
 
@@ -60,14 +75,23 @@ namespace ARDOUR {
 }
 
 using namespace ARDOUR;
+using namespace Gtkmm2ext;
 
 void
 ARDOUR_UI::we_have_dependents ()
 {
-	install_actions ();
-	load_bindings ();
+	install_dependent_actions ();
 
-	ProcessorBox::register_actions ();
+	/* The monitor section relies on at least 1 action defined by us. Since that
+	 * action now exists, give it a chance to use it.
+	 */
+	mixer->monitor_section().use_others_actions ();
+
+	StepEntry::setup_actions_and_bindings ();
+	ClipEditorBox::init ();
+	RegionEditor::setup_actions_and_bindings ();
+
+	setup_action_tooltips ();
 
 	/* Global, editor, mixer, processor box actions are defined now. Link
 	   them with any bindings, so that GTK does not get a chance to define
@@ -88,16 +112,7 @@ ARDOUR_UI::we_have_dependents ()
 
 	Gtkmm2ext::Bindings::associate_all ();
 
-	editor->setup_tooltips ();
 	editor->UpdateAllTransportClocks.connect (sigc::mem_fun (*this, &ARDOUR_UI::update_transport_clocks));
-
-	/* catch up on tabbable state, in the right order to leave the editor
-	 * selected by default
-	 */
-
-	tabbable_state_change (*rc_option_editor);
-	tabbable_state_change (*mixer);
-	tabbable_state_change (*editor);
 
 	/* all actions are defined */
 
@@ -105,10 +120,8 @@ ARDOUR_UI::we_have_dependents ()
 
 	/* catch up on parameters */
 
-	boost::function<void (std::string)> pc (boost::bind (&ARDOUR_UI::parameter_changed, this, _1));
+	std::function<void (std::string)> pc (std::bind (&ARDOUR_UI::parameter_changed, this, _1));
 	Config->map_parameters (pc);
-
-	UIConfiguration::instance().reset_dpi ();
 }
 
 void
@@ -119,8 +132,11 @@ ARDOUR_UI::connect_dependents_to_session (ARDOUR::Session *s)
 	editor->set_session (s);
 	BootMessage (_("Setup Mixer"));
 	mixer->set_session (s);
+	recorder->set_session (s);
+	trigger_page->set_session (s);
 	meterbridge->set_session (s);
-	luawindow->set_session (s);
+
+	RTAManager::instance ()->set_session (s);
 
 	/* its safe to do this now */
 
@@ -162,6 +178,10 @@ ARDOUR_UI::tab_window_root_drop (GtkNotebook* src,
 		tabbable = mixer;
 	} else if (w == GTK_WIDGET(rc_option_editor->contents().gobj())) {
 		tabbable = rc_option_editor;
+	} else if (w == GTK_WIDGET(recorder->contents().gobj())) {
+		tabbable = recorder;
+	} else if (w == GTK_WIDGET(trigger_page->contents().gobj())) {
+		tabbable = trigger_page;
 	} else {
 		return 0;
 	}
@@ -182,19 +202,22 @@ ARDOUR_UI::tab_window_root_drop (GtkNotebook* src,
 bool
 ARDOUR_UI::idle_ask_about_quit ()
 {
-	if (_session && _session->dirty()) {
+	const auto ask_before_closing = UIConfiguration::instance ().get_ask_before_closing_last_window ();
+
+	if ((_session && _session->dirty ()) || !ask_before_closing) {
 		finish ();
 	} else {
 		/* no session or session not dirty, but still ask anyway */
 
-		Gtk::MessageDialog msg (string_compose (_("Quit %1?"), PROGRAM_NAME),
-		                        false, /* no markup */
-		                        Gtk::MESSAGE_INFO,
-		                        Gtk::BUTTONS_YES_NO,
-		                        true); /* modal */
+		ArdourMessageDialog msg (string_compose (_("Quit %1?"), PROGRAM_NAME),
+		                         false, /* no markup */
+		                         Gtk::MESSAGE_INFO,
+		                         Gtk::BUTTONS_YES_NO,
+		                         true); /* modal */
 		msg.set_default_response (Gtk::RESPONSE_YES);
+		msg.set_position (WIN_POS_MOUSE);
 
-		if (msg.run() == Gtk::RESPONSE_YES) {
+		if (msg.run () == Gtk::RESPONSE_YES) {
 			finish ();
 		}
 	}
@@ -230,13 +253,6 @@ tab_window_root_drop (GtkNotebook* src,
 int
 ARDOUR_UI::setup_windows ()
 {
-	/* actions do not need to be defined when we load keybindings. They
-	 * will be lazily discovered. But bindings do need to exist when we
-	 * create windows/tabs with their own binding sets.
-	 */
-
-	keyboard->setup_keybindings ();
-
 	_tabs.set_show_border(false);
 	_tabs.signal_switch_page().connect (sigc::mem_fun (*this, &ARDOUR_UI::tabs_switch));
 	_tabs.signal_page_added().connect (sigc::mem_fun (*this, &ARDOUR_UI::tabs_page_added));
@@ -255,26 +271,32 @@ ARDOUR_UI::setup_windows ()
 		return -1;
 	}
 
+	if (create_recorder ()) {
+		error << _("UI: cannot setup recorder") << endmsg;
+		return -1;
+	}
+
+	if (create_trigger_page ()) {
+		error << _("UI: cannot setup trigger") << endmsg;
+		return -1;
+	}
+
 	if (create_meterbridge ()) {
 		error << _("UI: cannot setup meterbridge") << endmsg;
 		return -1;
 	}
 
-	if (create_luawindow ()) {
-		error << _("UI: cannot setup luawindow") << endmsg;
-		return -1;
-	}
-
-	/* order of addition affects order seen in initial window display */
-
-	rc_option_editor->add_to_notebook (_tabs, _("Preferences"));
-	mixer->add_to_notebook (_tabs, _("Mixer"));
-	editor->add_to_notebook (_tabs, _("Editor"));
-
-	time_info_box = new TimeInfoBox ("ToolbarTimeInfo", false);
 	/* all other dialogs are created conditionally */
 
 	we_have_dependents ();
+
+	/* order of addition affects order seen in initial window display */
+
+	rc_option_editor->add_to_notebook (_tabs);
+	mixer->add_to_notebook (_tabs);
+	editor->add_to_notebook (_tabs);
+	recorder->add_to_notebook (_tabs);
+	trigger_page->add_to_notebook (_tabs);
 
 	top_packer.pack_start (menu_bar_base, false, false);
 
@@ -287,33 +309,16 @@ ARDOUR_UI::setup_windows ()
 	/* now add the transport sample to the top of main window */
 
 	main_vpacker.pack_start ( *spacer, false, false);
-	main_vpacker.pack_start (transport_frame, false, false);
 	main_vpacker.pack_start (_tabs, true, true);
-
-	LuaInstance::instance()->ActionChanged.connect (sigc::mem_fun (*this, &ARDOUR_UI::update_action_script_btn));
-
-	for (int i = 0; i < 9; ++i) {
-		std::string const a = string_compose (X_("script-action-%1"), i + 1);
-		Glib::RefPtr<Action> act = ActionManager::get_action(X_("Editor"), a.c_str());
-		assert (act);
-		action_script_call_btn[i].set_text (string_compose ("%1", i+1));
-		action_script_call_btn[i].set_related_action (act);
-		action_script_call_btn[i].signal_button_press_event().connect (sigc::bind (sigc::mem_fun(*this, &ARDOUR_UI::bind_lua_action_script), i), false);
-		if (act->get_sensitive ()) {
-			action_script_call_btn[i].set_visual_state (Gtkmm2ext::VisualState (action_script_call_btn[i].visual_state() & ~Gtkmm2ext::Insensitive));
-		} else {
-			action_script_call_btn[i].set_visual_state (Gtkmm2ext::VisualState (action_script_call_btn[i].visual_state() | Gtkmm2ext::Insensitive));
-		}
-		const int row = i % 2;
-		const int col = i / 2;
-		action_script_table.attach (action_script_call_btn[i], col, col + 1, row, row + 1, EXPAND, EXPAND, 1, 0);
-		action_script_call_btn[i].set_no_show_all ();
-	}
-	action_script_table.show ();
 
 	setup_transport();
 	build_menu_bar ();
 	setup_tooltips ();
+
+	/* set DPI before realizing widgets */
+	UIConfiguration::instance().reset_dpi ();
+
+	ActionsReady (); // EMIT SIGNAL
 
 	_main_window.signal_delete_event().connect (sigc::mem_fun (*this, &ARDOUR_UI::main_window_delete_event));
 
@@ -321,12 +326,39 @@ ARDOUR_UI::setup_windows ()
 	 */
 
 	_main_window.add (main_vpacker);
-	transport_frame.show_all ();
 
+	apply_window_settings (true);
+
+	setup_toplevel_window (_main_window, "", this);
+	_main_window.show_all ();
+
+	_tabs.set_show_tabs (false);
+
+	/* It would be nice if Gtkmm had wrapped this rather than just
+	 * deprecating the old set_window_creation_hook() method, but oh well...
+	 */
+	g_signal_connect (_tabs.gobj(), "create-window", (GCallback) ::tab_window_root_drop, this);
+
+#ifdef GDK_WINDOWING_X11
+	/* allow externalUIs to be transient, on top of the main window */
+	LV2Plugin::set_main_window_id (GDK_DRAWABLE_XID(_main_window.get_window()->gobj()));
+#endif
+
+	return 0;
+}
+
+void
+ARDOUR_UI::apply_window_settings (bool with_size)
+{
 	const XMLNode* mnode = main_window_settings ();
 
-	if (mnode) {
-		XMLProperty const * prop;
+	if (!mnode) {
+		return;
+	}
+
+	XMLProperty const* prop;
+
+	if (with_size) {
 		gint x = -1;
 		gint y = -1;
 		gint w = -1;
@@ -359,72 +391,26 @@ ARDOUR_UI::setup_windows ()
 		if (w > 0 && h > 0) {
 			_main_window.set_default_size (w, h);
 		}
-
-		std::string current_tab;
-
-		if ((prop = mnode->property (X_("current-tab"))) != 0) {
-			current_tab = prop->value();
-		} else {
-			current_tab = "editor";
-		}
-		if (mixer && current_tab == "mixer") {
-			_tabs.set_current_page (_tabs.page_num (mixer->contents()));
-		} else if (rc_option_editor && current_tab == "preferences") {
-			_tabs.set_current_page (_tabs.page_num (rc_option_editor->contents()));
-		} else if (editor) {
-			_tabs.set_current_page (_tabs.page_num (editor->contents()));
-		}
 	}
 
-	setup_toplevel_window (_main_window, "", this);
-	_main_window.show_all ();
+	std::string current_tab;
 
-	_tabs.set_show_tabs (false);
-
-	/* It would be nice if Gtkmm had wrapped this rather than just
-	 * deprecating the old set_window_creation_hook() method, but oh well...
-	 */
-	g_signal_connect (_tabs.gobj(), "create-window", (GCallback) ::tab_window_root_drop, this);
-
-	return 0;
-}
-
-bool
-ARDOUR_UI::bind_lua_action_script (GdkEventButton*ev, int i)
-{
-	if (ev->button != 3) {
-		return false;
-	}
-	LuaInstance *li = LuaInstance::instance();
-	if (Gtkmm2ext::Keyboard::modifier_state_equals (ev->state, Gtkmm2ext::Keyboard::TertiaryModifier)) {
-		li->remove_lua_action (i);
+	if ((prop = mnode->property (X_("current-tab"))) != 0) {
+		current_tab = prop->value();
 	} else {
-		li->interactive_add (LuaScriptInfo::EditorAction, i);
-	}
-	return true;
-}
-
-void
-ARDOUR_UI::update_action_script_btn (int i, const std::string& n)
-{
-	if (LuaInstance::instance()->lua_action_has_icon (i)) {
-		uintptr_t ii = i;
-		action_script_call_btn[i].set_icon (&LuaInstance::render_action_icon, (void*)ii);
-	} else {
-		action_script_call_btn[i].set_icon (0, 0);
+		current_tab = "editor";
 	}
 
-	std::string const a = string_compose (X_("script-action-%1"), i + 1);
-	Glib::RefPtr<Action> act = ActionManager::get_action(X_("Editor"), a.c_str());
-	assert (act);
-	if (n.empty ()) {
-		act->set_label (string_compose (_("Unset #%1"), i + 1));
-		act->set_tooltip (_("No action bound\nRight-click to assign"));
-		act->set_sensitive (false);
-	} else {
-		act->set_label (n);
-		act->set_tooltip (string_compose (_("%1\n\nClick to run\nRight-click to re-assign\nShift+right-click to unassign"), n));
-		act->set_sensitive (true);
+	if (mixer && current_tab == "mixer") {
+		_tabs.set_current_page (_tabs.page_num (mixer->contents()));
+	} else if (rc_option_editor && current_tab == "preferences") {
+		_tabs.set_current_page (_tabs.page_num (rc_option_editor->contents()));
+	} else if (recorder && current_tab == "recorder") {
+		_tabs.set_current_page (_tabs.page_num (recorder->contents()));
+	} else if (trigger_page && current_tab == "trigger") {
+		_tabs.set_current_page (_tabs.page_num (trigger_page->contents()));
+	} else if (editor) {
+		_tabs.set_current_page (_tabs.page_num (editor->contents()));
 	}
-	KeyEditor::UpdateBindings ();
+	return;
 }

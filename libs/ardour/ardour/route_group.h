@@ -1,24 +1,27 @@
 /*
-    Copyright (C) 2000 Paul Davis
+ * Copyright (C) 2000-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2018 Len Ovens <len@ovenwerks.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_route_group_h__
-#define __ardour_route_group_h__
+#pragma once
 
 #include <list>
 #include <set>
@@ -43,6 +46,7 @@ namespace Properties {
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_mute;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_solo;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_recenable;
+	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_sursend_enable;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_select;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_route_active;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> group_color;
@@ -80,11 +84,13 @@ public:
 	bool is_mute () const { return _mute.val(); }
 	bool is_solo () const { return _solo.val(); }
 	bool is_recenable () const { return _recenable.val(); }
+	bool is_sursend_enable () const { return _sursend_enable.val(); }
 	bool is_select () const { return _select.val(); }
 	bool is_route_active () const { return _route_active.val(); }
 	bool is_color () const { return _color.val(); }
 	bool is_monitoring() const { return _monitoring.val(); }
 	int32_t group_master_number() const { return _group_master_number.val(); }
+	std::weak_ptr<Route> subgroup_bus() const { return _subgroup_bus; }
 
 	bool empty() const {return routes->empty();}
 	size_t size() const { return routes->size();}
@@ -100,6 +106,7 @@ public:
 	void set_mute (bool yn);
 	void set_solo (bool yn);
 	void set_recenable (bool yn);
+	void set_sursend_enable (bool yn);
 	void set_select (bool yn);
 	void set_route_active (bool yn);
 	void set_color (bool yn);
@@ -107,8 +114,8 @@ public:
 
 	bool enabled_property (PBD::PropertyID);
 
-	int add (boost::shared_ptr<Route>);
-	int remove (boost::shared_ptr<Route>);
+	int add (std::shared_ptr<Route>);
+	int remove (std::shared_ptr<Route>);
 
 	template<typename Function>
 	void foreach_route (Function f) {
@@ -123,7 +130,7 @@ public:
 
 	/* fills at_set with all members of the group that are AudioTracks */
 
-	void audio_track_group (std::set<boost::shared_ptr<AudioTrack> >& at_set);
+	void audio_track_group (std::set<std::shared_ptr<AudioTrack> >& at_set);
 
 	void clear () {
 		routes->clear ();
@@ -131,22 +138,23 @@ public:
 	}
 
 	bool has_subgroup() const;
+	bool can_subgroup (bool, Placement) const;
 	void make_subgroup (bool, Placement);
 	void destroy_subgroup ();
 
-	boost::shared_ptr<RouteList> route_list() { return routes; }
+	std::shared_ptr<RouteList> route_list() { return routes; }
 
 	/** Emitted when a route has been added to this group */
-	PBD::Signal2<void, RouteGroup *, boost::weak_ptr<ARDOUR::Route> > RouteAdded;
+	PBD::Signal<void(RouteGroup *, std::weak_ptr<ARDOUR::Route> )> RouteAdded;
 	/** Emitted when a route has been removed from this group */
-	PBD::Signal2<void, RouteGroup *, boost::weak_ptr<ARDOUR::Route> > RouteRemoved;
+	PBD::Signal<void(RouteGroup *, std::weak_ptr<ARDOUR::Route> )> RouteRemoved;
 
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 
 	int set_state (const XMLNode&, int version);
 
-	void assign_master (boost::shared_ptr<VCA>);
-	void unassign_master (boost::shared_ptr<VCA>);
+	void assign_master (std::shared_ptr<VCA>);
+	void unassign_master (std::shared_ptr<VCA>);
 	bool has_control_master() const;
 	bool slaved () const;
 
@@ -160,9 +168,9 @@ public:
 	void migrate_rgba (uint32_t color) { _rgba = color; }
 
 private:
-	boost::shared_ptr<RouteList> routes;
-	boost::shared_ptr<Route> subgroup_bus;
-	boost::weak_ptr<VCA> group_master;
+	std::shared_ptr<RouteList> routes;
+	std::shared_ptr<Route> _subgroup_bus;
+	std::weak_ptr<VCA> group_master;
 
 	PBD::Property<bool> _relative;
 	PBD::Property<bool> _active;
@@ -171,19 +179,24 @@ private:
 	PBD::Property<bool> _mute;
 	PBD::Property<bool> _solo;
 	PBD::Property<bool> _recenable;
+	PBD::Property<bool> _sursend_enable;
 	PBD::Property<bool> _select;
 	PBD::Property<bool> _route_active;
 	PBD::Property<bool> _color;
 	PBD::Property<bool> _monitoring;
 	PBD::Property<int32_t> _group_master_number;
 
-	boost::shared_ptr<ControlGroup> _solo_group;
-	boost::shared_ptr<ControlGroup> _mute_group;
-	boost::shared_ptr<ControlGroup> _rec_enable_group;
-	boost::shared_ptr<ControlGroup> _gain_group;
-	boost::shared_ptr<ControlGroup> _monitoring_group;
+	std::shared_ptr<ControlGroup> _solo_group;
+	std::shared_ptr<ControlGroup> _mute_group;
+	std::shared_ptr<ControlGroup> _rec_enable_group;
+	std::shared_ptr<ControlGroup> _sursend_enable_group;
+	std::shared_ptr<ControlGroup> _gain_group;
+	std::shared_ptr<ControlGroup> _monitoring_group;
 
-	void remove_when_going_away (boost::weak_ptr<Route>);
+	bool check_subgroup (bool, Placement, DataType&, uint32_t&) const;
+	void remove_when_going_away (std::weak_ptr<Route>);
+	void update_surround_sends ();
+	void unset_subgroup_bus ();
 	int set_state_2X (const XMLNode&, int);
 
 	void post_set (PBD::PropertyChange const &);
@@ -195,4 +208,3 @@ private:
 
 } /* namespace */
 
-#endif /* __ardour_route_group_h__ */

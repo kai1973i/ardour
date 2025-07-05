@@ -1,24 +1,24 @@
 /*
-    Copyright (C) 2002 Paul Davis
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_gtk_return_ui_h__
-#define __ardour_gtk_return_ui_h__
+#pragma once
 
 #include "gain_meter.h"
 #include "panner_ui.h"
@@ -34,7 +34,7 @@ class IOSelector;
 class ReturnUI : public Gtk::HBox
 {
 public:
-	ReturnUI (Gtk::Window *,boost::shared_ptr<ARDOUR::Return>, ARDOUR::Session*);
+	ReturnUI (Gtk::Window *,std::shared_ptr<ARDOUR::Return>, ARDOUR::Session*);
 	~ReturnUI();
 
 	void update ();
@@ -42,10 +42,10 @@ public:
 
 	IOSelector* io;
 
-	boost::shared_ptr<ARDOUR::Return>& retrn() { return _return; }
+	std::shared_ptr<ARDOUR::Return>& retrn() { return _return; }
 
 private:
-	boost::shared_ptr<ARDOUR::Return> _return;
+	std::shared_ptr<ARDOUR::Return> _return;
 	GainMeter                         _gpm;
 	Gtk::VBox                         _vbox;
 	Gtk::VBox                         _hbox;
@@ -60,7 +60,7 @@ private:
 class ReturnUIWindow : public ArdourWindow
 {
   public:
-	ReturnUIWindow(boost::shared_ptr<ARDOUR::Return>, ARDOUR::Session*);
+	ReturnUIWindow(std::shared_ptr<ARDOUR::Return>, ARDOUR::Session*);
 	~ReturnUIWindow();
 
 	ReturnUI* ui;
@@ -71,5 +71,4 @@ class ReturnUIWindow : public ArdourWindow
 	PBD::ScopedConnection going_away_connection;
 };
 
-#endif /* __ardour_gtk_return_ui_h__ */
 

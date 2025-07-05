@@ -1,30 +1,32 @@
 /*
-    Copyright (C) 2000-2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 
 #include <glib.h>
 #include "pbd/gstdio_compat.h"
 
 #include <glibmm.h>
-#include <glibmm/datetime.h>
 
-#include <gtkmm/liststore.h>
+#include <ytkmm/liststore.h>
 
 #include "ardour/filename_extensions.h"
 #include "ardour/session.h"
@@ -36,8 +38,9 @@
 
 #include "editor_snapshots.h"
 #include "ardour_ui.h"
-#include "pbd/i18n.h"
 #include "utils.h"
+
+#include "pbd/i18n.h"
 
 using namespace std;
 using namespace PBD;
@@ -45,21 +48,20 @@ using namespace Gtk;
 using namespace ARDOUR;
 using namespace ARDOUR_UI_UTILS;
 
-EditorSnapshots::EditorSnapshots (Editor* e)
-	: EditorComponent (e)
+EditorSnapshots::EditorSnapshots ()
 {
-	_model = ListStore::create (_columns);
-	_display.set_model (_model);
-	_display.append_column (X_("snapshot"), _columns.visible_name);
-	_display.append_column (X_("lastmod"), _columns.time_formatted);
-	_display.set_size_request (75, -1);
-	_display.set_headers_visible (false);
-	_display.set_reorderable (false);
-	_scroller.add (_display);
+	_snapshot_model = ListStore::create (_columns);
+	_snapshot_display.set_model (_snapshot_model);
+	_snapshot_display.append_column ("", _columns.current_active);
+	_snapshot_display.append_column (_("Snapshot (dbl-click to load)"), _columns.visible_name);
+	_snapshot_display.append_column (_("Modified Date"), _columns.time_formatted);
+	_snapshot_display.set_size_request (75, -1);
+	_snapshot_display.set_headers_visible (true);
+	_snapshot_display.set_reorderable (false);
+	_scroller.add (_snapshot_display);
 	_scroller.set_policy (Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
 
-	_display.get_selection()->signal_changed().connect (sigc::mem_fun(*this, &EditorSnapshots::selection_changed));
-	_display.signal_button_press_event().connect (sigc::mem_fun (*this, &EditorSnapshots::button_press), false);
+	_snapshot_display.signal_button_press_event().connect (sigc::mem_fun (*this, &EditorSnapshots::button_press), false);
 }
 
 void
@@ -70,50 +72,70 @@ EditorSnapshots::set_session (Session* s)
 	redisplay ();
 }
 
-/** A new snapshot has been selected.
- */
-void
-EditorSnapshots::selection_changed ()
-{
-	if (_display.get_selection()->count_selected_rows() > 0) {
-
-		TreeModel::iterator i = _display.get_selection()->get_selected();
-
-		std::string snap_name = (*i)[_columns.real_name];
-
-		if (snap_name.length() == 0) {
-			return;
-		}
-
-		if (_session->snap_name() == snap_name) {
-			return;
-		}
-
-		_display.set_sensitive (false);
-		ARDOUR_UI::instance()->load_session (_session->path(), string (snap_name));
-		_display.set_sensitive (true);
-	}
-}
-
 bool
 EditorSnapshots::button_press (GdkEventButton* ev)
 {
 	if (ev->button == 3) {
-		/* Right-click on the snapshot list. Work out which snapshot it
-		   was over. */
+		/* Right-click on the snapshot list.
+		 * Work out which snapshot it was over.
+		 */
 		Gtk::TreeModel::Path path;
 		Gtk::TreeViewColumn* col;
 		int cx;
 		int cy;
-		_display.get_path_at_pos ((int) ev->x, (int) ev->y, path, col, cx, cy);
-		Gtk::TreeModel::iterator iter = _model->get_iter (path);
+		_snapshot_display.get_path_at_pos ((int) ev->x, (int) ev->y, path, col, cx, cy);
+		if (!path) {
+			return false;
+		}
+		_snapshot_display.get_selection()->select (path);
+		Gtk::TreeModel::iterator iter = _snapshot_model->get_iter (path);
 		if (iter) {
 			Gtk::TreeModel::Row row = *iter;
 			popup_context_menu (ev->button, ev->time, row[_columns.real_name]);
 		}
 		return true;
-	}
+	} else if (ev->type == GDK_2BUTTON_PRESS) {
+		Gtk::TreeModel::Path path;
+		Gtk::TreeViewColumn* col;
+		int cx;
+		int cy;
+		string snap_name;
+		_snapshot_display.get_path_at_pos ((int) ev->x, (int) ev->y, path, col, cx, cy);
+		if (!path) {
+			return false;
+		}
+		Gtk::TreeModel::iterator iter = _snapshot_model->get_iter (path);
+		if (iter) {
+			Gtk::TreeModel::Row row = *iter;
+			snap_name = row[_columns.real_name];
+		}
 
+		if (snap_name.length() == 0) {
+			return false;
+		}
+
+		if (_session->snap_name() == snap_name) {
+			return false;
+		}
+
+		ArdourDialog confirm (_("Load Snapshot?"), true);
+		Gtk::Label* m = Gtk::manage (new Gtk::Label (string_compose ("%1\n%2", _("Do you want to load this snapshot?"), snap_name)));
+		confirm.get_vbox()->pack_start (*m, true, true);
+		confirm.add_button (Gtk::Stock::CANCEL, Gtk::RESPONSE_CANCEL);
+		confirm.add_button (_("Yes, Load It"), Gtk::RESPONSE_ACCEPT);
+		confirm.show_all ();
+		switch (confirm.run()) {
+			case RESPONSE_ACCEPT:
+				break;
+			default:
+				return false;
+		}
+
+		_snapshot_display.set_sensitive (false);
+		ARDOUR_UI::instance()->load_session (_session->path(), string (snap_name));
+		_snapshot_display.set_sensitive (true);
+		return true;
+	}
 	return false;
 }
 
@@ -131,10 +153,9 @@ EditorSnapshots::popup_context_menu (int button, int32_t time, std::string snaps
 	MenuList& items (_menu.items());
 	items.clear ();
 
-	const bool modification_allowed = (_session->snap_name() != snapshot_name && _session->name() != snapshot_name);
+	const bool modification_allowed = (_session->snap_name() != snapshot_name && _session->name() != snapshot_name && _snapshot_model->children().size () > 1);
 
 	add_item_with_sensitivity (items, MenuElem (_("Remove"), sigc::bind (sigc::mem_fun (*this, &EditorSnapshots::remove), snapshot_name)), modification_allowed);
-
 	add_item_with_sensitivity (items, MenuElem (_("Rename..."), sigc::bind (sigc::mem_fun (*this, &EditorSnapshots::rename), snapshot_name)), modification_allowed);
 
 	_menu.popup (button, time);
@@ -188,23 +209,18 @@ EditorSnapshots::redisplay ()
 		return;
 	}
 
-	vector<std::string> state_file_paths;
+	vector<string> state_file_names = _session->possible_states ();
 
-	get_state_files_in_directory (_session->session_directory().root_path(),
-	                              state_file_paths);
-
-	if (state_file_paths.empty()) {
+	if (state_file_names.empty()) {
 		return;
 	}
 
-	vector<string> state_file_names (get_file_names_no_extension(state_file_paths));
-
-	_model->clear ();
+	_snapshot_model->clear ();
 
 	for (vector<string>::iterator i = state_file_names.begin(); i != state_file_names.end(); ++i)
 	{
 		string statename = (*i);
-		TreeModel::Row row = *(_model->append());
+		TreeModel::Row row = *(_snapshot_model->append());
 
 		/* this lingers on in case we ever want to change the visible
 		   name of the snapshot.
@@ -214,7 +230,7 @@ EditorSnapshots::redisplay ()
 		display_name = statename;
 
 		if (statename == _session->snap_name()) {
-			_display.get_selection()->select(row);
+			_snapshot_display.get_selection()->select(row);
 		}
 
 		std::string s = Glib::build_filename (_session->path(), statename + ARDOUR::statefile_suffix);
@@ -223,6 +239,11 @@ EditorSnapshots::redisplay ()
 		g_stat (s.c_str(), &gsb);
 		Glib::DateTime gdt(Glib::DateTime::create_now_local (gsb.st_mtime));
 
+		if (_session->snap_name() == display_name) {
+			row[_columns.current_active] = u8"\u25B6"; // BLACK RIGHT-POINTING TRIANGLE
+		} else {
+			row[_columns.current_active] = "";
+		}
 		row[_columns.visible_name] = display_name;
 		row[_columns.real_name] = statename;
 		row[_columns.time_formatted] = gdt.format ("%F %H:%M");

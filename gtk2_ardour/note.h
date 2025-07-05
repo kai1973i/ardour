@@ -1,32 +1,33 @@
 /*
-    Copyright (C) 2007 Paul Davis
-    Author: Dave Robillard
-    Author: Hans Baier
+ * Copyright (C) 2013-2018 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __gtk_ardour_note_h__
-#define __gtk_ardour_note_h__
+#pragma once
 
 #include <iostream>
+
+#include "canvas/rectangle.h"
+
 #include "note_base.h"
 #include "midi_util.h"
 
 namespace ArdourCanvas {
 	class Container;
+	class Note;
 }
 
 class Note : public NoteBase
@@ -34,9 +35,9 @@ class Note : public NoteBase
 public:
 	typedef Evoral::Note<Temporal::Beats> NoteType;
 
-	Note (MidiRegionView&                   region,
+	Note (MidiView&                   region,
 	      ArdourCanvas::Item*               parent,
-	      const boost::shared_ptr<NoteType> note = boost::shared_ptr<NoteType>(),
+	      const std::shared_ptr<NoteType> note = std::shared_ptr<NoteType>(),
 	      bool with_events = true);
 
 	~Note ();
@@ -63,10 +64,12 @@ public:
 
 	void set_ignore_events (bool);
 
+	/* Just changes the visual display of velocity during a drag */
+	void set_velocity (double);
+	double visual_velocity () const;
 	void move_event (double dx, double dy);
 
 private:
-	ArdourCanvas::Rectangle* _rectangle;
+	ArdourCanvas::Note* _visual_note;
 };
 
-#endif /* __gtk_ardour_note_h__ */

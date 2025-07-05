@@ -1,28 +1,45 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_vst_types_h__
-#define __ardour_vst_types_h__
+#pragma once
 
 #include <pthread.h>
 #include "ardour/libardour_visibility.h"
-#include "ardour/vestige/aeffectx.h"
+#include "ardour/vestige/vestige.h"
+
+#ifdef MACVST_SUPPORT
+#include <Carbon/Carbon.h>
+
+/* fix up stupid apple macros */
+#undef check
+#undef require
+#undef verify
+
+#ifdef YES
+#undef YES
+#endif
+#ifdef NO
+#undef NO
+#endif
+
+#endif
 
 struct LIBARDOUR_API _VSTKey
 {
@@ -34,43 +51,21 @@ struct LIBARDOUR_API _VSTKey
 
 typedef struct _VSTKey VSTKey;
 
-struct LIBARDOUR_API _VSTInfo
-{
-	char  *name;
-	char  *creator;
-	int    UniqueID;
-	char  *Category;
-
-	int    numInputs;
-	int    numOutputs;
-	int    numParams;
-
-	int    wantMidi;
-	int    wantEvents;
-	int    hasEditor;
-	int    isInstrument; // still unused
-	int    canProcessReplacing;
-
-	char** ParamNames;
-	char** ParamLabels;
-};
-
-typedef struct _VSTInfo VSTInfo;
-
 typedef AEffect * (* main_entry_t) (audioMasterCallback);
 
 struct LIBARDOUR_API _VSTHandle
 {
-	void*        dll;
+#ifdef MACVST_SUPPORT
+	CFBundleRef    bundleRef;
+	CFBundleRefNum res_file_id;
+#else
+	void* dll;
+#endif
+
 	char*        name;
 	char*        path;
-
 	main_entry_t main_entry;
-
 	int          plugincnt;
-#ifdef MACVST_SUPPORT
-	int32_t      res_file_id;
-#endif
 };
 
 typedef struct _VSTHandle VSTHandle;
@@ -143,4 +138,3 @@ LIBARDOUR_API extern void vststate_maybe_set_program (VSTState* state);
 }
 #endif
 
-#endif

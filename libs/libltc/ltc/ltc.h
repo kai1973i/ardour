@@ -430,8 +430,8 @@ int ltc_decoder_free(LTCDecoder *d);
  *
  * @param d decoder handle
  * @param buf pointer to ltcsnd_sample_t - unsigned 8 bit mono audio data
- * @param size \anchor size number of samples to parse
- * @param posinfo (optional, recommended) sample-offset in the audio-stream. It is added to \ref off_start, \ref off_end in \ref LTCFrameExt and should be monotonic (ie incremented by \ref size for every call to ltc_decoder_write)
+ * @param size size number of samples to parse
+ * @param posinfo (optional, recommended) sample-offset in the audio-stream. It is added to \ref off_start, \ref off_end in \ref LTCFrameExt and should be monotonic (ie incremented by \p size for every call to ltc_decoder_write)
  */
 void ltc_decoder_write(LTCDecoder *d,
 		ltcsnd_sample_t *buf, size_t size,
@@ -671,7 +671,7 @@ int ltc_encoder_set_bufsize(LTCEncoder *e, double sample_rate, double fps);
 /**
  * Set the volume of the generated LTC signal
  *
- * typically LTC is sent at 0dBu ; in EBU callibrated systems that
+ * typically LTC is sent at 0dBu ; in EBU calibrated systems that
  * corresponds to -18dBFS. - by default libltc creates -3dBFS
  *
  * since libltc generated 8bit audio-data, the minimum dBFS

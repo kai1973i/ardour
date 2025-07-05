@@ -1,24 +1,23 @@
 /*
-    Copyright (C) 2016 Paul Davis
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_slavable_automation_control_h__
-#define __ardour_slavable_automation_control_h__
+#pragma once
 
 #include "ardour/automation_control.h"
 #include "ardour/libardour_visibility.h"
@@ -31,7 +30,7 @@ public:
 	SlavableAutomationControl(ARDOUR::Session&,
 	                          const Evoral::Parameter&                  parameter,
 	                          const ParameterDescriptor&                desc,
-	                          boost::shared_ptr<ARDOUR::AutomationList> l=boost::shared_ptr<ARDOUR::AutomationList>(),
+	                          std::shared_ptr<ARDOUR::AutomationList> l=std::shared_ptr<ARDOUR::AutomationList>(),
 	                          const std::string&                        name="",
 	                          PBD::Controllable::Flag                   flags=PBD::Controllable::Flag (0)
 		);
@@ -40,11 +39,13 @@ public:
 
 	double get_value () const;
 
-	void add_master (boost::shared_ptr<AutomationControl>);
-	void remove_master (boost::shared_ptr<AutomationControl>);
+	void add_master (std::shared_ptr<AutomationControl>);
+	void remove_master (std::shared_ptr<AutomationControl>);
 	void clear_masters ();
-	bool slaved_to (boost::shared_ptr<AutomationControl>) const;
+	bool slaved_to (std::shared_ptr<AutomationControl>) const;
 	bool slaved () const;
+
+	std::set<std::shared_ptr<AutomationControl>> masters () const;
 
 	virtual void automation_run (samplepos_t start, pframes_t nframes);
 
@@ -69,33 +70,33 @@ public:
 	*/
 	int32_t   get_boolean_masters () const;
 
-	PBD::Signal0<void> MasterStatusChange;
+	PBD::Signal<void()> MasterStatusChange;
 
 	void use_saved_master_ratios ();
 
 	int set_state (XMLNode const&, int);
-	XMLNode& get_state();
+	XMLNode& get_state() const;
 
-	bool find_next_event (double n, double e, Evoral::ControlEvent& ev) const
+	bool find_next_event (Temporal::timepos_t const & n, Temporal::timepos_t const & e, Evoral::ControlEvent& ev) const
 	{
 		Glib::Threads::RWLock::ReaderLock lm (master_lock);
 		return find_next_event_locked (n, e, ev);
 	}
 
-	bool find_next_event_locked (double now, double end, Evoral::ControlEvent& next_event) const;
+	bool find_next_event_locked (Temporal::timepos_t const & now, Temporal::timepos_t const & end, Evoral::ControlEvent& next_event) const;
 
 protected:
 
 	class MasterRecord {
 	public:
-		MasterRecord (boost::weak_ptr<AutomationControl> gc, double vc, double vm)
+		MasterRecord (std::weak_ptr<AutomationControl> gc, double vc, double vm)
 			: _master (gc)
 			, _yn (false)
 			, _val_ctrl (vc)
 			, _val_master (vm)
 		{}
 
-		boost::shared_ptr<AutomationControl> master() const { assert(_master.lock()); return _master.lock(); }
+		std::shared_ptr<AutomationControl> master() const { assert(_master.lock()); return _master.lock(); }
 
 		double val_ctrl () const { return _val_ctrl; }
 		double val_master () const { return _val_master; }
@@ -117,7 +118,7 @@ protected:
 		PBD::ScopedConnection dropped_connection;
 
   private:
-		boost::weak_ptr<AutomationControl> _master;
+		std::weak_ptr<AutomationControl> _master;
 		/* holds most recently seen master value for boolean/toggle controls */
 		bool   _yn;
 
@@ -130,29 +131,28 @@ protected:
 	typedef std::map<PBD::ID,MasterRecord> Masters;
 	Masters _masters;
 
-	void   master_going_away (boost::weak_ptr<AutomationControl>);
+	void   master_going_away (std::weak_ptr<AutomationControl>);
 	double get_value_locked() const;
 	void   actually_set_value (double value, PBD::Controllable::GroupControlDisposition);
-	void   update_boolean_masters_records (boost::shared_ptr<AutomationControl>);
+	void   update_boolean_masters_records (std::shared_ptr<AutomationControl>);
 
 	virtual bool get_masters_curve_locked (samplepos_t, samplepos_t, float*, samplecnt_t) const;
-	bool masters_curve_multiply (samplepos_t, samplepos_t, float*, samplecnt_t) const;
+	bool masters_curve_multiply (timepos_t const &, timepos_t const &, float*, samplecnt_t) const;
 
 	virtual double reduce_by_masters_locked (double val, bool) const;
 	virtual double scale_automation_callback (double val, double ratio) const;
 
-	virtual bool handle_master_change (boost::shared_ptr<AutomationControl>);
+	virtual bool handle_master_change (std::shared_ptr<AutomationControl>);
 	virtual bool boolean_automation_run_locked (samplepos_t start, pframes_t len);
 	bool boolean_automation_run (samplepos_t start, pframes_t len);
 
-	virtual void   master_changed (bool from_self, GroupControlDisposition gcd, boost::weak_ptr<AutomationControl>);
+	virtual void   master_changed (bool from_self, GroupControlDisposition gcd, std::weak_ptr<AutomationControl>);
 	virtual double get_masters_value_locked () const;
-	virtual void   pre_remove_master (boost::shared_ptr<AutomationControl>) {}
-	virtual void   post_add_master (boost::shared_ptr<AutomationControl>) {}
+	virtual void   pre_remove_master (std::shared_ptr<AutomationControl>) {}
+	virtual void   post_add_master (std::shared_ptr<AutomationControl>) {}
 
 	XMLNode* _masters_node; /* used to store master ratios in ::set_state() for later use */
 };
 
 } // namespace ARDOUR
 
-#endif /* __ardour_slavable_automation_control_h__ */

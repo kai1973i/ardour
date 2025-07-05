@@ -1,28 +1,34 @@
 /*
-    Copyright (C) 2009 Paul Davis
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+#include <ytkmm/menu.h>
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#include "ardour/session_handle.h"
+#include "ardour/types.h"
 
-*/
-
-#ifndef __gtk_ardour_group_tabs_h__
-#define __gtk_ardour_group_tabs_h__
-
-#include <gtkmm/menu.h>
-#include "editor_component.h"
 #include "gtkmm2ext/cairo_widget.h"
+
+#include "editor_component.h"
 
 namespace ARDOUR {
 	class Session;
@@ -47,12 +53,19 @@ public:
 
 	void set_session (ARDOUR::Session *);
 
-	/** @param g Route group, or 0.
-	 *  @return Menu to be popped up on right-click over the given route group.
+	/** Create route-group context menu
+	 *
+	 * @param g Route group, or 0.
+	 * @param tabArea false if context menu is not for a group tab, show the "create new from" items here.
+	 *                 When true a given group's context menu for the group \p g is displayed.
+	 * @return Menu to be popped up on right-click over the given route group.
 	 */
 	Gtk::Menu* get_menu (ARDOUR::RouteGroup* g, bool tabArea = false);
 
 	void run_new_group_dialog (ARDOUR::RouteList const *, bool with_master);
+
+	void set_extent (double);
+	void set_offset (double);
 
 	static void set_group_color (ARDOUR::RouteGroup *, uint32_t);
 	static std::string group_gui_id (ARDOUR::RouteGroup *);
@@ -69,8 +82,19 @@ protected:
 		ARDOUR::RouteGroup* group; ///< route group
 	};
 
+	/** @return Size of the widget along the primary axis */
+	virtual double visible_extent () const = 0;
+
+	/** @return Size of all contained strips along the primary axis */
+	double extent () const { return _extent < 0 ? visible_extent () : _extent; }
+
+	/** @return Scroll offset of \ref visible_extent along the primary axis */
+	double offset () const { return _offset; }
+
+	bool _dragging_new_tab; ///< true if we're dragging a new tab
+
 private:
-	static void emit_gui_changed_for_members (boost::shared_ptr<ARDOUR::RouteList>);
+	static void emit_gui_changed_for_members (std::shared_ptr<ARDOUR::RouteList>);
 
 	/** Compute all the tabs for this widget.
 	 *  @return Tabs.
@@ -83,17 +107,14 @@ private:
 	 */
 	virtual void draw_tab (cairo_t* cr, Tab const & t) = 0;
 
-	/** @param x x coordinate
-	 *  @param y y coordinate
-	 *  @return x or y, depending on which is the primary coordinate for this widget.
+	/** Coordinate map (editor, mixer)
+	 * @param x x-coordinate
+	 * @param y y-coordinate
+	 * @return x or y, depending on which is the primary coordinate for this widget.
 	 */
-	virtual double primary_coordinate (double, double) const = 0;
+	virtual double primary_coordinate (double x, double y) const = 0;
 
 	virtual ARDOUR::RouteList routes_for_tab (Tab const * t) const = 0;
-
-	/** @return Size of the widget along the primary axis */
-	virtual double extent () const = 0;
-
 	virtual void add_menu_items (Gtk::Menu *, ARDOUR::RouteGroup *) {}
 	virtual ARDOUR::RouteList selected_routes () const = 0;
 
@@ -121,11 +142,14 @@ private:
 	bool on_motion_notify_event (GdkEventMotion *);
 	bool on_button_release_event (GdkEventButton *);
 
+	bool on_enter_notify_event (GdkEventCrossing*);
+	bool on_leave_notify_event (GdkEventCrossing*);
+
 	Tab * click_to_tab (double, std::list<Tab>::iterator *, std::list<Tab>::iterator *);
 
 	void route_group_property_changed (ARDOUR::RouteGroup *);
-	void route_added_to_route_group (ARDOUR::RouteGroup *, boost::weak_ptr<ARDOUR::Route>);
-	void route_removed_from_route_group (ARDOUR::RouteGroup *, boost::weak_ptr<ARDOUR::Route>);
+	void route_added_to_route_group (ARDOUR::RouteGroup *, std::weak_ptr<ARDOUR::Route>);
+	void route_removed_from_route_group (ARDOUR::RouteGroup *, std::weak_ptr<ARDOUR::Route>);
 
 	void assign_group_to_master (uint32_t which, ARDOUR::RouteGroup*, bool rename_master) const;
 	void unassign_group_to_master (uint32_t which, ARDOUR::RouteGroup*) const;
@@ -142,7 +166,6 @@ private:
 	Tab* _dragging; ///< tab being dragged, or 0
 	/** routes that were in the tab that is being dragged when the drag started */
 	ARDOUR::RouteList _initial_dragging_routes;
-	bool _dragging_new_tab; ///< true if we're dragging a new tab
 	bool _drag_moved; ///< true if there has been movement during any current drag
 	double _drag_fixed; ///< the position of the fixed end of the tab being dragged
 	double _drag_moving; ///< the position of the moving end of the tab being dragged
@@ -150,9 +173,14 @@ private:
 	double _drag_min; ///< minimum position for drag
 	double _drag_max; ///< maximum position for drag
 	double _drag_first; ///< first mouse pointer position during drag
+	double _extent;
+	double _offset;
+
+	bool  _hovering;
+
+	mutable PBD::ScopedConnection _new_route_group_connection;
 
 	/** colors that have been used for new route group tabs */
 	static std::list<Gdk::Color> _used_colors;
 };
 
-#endif // __gtk_ardour_group_tabs_h__

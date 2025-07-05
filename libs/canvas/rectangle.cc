@@ -1,26 +1,29 @@
 /*
-    Copyright (C) 2011-2013 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <cairomm/context.h>
-#include "pbd/stacktrace.h"
+
 #include "pbd/compose.h"
+
+#include "gtkmm2ext/utils.h"
 
 #include "canvas/canvas.h"
 #include "canvas/rectangle.h"
@@ -29,9 +32,25 @@
 using namespace std;
 using namespace ArdourCanvas;
 
+/* Rectangle notes
+ *
+ * A Rectangle is defined by an ArdourCanvas::Rect which encloses every pixel
+ * that the Rectangle might draw. If the Rect is (0, 0, 10, 10) then a filled
+ * version of the Rectangle will paint every pixel up to and including those
+ * edges.
+ *
+ * If there is a border to the Rectangle, it will be drawn *INSIDE* the
+ * boundary given by the Rect. The border will include (at minimum) the outer
+ * pixel edge(s) of the Rectangle.
+ *
+ * This makes ArdourCanvas::Rectangle follow the semantics implied by CSS's
+ * box-sizing: border-box, rather than box-sizing: content-box
+ */
+
 Rectangle::Rectangle (Canvas* c)
 	: Item (c)
 	, _outline_what ((What) (LEFT | RIGHT | TOP | BOTTOM))
+	, _corner_radius (0.0)
 {
 }
 
@@ -39,12 +58,14 @@ Rectangle::Rectangle (Canvas* c, Rect const & rect)
 	: Item (c)
 	, _rect (rect)
 	, _outline_what ((What) (LEFT | RIGHT | TOP | BOTTOM))
+	, _corner_radius (0.0)
 {
 }
 
 Rectangle::Rectangle (Item* parent)
 	: Item (parent)
 	, _outline_what ((What) (LEFT | RIGHT | TOP | BOTTOM))
+	, _corner_radius (0.0)
 {
 }
 
@@ -52,31 +73,29 @@ Rectangle::Rectangle (Item* parent, Rect const & rect)
 	: Item (parent)
 	, _rect (rect)
 	, _outline_what ((What) (LEFT | RIGHT | TOP | BOTTOM))
+	, _corner_radius (0.0)
 {
-}
-
-Rect
-Rectangle::get_self_for_render () const
-{
-	/* In general, a Rectangle will have a _position of (0,0) within its
-	   parent, and its extent is actually defined by _rect. But in the
-	   unusual case that _position is set to something other than (0,0),
-	   we should take that into account when rendering.
-	*/
-
-	return item_to_window (_rect.translate (_position), false);
 }
 
 void
-Rectangle::render_self (Rect const & area, Cairo::RefPtr<Cairo::Context> context, Rect self) const
+Rectangle::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 {
-	Rect r = self.intersection (area);
+	/* Note that item_to_window() already takes _position into account (as
+	   part of item_to_canvas()
+	*/
 
-	if (!r) {
+	Rect self (item_to_window (_rect));
+	const Rect draw = self.intersection (area);
+
+	if (!draw) {
 		return;
 	}
 
-	Rect draw = r;
+	if (_corner_radius) {
+		context->save ();
+		Gtkmm2ext::rounded_rectangle (context, self.x0, self.y0, self.width(), self.height(), _corner_radius);
+		context->clip ();
+	}
 
 	if (_fill && !_transparent) {
 		if (_stops.empty()) {
@@ -85,7 +104,11 @@ Rectangle::render_self (Rect const & area, Cairo::RefPtr<Cairo::Context> context
 			setup_gradient_context (context, self, Duple (draw.x0, draw.y0));
 		}
 
-		context->rectangle (draw.x0, draw.y0, draw.width(), draw.height());
+		if (_corner_radius) {
+			Gtkmm2ext::rounded_rectangle (context, draw.x0, draw.y0, draw.width(), draw.height(), _corner_radius);
+		} else {
+			context->rectangle (draw.x0, draw.y0, draw.width(), draw.height());
+		}
 		context->fill ();
 	}
 
@@ -93,27 +116,16 @@ Rectangle::render_self (Rect const & area, Cairo::RefPtr<Cairo::Context> context
 
 		setup_outline_context (context);
 
-		/* the goal here is that if the border is 1 pixel
-		 * thick, it will precisely align with the corner
-		 * coordinates of the rectangle. So if the rectangle
-		 * has a left edge at 0 and a right edge at 10, then
-		 * the left edge must span 0..1, the right edge
-		 * must span 10..11 because the first and final pixels
-		 * to be colored are actually "at" 0.5 and 10.5 (midway
-		 * between the integer coordinates).
-		 *
-		 * See the Cairo FAQ on single pixel lines for more
-		 * detail.
-		 */
+		const double shift = _outline_width * 0.5;
+		self = self.translate (Duple (shift, shift));
 
-		if (fmod (_outline_width, 2.0)  != 0.0) {
-			const double shift = _outline_width * 0.5;
-			self = self.translate (Duple (shift, shift));
-		}
+		if (_outline_what == ALL) {
 
-		if (_outline_what == What (LEFT|RIGHT|BOTTOM|TOP)) {
-
-			context->rectangle (self.x0, self.y0, self.width(), self.height());
+			if (_corner_radius) {
+				Gtkmm2ext::rounded_rectangle (context, self.x0, self.y0, self.width() - _outline_width, self.height() - _outline_width, _corner_radius);
+			} else {
+				context->rectangle (self.x0, self.y0, self.width() - _outline_width, self.height() - _outline_width);
+			}
 
 		} else {
 
@@ -140,50 +152,42 @@ Rectangle::render_self (Rect const & area, Cairo::RefPtr<Cairo::Context> context
 
 		context->stroke ();
 	}
+
+	if (_corner_radius) {
+		context->restore ();
+	}
+
+	render_children (area, context);
 }
 
 void
-Rectangle::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
+Rectangle::size_request (double& w, double& h) const
 {
-	render_self (area, context, get_self_for_render ());
+	if (_requested_width > 0.) {
+		w = _requested_width;
+	} else {
+		w = _rect.width();
+	}
+
+	if (_requested_height > 0.) {
+		h = _requested_height;
+	} else {
+		h = _rect.height();
+	}
 }
 
 void
 Rectangle::compute_bounding_box () const
 {
-	if (!_rect.empty()) {
-		Rect r = _rect.fix ();
-
-		/* if the outline is 1 pixel, then the actual
-		   bounding box is 0.5 pixels outside the stated
-		   corners of the rectangle.
-
-		   if the outline is 2 pixels, then the actual
-		   bounding box is 1.0 pixels outside the stated
-		   corners of the rectangle (so that the middle
-		   of the 2 pixel wide border passes through
-		   the corners, alternatively described as 1 row
-		   of pixels outside of the corners, and 1 row
-		   inside).
-
-		   if the outline is 3 pixels, then the actual
-		   bounding box is 1.5 outside the stated corners
-		   of the rectangle (so that the middle row of
-		   pixels of the border passes through the corners).
-
-		   if the outline is 4 pixels, then the actual bounding
-		   box is 2.0 pixels outside the stated corners
-		   of the rectangle, so that the border consists
-		   of 2 pixels outside the corners and 2 pixels inside.
-
-		   hence ... the bounding box is width * 0.5 larger
-		   than the rectangle itself.
-		*/
-
-		_bounding_box = r.expand (1.0 + _outline_width * 0.5);
+	if (_rect.empty ()) {
+		_bounding_box = Rect ();
+	} else if (_outline && _outline_width && _outline_what) {
+		 _bounding_box = _rect.fix().expand (ceil (_outline_width * 0.5));
+	} else {
+		_bounding_box = _rect.fix();
 	}
 
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }
 
 void
@@ -199,7 +203,7 @@ Rectangle::set (Rect const & r)
 
 		_rect = r;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -212,7 +216,7 @@ Rectangle::set_x0 (Coord x0)
 
 		_rect.x0 = x0;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -225,7 +229,7 @@ Rectangle::set_y0 (Coord y0)
 
 		_rect.y0 = y0;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change();
 	}
 }
@@ -238,7 +242,7 @@ Rectangle::set_x1 (Coord x1)
 
 		_rect.x1 = x1;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -251,7 +255,7 @@ Rectangle::set_y1 (Coord y1)
 
 		_rect.y1 = y1;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -287,4 +291,37 @@ Rectangle::vertical_fraction (double y) const
          */
 
         return 1.0 - ((i.y - bbox.y0) / bbox.height());
+}
+
+void
+Rectangle::_size_allocate (Rect const & r)
+{
+	Item::_size_allocate (r);
+
+	if (_layout_sensitive) {
+		/* Set _position use the upper left of the Rect, and then set
+		   the _rect member with values that use _position as the
+		   origin.
+		*/
+		Rect r2 (0, 0, r.x1 - r.x0, r.y1 - r.y0);
+		set (r2);
+	}
+}
+
+void
+Rectangle::set_corner_radius (double r)
+{
+	/* note: this does not change the bounding box */
+
+	begin_change ();
+	_corner_radius = r;
+	end_change ();
+}
+
+void
+Rectangle::dump (std::ostream & o) const
+{
+	Item::dump (o);
+
+	o << _canvas->indent() << " outline: w " << outline_width() << " color " << outline_color() << " what 0x" << std::hex << _outline_what << std::dec << endl;
 }

@@ -1,21 +1,25 @@
 /*
-    Copyright (C) 2003 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstdlib>
 #include <cmath>
@@ -27,7 +31,6 @@
 
 #include "pbd/error.h"
 #include "pbd/convert.h"
-#include "pbd/i18n.h"
 
 #include <gtkmm2ext/utils.h>
 #include <gtkmm2ext/gtk_ui.h>
@@ -38,15 +41,16 @@
 #include "ardour_ui.h"
 #include "gui_object.h"
 #include "axis_view.h"
+#include "ui_config.h"
 #include "utils.h"
+
+#include "pbd/i18n.h"
 
 using namespace std;
 using namespace Gtk;
 using namespace Gtkmm2ext;
 using namespace ARDOUR;
 using namespace ARDOUR_UI_UTILS;
-
-list<Gdk::Color> AxisView::used_colors;
 
 AxisView::AxisView ()
 {
@@ -57,9 +61,9 @@ AxisView::~AxisView()
 }
 
 Gdk::Color
-AxisView::unique_random_color()
+AxisView::round_robin_palette_color ()
 {
-	return ::unique_random_color (used_colors);
+	return ARDOUR_UI_UTILS::round_robin_palette_color ();
 }
 
 string
@@ -86,6 +90,13 @@ AxisView::get_gui_property (const std::string& property_name, std::string& value
 	}
 
 	return false;
+}
+
+void
+AxisView::remove_gui_property (const std::string& property_name)
+{
+	property_hashtable.erase (property_name);
+	gui_object_state().remove_property (state_id(), property_name);
 }
 
 void
@@ -132,4 +143,23 @@ AxisView::set_selected (bool yn)
 	}
 
 	Selectable::set_selected (yn);
+}
+
+void
+AxisView::set_name_ellipsize_mode ()
+{
+	switch (UIConfiguration::instance().get_time_axis_name_ellipsize_mode()) {
+	case -1:
+		name_label.set_ellipsize (Pango::ELLIPSIZE_START);
+		inactive_label.set_ellipsize (Pango::ELLIPSIZE_START);
+		break;
+	case 1:
+		name_label.set_ellipsize (Pango::ELLIPSIZE_END);
+		inactive_label.set_ellipsize (Pango::ELLIPSIZE_END);
+		break;
+	default:
+		name_label.set_ellipsize (Pango::ELLIPSIZE_MIDDLE);
+		inactive_label.set_ellipsize (Pango::ELLIPSIZE_MIDDLE);
+		break;
+	}
 }

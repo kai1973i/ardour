@@ -1,21 +1,28 @@
 /*
-    Copyright (C) 2000-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2006 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2005-2007 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2007-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2014-2018 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
 #endif
@@ -25,14 +32,14 @@
 
 #include <algorithm>
 
-#include <gtkmm/button.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/messagedialog.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treestore.h>
+#include <ytkmm/button.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/messagedialog.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treestore.h>
 
 #include "gtkmm2ext/utils.h"
 
@@ -42,8 +49,13 @@
 #include "pbd/tokenizer.h"
 
 #include "ardour/utils.h"
+#include "ardour/rc_configuration.h"
 
+#include "ardour_message.h"
+#include "plugin_scan_dialog.h"
 #include "plugin_selector.h"
+#include "ardour_ui.h"
+#include "plugin_utils.h"
 #include "gui_thread.h"
 #include "ui_config.h"
 
@@ -54,13 +66,17 @@ using namespace PBD;
 using namespace Gtk;
 using namespace std;
 using namespace ArdourWidgets;
+using namespace ARDOUR_PLUGIN_UTILS;
 
 static const uint32_t MAX_CREATOR_LEN = 24;
 
 PluginSelector::PluginSelector (PluginManager& mgr)
-	: ArdourDialog (_("Plugin Manager"), true, false)
+	: ArdourDialog (_("Plugin Selector"), true, false)
 	, search_clear_button (Stock::CLEAR)
 	, manager (mgr)
+	, _need_tag_save (false)
+	, _need_status_save (false)
+	, _need_menu_rebuild (false)
 	, _inhibit_refill (false)
 {
 	set_name ("PluginSelectorWindow");
@@ -69,21 +85,16 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	_plugin_menu = 0;
 	in_row_change = false;
 
-	//anytime the list changes ( Status, Tags, or scanned plugins ) we need to rebuild redirect-box plugin selector menu
-	manager.PluginListChanged.connect (plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::build_plugin_menu, this), gui_context());
+	manager.PluginListChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::build_plugin_menu, this), gui_context());
+	manager.PluginStatusChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::build_plugin_menu, this), gui_context());
+	manager.PluginTagChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::build_plugin_menu, this), gui_context());
 
-	//these are used to update the info of specific entries, while they are being edited
-	manager.PluginStatusChanged.connect (plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::plugin_status_changed, this, _1, _2, _3), gui_context());
-	manager.PluginTagChanged.connect(plugin_list_changed_connection, invalidator (*this), boost::bind (&PluginSelector::tags_changed, this, _1, _2, _3), gui_context());
+	manager.PluginStatusChanged.connect (plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::plugin_status_changed, this, _1, _2, _3), gui_context());
+	manager.PluginTagChanged.connect(plugin_list_changed_connection, invalidator (*this), std::bind (&PluginSelector::tags_changed, this, _1, _2, _3), gui_context());
 
 	plugin_model = Gtk::ListStore::create (plugin_columns);
 	plugin_display.set_model (plugin_model);
-	/* XXX translators: try to convert "Fav" into a short term
-	 * related to "favorite" and "Hid" into a short term
-	 * related to "hidden"
-	 */
-	plugin_display.append_column (_("Fav"), plugin_columns.favorite);
-	plugin_display.append_column (_("Hide"), plugin_columns.hidden);
+	plugin_display.append_column (S_("Favorite|Fav"), plugin_columns.favorite);
 	plugin_display.append_column (_("Name"), plugin_columns.name);
 	plugin_display.append_column (_("Tags"), plugin_columns.tags);
 	plugin_display.append_column (_("Creator"), plugin_columns.creator);
@@ -94,7 +105,7 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	plugin_display.set_headers_clickable (true);
 	plugin_display.set_reorderable (false);
 	plugin_display.set_rules_hint (true);
-	plugin_display.add_object_drag (plugin_columns.plugin.index(), "PluginInfoPtr");
+	plugin_display.add_object_drag (plugin_columns.plugin.index(), "x-ardour/plugin.info");
 	plugin_display.set_drag_column (plugin_columns.name.index());
 
 	// setting a sort-column prevents re-ordering via Drag/Drop
@@ -106,13 +117,7 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 
 	CellRendererToggle* fav_cell = dynamic_cast<CellRendererToggle*>(plugin_display.get_column_cell_renderer (0));
 	fav_cell->property_activatable() = true;
-	fav_cell->property_radio() = true;
 	fav_cell->signal_toggled().connect (sigc::mem_fun (*this, &PluginSelector::favorite_changed));
-
-	CellRendererToggle* hidden_cell = dynamic_cast<CellRendererToggle*>(plugin_display.get_column_cell_renderer (1));
-	hidden_cell->property_activatable() = true;
-	hidden_cell->property_radio() = true;
-	hidden_cell->signal_toggled().connect (sigc::mem_fun (*this, &PluginSelector::hidden_changed));
 
 	scroller.set_border_width(10);
 	scroller.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
@@ -124,7 +129,7 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	added_list.set_headers_visible (true);
 	added_list.set_reorderable (false);
 
-	for (int i = 2; i <= 7; ++i) {
+	for (int i = 1; i < 7; ++i) {
 		Gtk::TreeView::Column* column = plugin_display.get_column(i);
 		if (column) {
 			column->set_sort_column(i);
@@ -164,10 +169,10 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	_search_ignore_checkbox->set_name ("pluginlist filter button");
 
 	Gtk::Label* search_help_label1 = manage (new Label(
-		_("All search terms must be matched."), Gtk::ALIGN_LEFT));
+		_("All search terms must be matched."), Gtk::ALIGN_START));
 
 	Gtk::Label* search_help_label2 = manage (new Label(
-		_("Ex: \"ess dyn\" will find \"dynamic de-esser\" but not \"de-esser\"."), Gtk::ALIGN_LEFT));
+		_("Ex: \"ess dyn\" will find \"dynamic de-esser\" but not \"de-esser\"."), Gtk::ALIGN_START));
 
 	search_table->attach (search_entry,            0, 3, 0, 1, FILL|EXPAND, FILL);
 	search_table->attach (search_clear_button,     3, 4, 0, 1, FILL, FILL);
@@ -181,7 +186,7 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	search_table->set_col_spacings (4);
 	search_table->set_row_spacings (4);
 
-	Frame* search_frame = manage (new Frame);
+	Gtk::Frame* search_frame = manage (new Gtk::Frame);
 	search_frame->set_name ("BaseFrame");
 	search_frame->set_label (_("Search"));
 	search_frame->add (*search_table);
@@ -204,13 +209,17 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 
 	//_fil_type_combo = manage (new ComboBoxText);
 	_fil_type_combo.append_text_item (_("Show All Formats"));
+
+#if (defined WINDOWS_VST_SUPPORT || defined LXVST_SUPPORT || defined MACVST_SUPPORT)
 	_fil_type_combo.append_text_item (X_("VST"));
+#endif
+#ifdef VST3_SUPPORT
+	_fil_type_combo.append_text_item (X_("VST3"));
+#endif
 #ifdef AUDIOUNIT_SUPPORT
 	_fil_type_combo.append_text_item (X_("AudioUnit"));
 #endif
-#ifdef LV2_SUPPORT
 	_fil_type_combo.append_text_item (X_("LV2"));
-#endif
 	_fil_type_combo.append_text_item (X_("Lua"));
 	_fil_type_combo.append_text_item (X_("LADSPA"));
 	_fil_type_combo.set_text (_("Show All Formats"));
@@ -218,17 +227,6 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	/* note: _fil_creator_combo menu gets filled in build_plugin_menu */
 	_fil_creator_combo.set_text_ellipsize (Pango::ELLIPSIZE_END);
 	_fil_creator_combo.set_layout_ellipsize_width (PANGO_SCALE * 160 * UIConfiguration::instance ().get_ui_scale ());
-
-	_fil_channel_combo.append_text_item (_("Audio I/O"));
-	_fil_channel_combo.append_text_item (_("Mono Audio I/O"));
-	_fil_channel_combo.append_text_item (_("Stereo Audio I/O"));
-	_fil_channel_combo.append_text_item (_("MIDI I/O (only)"));
-	_fil_channel_combo.append_text_item (_("Show All I/O"));
-#ifdef MIXBUS
-	_fil_channel_combo.set_text (_("Audio I/O"));
-#else
-	_fil_channel_combo.set_text (_("Show All I/O"));
-#endif
 
 	VBox* filter_vbox = manage (new VBox);
 	filter_vbox->pack_start (*_fil_effects_radio,     false, false);
@@ -239,12 +237,11 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	filter_vbox->pack_start (*_fil_all_radio,         false, false);
 	filter_vbox->pack_start (_fil_type_combo,         false, false);
 	filter_vbox->pack_start (_fil_creator_combo,      false, false);
-	filter_vbox->pack_start (_fil_channel_combo,      false, false);
 
 	filter_vbox->set_border_width (4);
 	filter_vbox->set_spacing (4);
 
-	Frame* filter_frame = manage (new Frame);
+	Gtk::Frame* filter_frame = manage (new Gtk::Frame);
 	filter_frame->set_name ("BaseFrame");
 	filter_frame->set_label (_("Filter"));
 	filter_frame->add (*filter_vbox);
@@ -258,7 +255,6 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 
 	_fil_type_combo.StateChanged.connect (sigc::mem_fun (*this, &PluginSelector::refill));
 	_fil_creator_combo.StateChanged.connect (sigc::mem_fun (*this, &PluginSelector::refill));
-	_fil_channel_combo.StateChanged.connect (sigc::mem_fun (*this, &PluginSelector::refill));
 
 	/* TAG entry */
 
@@ -274,13 +270,13 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	tag_reset_button->signal_clicked().connect (sigc::mem_fun (*this, &PluginSelector::tag_reset_button_clicked));
 
 	Gtk::Label* tagging_help_label1 = manage (new Label(
-		_("Enter space-separated, one-word Tags for the selected plugin."), Gtk::ALIGN_LEFT));
+		_("Enter space-separated, one-word Tags for the selected plugin."), Gtk::ALIGN_START));
 
 	Gtk::Label* tagging_help_label2 = manage (new Label(
-		_("You can include dashes, colons or underscores in a Tag."), Gtk::ALIGN_LEFT));
+		_("You can include dashes, colons or underscores in a Tag."), Gtk::ALIGN_START));
 
 	Gtk::Label* tagging_help_label3 = manage (new Label(
-		_("Ex: \"dynamic de-esser vocal\" applies 3 Tags."), Gtk::ALIGN_LEFT));
+		_("Ex: \"dynamic de-esser vocal\" applies 3 Tags."), Gtk::ALIGN_START));
 
 	int p = 0;
 	tagging_table->attach (*tag_entry,           0, 1, p, p+1, FILL|EXPAND, FILL);
@@ -289,7 +285,7 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	tagging_table->attach (*tagging_help_label2, 0, 2, p, p+1, FILL, FILL); p++;
 	tagging_table->attach (*tagging_help_label3, 0, 2, p, p+1, FILL, FILL); p++;
 
-	Frame* tag_frame = manage (new Frame);
+	Gtk::Frame* tag_frame = manage (new Gtk::Frame);
 	tag_frame->set_name ("BaseFrame");
 	tag_frame->set_label (_("Tags for Selected Plugin"));
 	tag_frame->add (*tagging_table);
@@ -313,10 +309,15 @@ PluginSelector::PluginSelector (PluginManager& mgr)
 	VBox* to_be_inserted_vbox = manage (new VBox);
 	to_be_inserted_vbox->pack_start (ascroller);
 	to_be_inserted_vbox->pack_start (*add_remove, false, false);
-	to_be_inserted_vbox->set_size_request (200, -1);
+
+	int min_width  = std::max (200.f, rintf(200.f * UIConfiguration::instance().get_ui_scale()));
+	int min_height = std::max (600.f, rintf(600.f * UIConfiguration::instance().get_ui_scale()));
+
+	to_be_inserted_vbox->set_size_request (min_width, -1);
 
 	Gtk::Table* table = manage(new Gtk::Table(3, 3));
-	table->set_size_request(-1, 600);
+	table->set_size_request(-1, min_height);
+
 	table->attach (scroller,               0, 3, 0, 5); /* this is the main plugin list */
 	table->attach (*search_frame,          0, 1, 6, 7, FILL, FILL, 5, 5);
 	table->attach (*tag_frame,             0, 1, 7, 8, FILL, FILL, 5, 5);
@@ -360,25 +361,24 @@ PluginSelector::show_this_plugin (const PluginInfoPtr& info, const std::string& 
 {
 	string mode;
 	bool maybe_show = false;
+	PluginManager::PluginStatusType status = manager.get_status (info);
+
+	if (info->is_internal ()) {
+		return false;
+	}
 
 	if (!searchstr.empty()) {
 
-		std::string compstr;
-
 		if (_search_name_checkbox->get_active()) { /* name contains */
-			compstr = info->name;
-			transform (compstr.begin(), compstr.end(), compstr.begin(), ::toupper);
-			if (compstr.find (searchstr) != string::npos) {
-				maybe_show = true;
-			}
+			std::string compstr = info->name;
+			setup_search_string (compstr);
+			maybe_show |= match_search_strings (compstr, searchstr);
 		}
 
 		if (_search_tags_checkbox->get_active()) { /* tag contains */
-			compstr = manager.get_tags_as_string (info);
-			transform (compstr.begin(), compstr.end(), compstr.begin(), ::toupper);
-			if (compstr.find (searchstr) != string::npos) {
-				maybe_show = true;
-			}
+			std::string compstr = manager.get_tags_as_string (info);
+			setup_search_string (compstr);
+			maybe_show |= match_search_strings (compstr, searchstr);
 		}
 
 		if (!maybe_show) {
@@ -387,7 +387,10 @@ PluginSelector::show_this_plugin (const PluginInfoPtr& info, const std::string& 
 
 		/* user asked to ignore filters */
 		if (maybe_show && _search_ignore_checkbox->get_active()) {
-			if (manager.get_status (info) == PluginManager::Hidden) {
+			if (status == PluginManager::Hidden) {
+				return false;
+			}
+			if (status == PluginManager::Concealed) {
 				return false;
 			}
 			return true;
@@ -406,15 +409,19 @@ PluginSelector::show_this_plugin (const PluginInfoPtr& info, const std::string& 
 		return false;
 	}
 
-	if (_fil_favorites_radio->get_active() && !(manager.get_status (info) == PluginManager::Favorite)) {
+	if (_fil_favorites_radio->get_active() && status != PluginManager::Favorite) {
 		return false;
 	}
 
-	if (_fil_hidden_radio->get_active() && !(manager.get_status (info) == PluginManager::Hidden)) {
+	if (_fil_hidden_radio->get_active() && (status != PluginManager::Hidden && status != PluginManager::Concealed)) {
 		return false;
 	}
 
-	if (!_fil_hidden_radio->get_active() && manager.get_status (info) == PluginManager::Hidden) {
+	if (!_fil_hidden_radio->get_active() && status == PluginManager::Hidden) {
+		return false;
+	}
+
+	if (!_fil_hidden_radio->get_active() && status == PluginManager::Concealed) {
 		return false;
 	}
 
@@ -428,11 +435,13 @@ PluginSelector::show_this_plugin (const PluginInfoPtr& info, const std::string& 
 		return false;
 	}
 
-#ifdef LV2_SUPPORT
+	if (_fil_type_combo.get_text() == X_("VST3") && info->type != VST3) {
+		return false;
+	}
+
 	if (_fil_type_combo.get_text() == X_("LV2") && info->type != LV2) {
 		return false;
 	}
-#endif
 
 	if (_fil_type_combo.get_text() == X_("Lua") && info->type != Lua) {
 		return false;
@@ -450,50 +459,7 @@ PluginSelector::show_this_plugin (const PluginInfoPtr& info, const std::string& 
 		}
 	}
 
-	/* Filter "I/O" combobox */
-
-	if (_fil_channel_combo.get_text() != _("Show All I/O") || info->reconfigurable_io ()) {
-
-#if 0
-		if (info->reconfigurable_io ()) {
-			return true; // who knows.... ?
-		}
-#endif
-
-		if (_fil_channel_combo.get_text() == _("Audio I/O")) {
-			if ((info->n_inputs.n_audio() == 0 || info->n_outputs.n_audio() == 0)) {
-				return false;
-			}
-		}
-
-		if (_fil_channel_combo.get_text() == _("Mono Audio I/O")) {
-			if (info->n_inputs.n_audio() != 1 || info->n_outputs.n_audio() != 1) {
-				return false;
-			}
-		}
-
-		if (_fil_channel_combo.get_text() == _("Stereo Audio I/O")) {
-			if (info->n_inputs.n_audio() != 2 || info->n_outputs.n_audio() != 2) {
-				return false;
-			}
-		}
-
-		if (_fil_channel_combo.get_text() == _("MIDI I/O (only)")) {
-			if ((info->n_inputs.n_audio() != 0 || info->n_outputs.n_audio() == 0)) {
-				return false;
-			}
-		}
-
-	}
-
 	return true;
-}
-
-void
-PluginSelector::setup_search_string (string& searchstr)
-{
-	searchstr = search_entry.get_text ();
-	transform (searchstr.begin(), searchstr.end(), searchstr.begin(), ::toupper);
 }
 
 void
@@ -509,7 +475,6 @@ PluginSelector::set_sensitive_widgets ()
 		_inhibit_refill = true;
 		_fil_type_combo.set_sensitive(false);
 		_fil_creator_combo.set_sensitive(false);
-		_fil_channel_combo.set_sensitive(false);
 		_inhibit_refill = false;
 	} else {
 		_fil_effects_radio->set_sensitive(true);
@@ -521,7 +486,6 @@ PluginSelector::set_sensitive_widgets ()
 		_inhibit_refill = true;
 		_fil_type_combo.set_sensitive(true);
 		_fil_creator_combo.set_sensitive(true);
-		_fil_channel_combo.set_sensitive(true);
 		_inhibit_refill = false;
 	}
 	if (!search_entry.get_text().empty()) {
@@ -536,8 +500,6 @@ PluginSelector::refill ()
 		return;
 	}
 
-	std::string searchstr;
-
 	in_row_change = true;
 
 	plugin_display.set_model (Glib::RefPtr<Gtk::TreeStore>(0));
@@ -551,6 +513,7 @@ PluginSelector::refill ()
 
 	plugin_model->clear ();
 
+	std::string searchstr = search_entry.get_text ();
 	setup_search_string (searchstr);
 
 	ladspa_refiller (searchstr);
@@ -560,6 +523,7 @@ PluginSelector::refill ()
 	mac_vst_refiller (searchstr);
 	au_refiller (searchstr);
 	lua_refiller (searchstr);
+	vst3_refiller (searchstr);
 
 	in_row_change = false;
 
@@ -579,8 +543,9 @@ PluginSelector::refiller (const PluginInfoList& plugs, const::std::string& searc
 		if (show_this_plugin (*i, searchstr)) {
 
 			TreeModel::Row newrow = *(plugin_model->append());
-			newrow[plugin_columns.favorite] = (manager.get_status (*i) == PluginManager::Favorite);
-			newrow[plugin_columns.hidden] = (manager.get_status (*i) == PluginManager::Hidden);
+
+			PluginManager::PluginStatusType status = manager.get_status (*i);
+			newrow[plugin_columns.favorite] = status == PluginManager::Favorite;
 
 			string name = (*i)->name;
 			if (name.length() > 48) {
@@ -656,17 +621,11 @@ PluginSelector::lua_refiller (const std::string& searchstr)
 void
 PluginSelector::lv2_refiller (const std::string& searchstr)
 {
-#ifdef LV2_SUPPORT
 	refiller (manager.lv2_plugin_info(), searchstr, "LV2");
-#endif
 }
 
 void
-#ifdef WINDOWS_VST_SUPPORT
 PluginSelector::vst_refiller (const std::string& searchstr)
-#else
-PluginSelector::vst_refiller (const std::string&)
-#endif
 {
 #ifdef WINDOWS_VST_SUPPORT
 	refiller (manager.windows_vst_plugin_info(), searchstr, "VST");
@@ -674,11 +633,7 @@ PluginSelector::vst_refiller (const std::string&)
 }
 
 void
-#ifdef LXVST_SUPPORT
 PluginSelector::lxvst_refiller (const std::string& searchstr)
-#else
-PluginSelector::lxvst_refiller (const std::string&)
-#endif
 {
 #ifdef LXVST_SUPPORT
 	refiller (manager.lxvst_plugin_info(), searchstr, "LXVST");
@@ -686,11 +641,7 @@ PluginSelector::lxvst_refiller (const std::string&)
 }
 
 void
-#ifdef MACVST_SUPPORT
 PluginSelector::mac_vst_refiller (const std::string& searchstr)
-#else
-PluginSelector::mac_vst_refiller (const std::string&)
-#endif
 {
 #ifdef MACVST_SUPPORT
 	refiller (manager.mac_vst_plugin_info(), searchstr, "MacVST");
@@ -698,11 +649,15 @@ PluginSelector::mac_vst_refiller (const std::string&)
 }
 
 void
-#ifdef AUDIOUNIT_SUPPORT
-PluginSelector::au_refiller (const std::string& searchstr)
-#else
-PluginSelector::au_refiller (const std::string&)
+PluginSelector::vst3_refiller (const std::string& searchstr)
+{
+#ifdef VST3_SUPPORT
+	refiller (manager.vst3_plugin_info(), searchstr, "VST3");
 #endif
+}
+
+void
+PluginSelector::au_refiller (const std::string& searchstr)
 {
 #ifdef AUDIOUNIT_SUPPORT
 	refiller (manager.au_plugin_info(), searchstr, "AU");
@@ -838,9 +793,8 @@ PluginSelector::run ()
 	if (_need_status_save) {
 		manager.save_statuses();
 	}
-
-	if ( _need_tag_save || _need_status_save || _need_menu_rebuild ) {
-		manager.PluginListChanged();  //emit signal
+	if (_need_menu_rebuild) {
+		build_plugin_menu ();
 	}
 
 	return (int) r;
@@ -861,7 +815,6 @@ PluginSelector::tag_reset_button_clicked ()
 		manager.reset_tags (pi);
 		display_selection_changed ();
 		_need_tag_save = true;
-		_need_menu_rebuild = true;
 	}
 }
 
@@ -884,7 +837,6 @@ PluginSelector::tag_entry_changed ()
 		manager.set_tags (pi->type, pi->unique_id, tag_entry->get_text(), pi->name, PluginManager::FromGui);
 
 		_need_tag_save = true;
-		_need_menu_rebuild = true;
 	}
 }
 
@@ -909,10 +861,9 @@ PluginSelector::plugin_status_changed (PluginType t, std::string uid, PluginMana
 		PluginInfoPtr pp = (*i)[plugin_columns.plugin];
 		if ((pp->type == t) && (pp->unique_id == uid)) {
 			(*i)[plugin_columns.favorite] = (stat == PluginManager::Favorite) ? true : false;
-			(*i)[plugin_columns.hidden] = (stat == PluginManager::Hidden) ? true : false;
 
 			/* if plug was hidden, remove it from the view */
-			if (stat == PluginManager::Hidden) {
+			if (stat == PluginManager::Hidden || stat == PluginManager::Concealed) {
 				if (!_fil_hidden_radio->get_active() && !_fil_all_radio->get_active()) {
 					plugin_model->erase(i);
 				}
@@ -939,7 +890,6 @@ PluginSelector::on_show ()
 
 	_need_tag_save = false;
 	_need_status_save = false;
-	_need_menu_rebuild = false;
 }
 
 struct PluginMenuCompareByCreator {
@@ -960,24 +910,6 @@ struct PluginMenuCompareByCreator {
 	}
 };
 
-struct PluginMenuCompareByName {
-	bool operator() (PluginInfoPtr a, PluginInfoPtr b) const {
-		int cmp;
-
-		cmp = cmp_nocase_utf8 (a->name, b->name);
-
-		if (cmp < 0) {
-			return true;
-		} else if (cmp == 0) {
-			/* same name ... compare type */
-			if (a->type < b->type) {
-				return true;
-			}
-		}
-		return false;
-	}
-};
-
 /** @return Plugin menu. The caller should not delete it */
 Gtk::Menu*
 PluginSelector::plugin_menu()
@@ -988,10 +920,16 @@ PluginSelector::plugin_menu()
 void
 PluginSelector::build_plugin_menu ()
 {
+	if (get_visible ()) {
+		_need_menu_rebuild = true;
+		return;
+	}
+	_need_menu_rebuild = false;
 	PluginInfoList all_plugs;
 
 	all_plugs.insert (all_plugs.end(), manager.ladspa_plugin_info().begin(), manager.ladspa_plugin_info().end());
 	all_plugs.insert (all_plugs.end(), manager.lua_plugin_info().begin(), manager.lua_plugin_info().end());
+	all_plugs.insert (all_plugs.end(), manager.lv2_plugin_info().begin(), manager.lv2_plugin_info().end());
 #ifdef WINDOWS_VST_SUPPORT
 	all_plugs.insert (all_plugs.end(), manager.windows_vst_plugin_info().begin(), manager.windows_vst_plugin_info().end());
 #endif
@@ -1001,18 +939,18 @@ PluginSelector::build_plugin_menu ()
 #ifdef MACVST_SUPPORT
 	all_plugs.insert (all_plugs.end(), manager.mac_vst_plugin_info().begin(), manager.mac_vst_plugin_info().end());
 #endif
+#ifdef VST3_SUPPORT
+	all_plugs.insert (all_plugs.end(), manager.vst3_plugin_info().begin(), manager.vst3_plugin_info().end());
+#endif
 #ifdef AUDIOUNIT_SUPPORT
 	all_plugs.insert (all_plugs.end(), manager.au_plugin_info().begin(), manager.au_plugin_info().end());
-#endif
-#ifdef LV2_SUPPORT
-	all_plugs.insert (all_plugs.end(), manager.lv2_plugin_info().begin(), manager.lv2_plugin_info().end());
 #endif
 
 	using namespace Menu_Helpers;
 
 	delete _plugin_menu;
 
-	_plugin_menu = manage (new Menu);
+	_plugin_menu = new Menu;
 	_plugin_menu->set_name("ArdourContextMenu");
 
 	MenuList& items = _plugin_menu->items();
@@ -1021,8 +959,11 @@ PluginSelector::build_plugin_menu ()
 	Gtk::Menu* favs = create_favs_menu(all_plugs);
 	items.push_back (MenuElem (_("Favorites"), *manage (favs)));
 
-	items.push_back (MenuElem (_("Plugin Manager..."), sigc::mem_fun (*this, &PluginSelector::show_manager)));
+	items.push_back (MenuElem (_("Plugin Selector..."), sigc::mem_fun (*this, &PluginSelector::show_manager)));
 	items.push_back (SeparatorElem ());
+
+	Menu* charts = create_charts_menu(all_plugs);
+	items.push_back (MenuElem (_("By Popularity"), *manage (charts)));
 
 	Menu* by_creator = create_by_creator_menu(all_plugs);
 	items.push_back (MenuElem (_("By Creator"), *manage (by_creator)));
@@ -1034,29 +975,7 @@ PluginSelector::build_plugin_menu ()
 string
 GetPluginTypeStr(PluginInfoPtr info)
 {
-	string type;
-
-	switch (info->type) {
-	case LADSPA:
-		type = X_(" (LADSPA)");
-		break;
-	case AudioUnit:
-		type = X_(" (AU)");
-		break;
-	case LV2:
-		type = X_(" (LV2)");
-		break;
-	case Windows_VST:
-	case LXVST:
-	case MacVST:
-		type = X_(" (VST)");
-		break;
-	case Lua:
-		type = X_(" (Lua)");
-		break;
-	}
-
-	return type;
+	return string_compose (" (%1)", PluginManager::plugin_type_name (info->type, false));
 }
 
 Gtk::Menu*
@@ -1067,7 +986,7 @@ PluginSelector::create_favs_menu (PluginInfoList& all_plugs)
 	Menu* favs = new Menu();
 	favs->set_name("ArdourContextMenu");
 
-	PluginMenuCompareByName cmp_by_name;
+	PluginABCSorter cmp_by_name;
 	all_plugs.sort (cmp_by_name);
 
 	for (PluginInfoList::const_iterator i = all_plugs.begin(); i != all_plugs.end(); ++i) {
@@ -1079,6 +998,39 @@ PluginSelector::create_favs_menu (PluginInfoList& all_plugs)
 		}
 	}
 	return favs;
+}
+
+Gtk::Menu*
+PluginSelector::create_charts_menu (PluginInfoList& all_plugs)
+{
+	using namespace Menu_Helpers;
+
+	Menu* charts = new Menu();
+	charts->set_name("ArdourContextMenu");
+
+	PluginInfoList plugs;
+
+	for (PluginInfoList::const_iterator i = all_plugs.begin(); i != all_plugs.end(); ++i) {
+		int64_t lru;
+		uint64_t use_count;
+		if (manager.stats (*i, lru, use_count)) {
+			plugs.push_back (*i);
+		}
+	}
+	PluginChartsSorter cmp;
+	plugs.sort (cmp);
+	plugs.resize (std::min (plugs.size(), size_t(UIConfiguration::instance().get_max_plugin_chart())));
+
+	PluginABCSorter abc;
+	plugs.sort (abc);
+
+	for (PluginInfoList::const_iterator i = plugs.begin(); i != plugs.end(); ++i) {
+		string typ = GetPluginTypeStr(*i);
+		MenuElem elem ((*i)->name + typ, (sigc::bind (sigc::mem_fun (*this, &PluginSelector::plugin_chosen_from_menu), *i)));
+		elem.get_child()->set_use_underline (false);
+		charts->items().push_back (elem);
+	}
+	return charts;
 }
 
 Gtk::Menu*
@@ -1104,7 +1056,10 @@ PluginSelector::create_by_creator_menu (ARDOUR::PluginInfoList& all_plugs)
 
 	for (PluginInfoList::const_iterator i = all_plugs.begin(); i != all_plugs.end(); ++i) {
 
-		if (manager.get_status (*i) == PluginManager::Hidden) continue;
+		PluginManager::PluginStatusType status = manager.get_status (*i);
+		if (status == PluginManager::Hidden) continue;
+		if (status == PluginManager::Concealed) continue;
+		if ((*i)->is_internal ()) continue;
 
 		string creator = (*i)->creator;
 
@@ -1157,12 +1112,15 @@ PluginSelector::create_by_tags_menu (ARDOUR::PluginInfoList& all_plugs)
 		submenu->set_name("ArdourContextMenu");
 	}
 
-	PluginMenuCompareByName cmp_by_name;
+	PluginABCSorter cmp_by_name;
 	all_plugs.sort (cmp_by_name);
 
 	for (PluginInfoList::const_iterator i = all_plugs.begin(); i != all_plugs.end(); ++i) {
 
-		if (manager.get_status (*i) == PluginManager::Hidden) continue;
+		PluginManager::PluginStatusType status = manager.get_status (*i);
+		if (status == PluginManager::Hidden) continue;
+		if (status == PluginManager::Concealed) continue;
+		if ((*i)->is_internal ()) continue;
 
 		/* for each tag in the plugins tag list, add it to that submenu */
 		vector<string> tokens = manager.get_tags(*i);
@@ -1223,40 +1181,6 @@ PluginSelector::favorite_changed (const std::string& path)
 		manager.set_status (pi->type, pi->unique_id, status);
 
 		_need_status_save = true;
-		_need_menu_rebuild = true;
-	}
-	in_row_change = false;
-}
-
-void
-PluginSelector::hidden_changed (const std::string& path)
-{
-	PluginInfoPtr pi;
-
-	if (in_row_change) {
-		return;
-	}
-
-	in_row_change = true;
-
-	TreeModel::iterator iter = plugin_model->get_iter (path);
-
-	if (iter) {
-
-		bool hidden = !(*iter)[plugin_columns.hidden];
-
-		/* change state */
-
-		PluginManager::PluginStatusType status = (hidden ? PluginManager::Hidden : PluginManager::Normal);
-
-		/* save new statuses list */
-
-		pi = (*iter)[plugin_columns.plugin];
-
-		manager.set_status (pi->type, pi->unique_id, status);
-
-		_need_status_save = true;
-		_need_menu_rebuild = true;
 	}
 	in_row_change = false;
 }
@@ -1264,6 +1188,43 @@ PluginSelector::hidden_changed (const std::string& path)
 void
 PluginSelector::show_manager ()
 {
+	bool scan_now = false;
+	if (!manager.cache_valid ()) {
+		ArdourMessageDialog q (
+#ifdef __APPLE__
+				_("Scan VST2/3 and AudioUnit plugins now?")
+#else
+				_("Scan VST2/3 Plugins now?")
+#endif
+				, false, MESSAGE_QUESTION, BUTTONS_YES_NO);
+
+		q.set_title (string_compose (_("Discover %1 Plugins?"),
+#ifdef __APPLE__
+					_("VST/AU")
+#else
+					_("VST")
+#endif
+					));
+
+		q.set_secondary_text (string_compose (_("Third party plugins have not yet been indexed. %1 plugins have to be scanned before they can be used. This can also be done manually from Window > Plugin Manager. Depending on the number of installed plugins the process can take several minutes."),
+#ifdef __APPLE__
+					_("AudioUnit and VST")
+#else
+					_("VST")
+#endif
+					));
+
+		if (q.run () == RESPONSE_YES) {
+			scan_now = true;
+		}
+	}
+
+	if (scan_now) {
+		PluginScanDialog psd (false, true);
+		psd.start ();
+		ARDOUR_UI::instance()->show_plugin_manager ();
+	}
+
 	show_all();
 	run ();
 }

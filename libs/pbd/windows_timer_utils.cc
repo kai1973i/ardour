@@ -11,9 +11,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "pbd/windows_timer_utils.h"
@@ -110,82 +110,5 @@ reset_resolution ()
 }
 
 } // namespace MMTIMERS
-
-namespace {
-
-static double timer_rate_us = 0.0;
-
-static
-bool
-test_qpc_validity ()
-{
-	int64_t last_timer_val = PBD::QPC::get_microseconds ();
-	if (last_timer_val < 0) return false;
-
-	for (int i = 0; i < 100000; ++i) {
-		int64_t timer_val = PBD::QPC::get_microseconds ();
-		if (timer_val < 0) return false;
-		// try and test for non-syncronized TSC(AMD K8/etc)
-		if (timer_val < last_timer_val) return false;
-		last_timer_val = timer_val;
-	}
-	return true;
-}
-
-} // anon namespace
-
-namespace QPC {
-
-bool
-check_timer_valid ()
-{
-	if (!timer_rate_us) {
-		return false;
-	}
-	return test_qpc_validity ();
-}
-
-bool
-initialize ()
-{
-	LARGE_INTEGER freq;
-	if (!QueryPerformanceFrequency(&freq) || freq.QuadPart < 1) {
-		info << X_("Failed to determine frequency of QPC\n") << endmsg;
-		timer_rate_us = 0;
-	} else {
-		timer_rate_us = 1000000.0 / freq.QuadPart;
-	}
-	info << string_compose(X_("QPC timer microseconds per tick: %1\n"),
-	                       timer_rate_us) << endmsg;
-	return !timer_rate_us;
-}
-
-int64_t
-get_microseconds ()
-{
-	LARGE_INTEGER current_val;
-
-	if (timer_rate_us) {
-		// MS docs say this will always succeed for systems >= XP but it may
-		// not return a monotonic value with non-invariant TSC's etc
-		if (QueryPerformanceCounter(&current_val) != 0) {
-			return (int64_t)(current_val.QuadPart * timer_rate_us);
-		}
-	}
-	DEBUG_TIMING ("Could not get QPC timer\n");
-	return -1;
-}
-
-} // namespace QPC
-
-int64_t
-get_microseconds ()
-{
-	if (timer_rate_us) {
-		return QPC::get_microseconds ();
-	}
-	// For XP systems that don't support a high-res performance counter
-	return g_get_monotonic_time ();
-}
 
 } // namespace PBD

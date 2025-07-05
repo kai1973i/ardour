@@ -1,9 +1,9 @@
 #include <fstream>
 
 #include <glibmm.h>
-#include <gtkmm/main.h>
-#include <gtkmm/box.h>
-#include <gtkmm/window.h>
+#include <ytkmm/main.h>
+#include <ytkmm/box.h>
+#include <ytkmm/window.h>
 
 #include "pbd/debug.h"
 #include "pbd/enumwriter.h"
@@ -66,14 +66,17 @@ LogReceiver::receive (Transmitter::Channel chn, const char * str)
 	const char *prefix = "";
 
 	switch (chn) {
-	case Transmitter::Error:
-		prefix = "[ERROR]: ";
-		break;
+	case Transmitter::Debug:
+		/* ignore */
+		return;
 	case Transmitter::Info:
 		prefix = "[INFO]: ";
 		break;
 	case Transmitter::Warning:
 		prefix = "[WARNING]: ";
+		break;
+	case Transmitter::Error:
+		prefix = "[ERROR]: ";
 		break;
 	case Transmitter::Fatal:
 		prefix = "[FATAL]: ";
@@ -150,7 +153,7 @@ CANVAS_UI::CANVAS_UI (int *argcp, char **argvp[], const char* localedir)
 
 	Gtkmm2ext::WindowTitle title ("Canvas Toolbar Test");
 	_main_window.set_title (title.get_string());
-	_main_window.set_flags (CAN_FOCUS);
+	_main_window.set_can_focus ();
 	_main_window.signal_delete_event().connect (sigc::mem_fun (*this, &CANVAS_UI::main_window_delete_event));
 
 	canvas = new ArdourCanvas::GtkCanvas ();
@@ -264,7 +267,7 @@ int main (int argc, char **argv)
 	// TODO setlocale..
 #endif
 
-	if (!ARDOUR::init (false, true, localedir)) {
+	if (!ARDOUR::init (true, localedir)) {
 		cerr << "Ardour failed to initialize\n" << endl;
 		::exit (EXIT_FAILURE);
 	}
@@ -275,10 +278,10 @@ int main (int argc, char **argv)
 
 	pthread_setcanceltype (PTHREAD_CANCEL_ASYNCHRONOUS, 0);
 
-	log_receiver.listen_to (error);
 	log_receiver.listen_to (info);
-	log_receiver.listen_to (fatal);
 	log_receiver.listen_to (warning);
+	log_receiver.listen_to (error);
+	log_receiver.listen_to (fatal);
 
 	setup_gtk_ardour_enums ();
 

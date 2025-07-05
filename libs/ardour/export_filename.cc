@@ -1,22 +1,25 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2013 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2012-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2014 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2015-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <string>
 
@@ -80,7 +83,7 @@ ExportFilename::ExportFilename (Session & session) :
 }
 
 XMLNode &
-ExportFilename::get_state ()
+ExportFilename::get_state () const
 {
 	XMLNode * node = new XMLNode ("ExportFilename");
 	XMLNode * child;
@@ -125,13 +128,14 @@ ExportFilename::set_state (const XMLNode & node)
 	if (child->get_property ("path", tmp)) {
 		tmp = Glib::build_filename (folder, tmp);
 		if (!Glib::file_test (tmp, Glib::FILE_TEST_EXISTS)) {
-			warning << string_compose (_("Existing export folder for this session (%1) does not exist - ignored"), tmp) << endmsg;
-		} else {
+			warning << string_compose (_("Existing export folder for this session (%1) does not exist - using default"), tmp) << endmsg;
+			folder = session.session_directory().export_path();
+	} else {
 			folder = tmp;
 		}
 	}
 
-	if (folder.empty()) {
+	if (folder.empty() || !Glib::file_test (folder, FileTest (FILE_TEST_EXISTS | G_FILE_TEST_IS_DIR))) {
 		folder = session.session_directory().export_path();
 	}
 
@@ -184,9 +188,9 @@ ExportFilename::get_path (ExportFormatSpecPtr format) const
 			&& !include_revision
 			&& !include_timespan
 			&& !include_channel_config
+			&& !include_format_name
 			&& !include_channel
-			&& !include_date
-			&& !include_format_name) {
+			&& !include_date) {
 		with_timespan = true;
 	}
 
@@ -244,7 +248,7 @@ ExportFilename::get_path (ExportFormatSpecPtr format) const
 		filename_empty = false;
 	}
 
-	if (include_format_name) {
+	if (include_format_name && format) {
 		path += filename_empty ? "" : "_";
 		path += format->name();
 		filename_empty = false;
@@ -254,10 +258,29 @@ ExportFilename::get_path (ExportFormatSpecPtr format) const
 		path = "export";
 	}
 
-	path += ".";
-	path += format->extension ();
+	if (format) {
+		path += ".";
+		if (channel_config && channel_config->get_channels().size () == 1 && channel_config->get_channels().front()->midi ()) {
+			path += "mid";
+		} else {
+			path += format->extension ();
+		}
+	}
 
 	path = legalize_for_universal_path (path);
+
+#if 0
+	std::cout << "ExportFilename::get_path"
+		<< " SN: " << include_session
+		<< " LB: " << include_label
+		<< " RV: " << include_revision
+		<< " TS: " << include_timespan
+		<< " CC: " << include_channel_config
+		<< " FN: " << include_format_name
+		<< " CN: " << include_channel
+		<< " DT: " << include_date
+		<< " '" << path << "'\n";
+#endif
 
 	return Glib::build_filename (folder, path);
 }
@@ -393,7 +416,7 @@ ExportFilename::get_field (XMLNode const & node, string const & name)
 }
 
 ExportFilename::FieldPair
-ExportFilename::analyse_folder ()
+ExportFilename::analyse_folder () const
 {
 	FieldPair pair;
 
@@ -404,7 +427,8 @@ ExportFilename::analyse_folder ()
 
 	if (!folder_beginning.compare (session_dir)) {
 		pair.first = true;
-		pair.second = folder.substr (session_dir_len);
+		// remove the leading slash if needed. 
+		pair.second = folder.substr (folder.length() > session_dir_len ? session_dir_len+1 : session_dir_len);
 	} else {
 		pair.first = false;
 		pair.second = folder;

@@ -1,21 +1,30 @@
 /*
-    Copyright (C) 1999 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013-2017 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2015 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2015 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2016-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstdio> // for sprintf
 #include <cmath>
@@ -23,7 +32,7 @@
 #include "pbd/convert.h"
 #include "pbd/enumwriter.h"
 
-#include <gtkmm/style.h>
+#include <ytkmm/style.h>
 #include <sigc++/bind.h>
 
 #include "gtkmm2ext/utils.h"
@@ -34,8 +43,9 @@
 #include "ardour/profile.h"
 #include "ardour/lmath.h"
 #include "ardour/session.h"
-#include "ardour/slave.h"
+#include "ardour/transport_master.h"
 #include "ardour/tempo.h"
+#include "ardour/transport_master_manager.h"
 #include "ardour/types.h"
 
 #include "ardour_ui.h"
@@ -54,10 +64,10 @@ using namespace ArdourWidgets;
 using namespace PBD;
 using namespace Gtk;
 using namespace std;
+using namespace Temporal;
 
 using Gtkmm2ext::Keyboard;
 
-sigc::signal<void> AudioClock::ModeChanged;
 vector<AudioClock*> AudioClock::clocks;
 
 #define BBT_BAR_CHAR "|"
@@ -68,17 +78,14 @@ AudioClock::AudioClock (const string& clock_name, bool transient, const string& 
 			bool accept_on_focus_out)
 	: ops_menu (0)
 	, _name (clock_name)
-	, is_transient (transient)
 	, is_duration (duration)
 	, editable (allow_edit)
 	, _follows_playhead (follows_playhead)
 	, _accept_on_focus_out (accept_on_focus_out)
 	, _off (false)
-	, em_width (0)
-	, _edit_by_click_field (false)
 	, _negative_allowed (false)
 	, edit_is_negative (false)
-	, _limit_pos (INT64_MAX - 1)
+	, _limit_pos (timepos_t::max (Temporal::AudioTime))
 	, _with_info (with_info)
 	, editing_attr (0)
 	, foreground_attr (0)
@@ -90,16 +97,15 @@ AudioClock::AudioClock (const string& clock_name, bool transient, const string& 
 	, corner_radius (4)
 	, font_size (10240)
 	, editing (false)
-	, bbt_reference_time (-1)
-	, last_when(0)
-	, last_pdelta (0)
-	, last_sdelta (0)
 	, dragging (false)
 	, drag_field (Field (0))
 	, xscale (1.0)
 	, yscale (1.0)
+	, _hovering (false)
 {
-	set_flags (CAN_FOCUS);
+	if (editable) {
+		set_can_focus ();
+	}
 
 	_layout = Pango::Layout::create (get_pango_context());
 	_layout->set_attributes (normal_attributes);
@@ -108,24 +114,29 @@ AudioClock::AudioClock (const string& clock_name, bool transient, const string& 
 
 	_mode = BBT; /* lie to force mode switch */
 	set_mode (Timecode);
-	AudioClock::set (last_when, true);
 
-	if (!is_transient) {
+	if (!transient) {
 		clocks.push_back (this);
 	}
 
-	_left_btn.set_sizing_text (_("0000000000000"));
-	// NB right_btn is in a size-group
+	_left_btn.set_name ("transport option button");
+	_right_btn.set_name ("transport option button");
 
-	_left_btn.set_layout_font (UIConfiguration::instance().get_SmallFont());
-	_right_btn.set_layout_font (UIConfiguration::instance().get_SmallFont());
+	_left_btn.set_sizing_text (_("0000000000000"));
+	_right_btn.set_sizing_text (_("0000000000000"));
+
+	_left_btn.set_layout_font (UIConfiguration::instance().get_ArdourSmallFont());
+	_right_btn.set_layout_font (UIConfiguration::instance().get_ArdourSmallFont());
 
 	UIConfiguration::instance().ColorsChanged.connect (sigc::mem_fun (*this, &AudioClock::set_colors));
 	UIConfiguration::instance().DPIReset.connect (sigc::mem_fun (*this, &AudioClock::dpi_reset));
+
+	TempoMap::MapChanged.connect (tempo_map_connection, invalidator (*this), std::bind (&AudioClock::tempo_map_changed, this), gui_context());
 }
 
 AudioClock::~AudioClock ()
 {
+	delete ops_menu;
 	delete foreground_attr;
 	delete editing_attr;
 }
@@ -139,7 +150,7 @@ AudioClock::set_widget_name (const string& str)
 		set_name (str + " clock");
 	}
 
-	if (is_realized()) {
+	if (get_realized()) {
 		set_colors ();
 	}
 }
@@ -157,37 +168,7 @@ AudioClock::on_realize ()
 	first_width = req.width;
 	first_height = req.height;
 
-	// XXX FIX ME: define font based on ... ???
-	// set_font ();
 	set_colors ();
-}
-
-void
-AudioClock::set_font (Pango::FontDescription font)
-{
-	Glib::RefPtr<Gtk::Style> style = get_style ();
-	Pango::AttrFontDesc* font_attr;
-
-	font_size = font.get_size();
-	font_attr = new Pango::AttrFontDesc (Pango::Attribute::create_attr_font_desc (font));
-
-	normal_attributes.change (*font_attr);
-	editing_attributes.change (*font_attr);
-	delete font_attr;
-
-	/* get the figure width for the font. This doesn't have to super
-	 * accurate since we only use it to measure the (roughly 1 character)
-	 * offset from the position Pango tells us for the "cursor"
-	 */
-
-	Glib::RefPtr<Pango::Layout> tmp = Pango::Layout::create (get_pango_context());
-	int ignore_height;
-
-	tmp->set_text ("8");
-	tmp->get_pixel_size (em_width, ignore_height);
-
-	/* force redraw of markup with new font-size */
-	AudioClock::set (last_when, true);
 }
 
 void
@@ -321,15 +302,15 @@ AudioClock::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_t*
 					/* nothing entered yet, put cursor at the end
 					   of string
 					*/
-					cursor = _layout->get_cursor_strong_pos (edit_string.length() - 1);
+					cursor = _layout->get_cursor_strong_pos (edit_string.length());
 				} else {
-					cursor = _layout->get_cursor_strong_pos (insert_map[input_string.length()]);
+					cursor = _layout->get_cursor_strong_pos (1 + insert_map[input_string.length()]);
 				}
 
 				cairo_set_source_rgba (cr, cursor_r, cursor_g, cursor_b, cursor_a);
 				cairo_rectangle (cr,
 				                 min (get_width() - 2.0,
-				                 (double) xcenter + cursor.get_x()/PANGO_SCALE + em_width),
+				                   (double) xcenter + cursor.get_x()/PANGO_SCALE),
 				                 (get_height() - layout_height)/2.0,
 				                 2.0, cursor.get_height()/PANGO_SCALE);
 				cairo_fill (cr);
@@ -348,6 +329,16 @@ AudioClock::render (Cairo::RefPtr<Cairo::Context> const& ctx, cairo_rectangle_t*
 			}
 		}
 	}
+
+	if (UIConfigurationBase::instance().get_widget_prelight() && (_hovering || editing)) {
+		if (corner_radius) {
+			Gtkmm2ext::rounded_rectangle (cr, 0, 0, get_width(), get_height(), corner_radius);
+		} else {
+			cairo_rectangle (cr, 0, 0, get_width(), get_height());
+		}
+		cairo_set_source_rgba (cr, 0.905, 0.917, 0.925, 0.12);
+		cairo_fill (cr);
+	}
 }
 
 void
@@ -359,7 +350,7 @@ AudioClock::set_clock_dimensions (Gtk::Requisition& req)
 
 	tmp = Pango::Layout::create (get_pango_context());
 
-	if (!is_realized()) {
+	if (!get_realized()) {
 		font = get_font_for_style (get_name());
 	} else {
 		font = style->get_font();
@@ -509,7 +500,7 @@ AudioClock::end_edit (bool modify)
 			break;
 
 		case Seconds:
-			// no break
+			/* fallthrough */
 		case Samples:
 			if (edit_string.length() < 1) {
 				edit_string = pre_edit_string;
@@ -526,35 +517,40 @@ AudioClock::end_edit (bool modify)
 		} else {
 
 			editing = false;
-			samplepos_t pos = 0; /* stupid gcc */
+			samplepos_t samples = 0; /* stupid gcc */
 
 			switch (_mode) {
 			case Timecode:
-				pos = samples_from_timecode_string (edit_string);
+				samples = samples_from_timecode_string (edit_string);
 				break;
 
 			case BBT:
 				if (is_duration) {
-					pos = sample_duration_from_bbt_string (bbt_reference_time, edit_string);
+					samples = sample_duration_from_bbt_string (last_when(), edit_string);
 				} else {
-					pos = samples_from_bbt_string (0, edit_string);
+					samples = samples_from_bbt_string (timepos_t(), edit_string);
 				}
 				break;
 
 			case MinSec:
-				pos = samples_from_minsec_string (edit_string);
+				samples = samples_from_minsec_string (edit_string);
 				break;
 
 			case Seconds:
-				pos = samples_from_seconds_string (edit_string);
+				samples = samples_from_seconds_string (edit_string);
 				break;
 
 			case Samples:
-				pos = samples_from_audiosamples_string (edit_string);
+				samples = samples_from_audiosamples_string (edit_string);
 				break;
 			}
 
-			AudioClock::set (pos, true);
+			if (is_duration) {
+				AudioClock::set_duration (timecnt_t (samples), true);
+			} else {
+				AudioClock::set (timepos_t (samples), true);
+			}
+
 			_layout->set_attributes (normal_attributes);
 			ValueChanged(); /* EMIT_SIGNAL */
 		}
@@ -585,31 +581,32 @@ AudioClock::drop_focus ()
 	}
 }
 
-samplecnt_t
+timecnt_t
 AudioClock::parse_as_seconds_distance (const std::string& str)
 {
 	float f;
 
 	if (sscanf (str.c_str(), "%f", &f) == 1) {
-		return f * _session->sample_rate();
+		return timecnt_t (f * _session->sample_rate());
+
 	}
 
-	return 0;
+	return timecnt_t (samplecnt_t (0));
 }
 
-samplecnt_t
+timecnt_t
 AudioClock::parse_as_samples_distance (const std::string& str)
 {
-	samplecnt_t f;
+	samplecnt_t samples = 0;
 
-	if (sscanf (str.c_str(), "%" PRId64, &f) == 1) {
-		return f;
+	if (sscanf (str.c_str(), "%" PRId64, &samples) == 1) {
+		return timecnt_t (samples);
 	}
 
-	return 0;
+	return timecnt_t (samples);
 }
 
-samplecnt_t
+timecnt_t
 AudioClock::parse_as_minsec_distance (const std::string& str)
 {
 	samplecnt_t sr = _session->sample_rate();
@@ -617,49 +614,57 @@ AudioClock::parse_as_minsec_distance (const std::string& str)
 	int secs;
 	int mins;
 	int hrs;
+	samplecnt_t samples = 0;
 
 	switch (str.length()) {
 	case 0:
-		return 0;
+		break;
 	case 1:
 	case 2:
 	case 3:
 	case 4:
 		sscanf (str.c_str(), "%" PRId32, &msecs);
-		return msecs * (sr / 1000);
+		samples = msecs * (sr / 1000);
+		break;
 
 	case 5:
 		sscanf (str.c_str(), "%1" PRId32 "%" PRId32, &secs, &msecs);
-		return (secs * sr) + (msecs * (sr/1000));
+		samples = (secs * sr) + (msecs * (sr/1000));
+		break;
 
 	case 6:
 		sscanf (str.c_str(), "%2" PRId32 "%" PRId32, &secs, &msecs);
-		return (secs * sr) + (msecs * (sr/1000));
+		samples = (secs * sr) + (msecs * (sr/1000));
+		break;
 
 	case 7:
 		sscanf (str.c_str(), "%1" PRId32 "%2" PRId32 "%" PRId32, &mins, &secs, &msecs);
-		return (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		samples = (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		break;
 
 	case 8:
 		sscanf (str.c_str(), "%2" PRId32 "%2" PRId32 "%" PRId32, &mins, &secs, &msecs);
-		return (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		samples = (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		break;
 
 	case 9:
 		sscanf (str.c_str(), "%1" PRId32 "%2" PRId32 "%2" PRId32 "%" PRId32, &hrs, &mins, &secs, &msecs);
-		return (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		samples = (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		break;
 
 	case 10:
 		sscanf (str.c_str(), "%1" PRId32 "%2" PRId32 "%2" PRId32 "%" PRId32, &hrs, &mins, &secs, &msecs);
-		return (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		samples = (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + (msecs * (sr/1000));
+		break;
 
 	default:
 		break;
 	}
 
-	return 0;
+	return timecnt_t (samples);
 }
 
-samplecnt_t
+timecnt_t
 AudioClock::parse_as_timecode_distance (const std::string& str)
 {
 	double fps = _session->timecode_frames_per_second();
@@ -668,53 +673,61 @@ AudioClock::parse_as_timecode_distance (const std::string& str)
 	int secs;
 	int mins;
 	int hrs;
+	samplecnt_t ret = 0;
 
 	switch (str.length()) {
 	case 0:
-		return 0;
+		break;
 	case 1:
 	case 2:
 		sscanf (str.c_str(), "%" PRId32, &samples);
-		return llrint ((samples/(float)fps) * sr);
+		ret = llrint ((samples/(float)fps) * sr);
+		break;
 
 	case 3:
 		sscanf (str.c_str(), "%1" PRId32 "%" PRId32, &secs, &samples);
-		return (secs * sr) + llrint ((samples/(float)fps) * sr);
+		ret = (secs * sr) + llrint ((samples/(float)fps) * sr);
+		break;
 
 	case 4:
 		sscanf (str.c_str(), "%2" PRId32 "%" PRId32, &secs, &samples);
-		return (secs * sr) + llrint ((samples/(float)fps) * sr);
+		ret = (secs * sr) + llrint ((samples/(float)fps) * sr);
+		break;
 
 	case 5:
 		sscanf (str.c_str(), "%1" PRId32 "%2" PRId32 "%" PRId32, &mins, &secs, &samples);
-		return (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		ret = (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		break;
 
 	case 6:
 		sscanf (str.c_str(), "%2" PRId32 "%2" PRId32 "%" PRId32, &mins, &secs, &samples);
-		return (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		ret = (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		break;
 
 	case 7:
 		sscanf (str.c_str(), "%1" PRId32 "%2" PRId32 "%2" PRId32 "%" PRId32, &hrs, &mins, &secs, &samples);
-		return (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		ret = (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		break;
 
 	case 8:
 		sscanf (str.c_str(), "%2" PRId32 "%2" PRId32 "%2" PRId32 "%" PRId32, &hrs, &mins, &secs, &samples);
-		return (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		ret = (hrs * 3600 * sr) + (mins * 60 * sr) + (secs * sr) + llrint ((samples/(float)fps) * sr);
+		break;
 
 	default:
 		break;
 	}
 
-	return 0;
+	return timecnt_t (ret);
 }
 
-samplecnt_t
+timecnt_t
 AudioClock::parse_as_bbt_distance (const std::string&)
 {
-	return 0;
+	return timecnt_t ();
 }
 
-samplecnt_t
+timecnt_t
 AudioClock::parse_as_distance (const std::string& instr)
 {
 	switch (_mode) {
@@ -734,7 +747,7 @@ AudioClock::parse_as_distance (const std::string& instr)
 		return parse_as_seconds_distance (instr);
 		break;
 	}
-	return 0;
+	return timecnt_t();
 }
 
 void
@@ -772,23 +785,23 @@ AudioClock::end_edit_relative (bool add)
 		return;
 	}
 
-	samplecnt_t samples = parse_as_distance (input_string);
+	timecnt_t distance = parse_as_distance (input_string);
 
 	editing = false;
 
 	editing = false;
 	_layout->set_attributes (normal_attributes);
 
-	if (samples != 0) {
+	if (!distance.is_zero ()) {
 		if (add) {
-			AudioClock::set (current_time() + samples, true);
+			AudioClock::set (last_when() + timepos_t (distance), true);
 		} else {
-			samplepos_t c = current_time();
+			timepos_t c = last_when();
 
-			if (c > samples || _negative_allowed) {
-				AudioClock::set (c - samples, true);
+			if (c > timepos_t (distance)|| _negative_allowed) {
+				AudioClock::set (c.earlier (distance), true);
 			} else {
-				AudioClock::set (0, true);
+				AudioClock::set (timepos_t(), true);
 			}
 		}
 		ValueChanged (); /* EMIT SIGNAL */
@@ -800,9 +813,13 @@ AudioClock::end_edit_relative (bool add)
 }
 
 void
-AudioClock::session_property_changed (const PropertyChange&)
+AudioClock::tempo_map_changed ()
 {
-	AudioClock::set (last_when, true);
+	if (is_duration) {
+		set_duration (current_duration(), true);
+	} else {
+		AudioClock::set (last_when(), true);
+	}
 }
 
 void
@@ -814,67 +831,71 @@ AudioClock::session_configuration_changed (std::string p)
 	}
 
 	if (p == "sync-source" || p == "external-sync") {
-		AudioClock::set (current_time(), true);
-		return;
-	}
-
-	if (p != "timecode-offset" && p != "timecode-offset-negative") {
-		return;
-	}
-
-	samplecnt_t current;
-
-	switch (_mode) {
-	case Timecode:
 		if (is_duration) {
-			current = current_duration ();
+			set_duration (current_duration(), true);
 		} else {
-			current = current_time ();
+			AudioClock::set (last_when(), true);
 		}
-		AudioClock::set (current, true);
-		break;
-	default:
-		break;
+		return;
+	}
+
+	if (p == "timecode-offset" && p == "timecode-offset-negative") {
+		switch (_mode) {
+		case Timecode:
+			if (is_duration) {
+				set_duration (current_duration(), true);
+			} else {
+				AudioClock::set (last_when(), true);
+			}
+			break;
+		default:
+			break;
+		}
 	}
 }
 
 void
-AudioClock::set (samplepos_t when, bool force, samplecnt_t offset)
+AudioClock::set_duration (Temporal::timecnt_t const & dur, bool force)
 {
-	if ((!force && !is_visible()) || _session == 0) {
+	is_duration = true;
+
+	if ((!force && !get_visible()) || !_session) {
 		return;
 	}
 
-	_offset = offset;
-	if (is_duration) {
-		when = when - offset;
+	timepos_t when;
+	timecnt_t d;
+
+	/* durations for timecode display should use extent, not length
+	 *
+	 * reminder:
+	 *     length = end - start
+	 *     extent = end - start - 1
+	 *
+	 * and thus:
+	 *     start + length = end
+	 *     start + extent = last_point_inside duration
+	 */
+
+	switch (_mode) {
+	case Timecode:
+		d = dur.is_zero() ? dur : dur.decrement ();
+		break;
+	default:
+		d = dur;
+		break;
 	}
 
-	if (when > _limit_pos) {
-		when = _limit_pos;
-	} else if (when < -_limit_pos) {
-		when = -_limit_pos;
+	/* Converting a negative duration to a position throws */
+
+	if (d.is_negative()) {
+		when = timepos_t (d);
+	} else {
+		when = -timepos_t (-d);
 	}
 
-	if (when == last_when && !force) {
-#if 0 // XXX return if no change and no change forced. verify Aug/2014
-		if (_mode != Timecode && _mode != MinSec) {
-			/* may need to force display of TC source
-			 * time, so don't return early.
-			 */
-			/* ^^ Why was that?,  delta times?
-			 * Timecode FPS, pull-up/down, etc changes
-			 * trigger a 'session_property_changed' which
-			 * eventually calls set(last_when, true)
-			 *
-			 * re-rendering the clock every 40ms or so just
-			 * because we can is not ideal.
-			 */
-			return;
-		}
-#else
+	if (when == last_when() && !force) {
 		return;
-#endif
 	}
 
 	bool btn_en = false;
@@ -883,28 +904,94 @@ AudioClock::set (samplepos_t when, bool force, samplecnt_t offset)
 
 		switch (_mode) {
 		case Timecode:
-			set_timecode (when, force);
+			set_timecode (when);
 			break;
 
 		case BBT:
-			set_bbt (when, offset, force);
+			set_bbt (dur);
 			btn_en = true;
 			break;
 
 		case MinSec:
-			set_minsec (when, force);
+			set_minsec (when);
 			break;
 
 		case Seconds:
-			set_seconds (when, force);
+			set_seconds (when);
 			break;
 
 		case Samples:
-			set_samples (when, force);
+			set_samples (when);
 			break;
 		}
 	}
 
+	finish_set (when, btn_en);
+	last_time = dur;
+}
+
+void
+AudioClock::set (timepos_t const & w, bool force, bool round_to_beat)
+{
+	is_duration = false;
+
+	timepos_t when (w);
+
+	if ((!force && !get_visible()) || !_session) {
+		return;
+	}
+
+	if (when > _limit_pos) {
+		when = _limit_pos;
+	} else if (when < -_limit_pos) {
+		when = -_limit_pos;
+	}
+
+	if (when == last_when() && !force) {
+		return;
+	}
+
+	bool btn_en = false;
+
+	if (!editing) {
+
+		switch (_mode) {
+		case Timecode:
+			set_timecode (when);
+			break;
+
+		case BBT:
+			if (round_to_beat) {
+				TempoMap::SharedPtr tmap (TempoMap::use());
+				Temporal::BBT_Argument BBT = tmap->round_to_bar (tmap->bbt_at (when));
+				when = Temporal::timepos_t::from_superclock (tmap->superclock_at(BBT));
+			}
+			set_bbt (timecnt_t (when));
+			btn_en = true;
+			break;
+
+		case MinSec:
+			set_minsec (when);
+			break;
+
+		case Seconds:
+			set_seconds (when);
+			break;
+
+		case Samples:
+			set_samples (when);
+			break;
+		}
+	}
+
+	finish_set (when, btn_en);
+
+	last_time = timecnt_t (last_time.distance(), when);
+}
+
+void
+AudioClock::finish_set (Temporal::timepos_t const & when, bool btn_en)
+{
 	if (_with_info) {
 		_left_btn.set_sensitive (btn_en);
 		_right_btn.set_sensitive (btn_en);
@@ -922,36 +1009,34 @@ AudioClock::set (samplepos_t when, bool force, samplecnt_t offset)
 			_right_btn.set_elements (ArdourButton::Text);
 			_left_btn.set_alignment (0, .5);
 			_right_btn.set_alignment (1, .5);
-			set_tooltip (_left_btn, _(""));
-			set_tooltip (_right_btn, _(""));
+			set_tooltip (_left_btn, (""));
+			set_tooltip (_right_btn, (""));
 		}
 	}
 
 	queue_draw ();
-	last_when = when;
 }
 
 void
 AudioClock::set_slave_info ()
 {
-	if (!_with_info) {
+	if (!_with_info || !_session) {
 		return;
 	}
 
-	SyncSource sync_src = Config->get_sync_source();
+	std::shared_ptr<TransportMaster> tm = TransportMasterManager::instance().current();
 
-	if (_session->config.get_external_sync()) {
-		Slave* slave = _session->slave();
+	if (_session->transport_master_is_external()) {
 
-		switch (sync_src) {
+		switch (tm->type()) {
 		case Engine:
-			_left_btn.set_text (sync_source_to_string (sync_src, true), true);
+			_left_btn.set_text (tm->name(), true);
 			_right_btn.set_text ("", true);
 			break;
 		case MIDIClock:
-			if (slave) {
-				_left_btn.set_text (sync_source_to_string (sync_src, true), true);
-				_right_btn.set_text (slave->approximate_current_delta (), true);
+			if (tm) {
+				_left_btn.set_text (tm->display_name(), true);
+				_right_btn.set_text (tm->delta_string (), true);
 			} else {
 				_left_btn.set_text (_("--pending--"), true);
 				_right_btn.set_text ("", true);
@@ -959,28 +1044,22 @@ AudioClock::set_slave_info ()
 			break;
 		case LTC:
 		case MTC:
-			if (slave) {
-				bool matching;
-				TimecodeSlave* tcslave;
-				if ((tcslave = dynamic_cast<TimecodeSlave*>(_session->slave())) != 0) {
-					matching = (tcslave->apparent_timecode_format() == _session->config.get_timecode_format());
-					_left_btn.set_text (string_compose ("%1<span face=\"monospace\" foreground=\"%3\">%2</span>",
-								sync_source_to_string(sync_src, true)[0],
-								dynamic_cast<TimecodeSlave*>(slave)->approximate_current_position (),
-								matching ? "#66ff66" : "#ff3333"
-								), true);
-					_right_btn.set_text (slave->approximate_current_delta (), true);
+			if (tm) {
+				std::shared_ptr<TimecodeTransportMaster> tcmaster;
+				if ((tcmaster = std::dynamic_pointer_cast<TimecodeTransportMaster>(tm)) != 0) {
+					//TODO: _left_btn.set_name () //  tcmaster->apparent_timecode_format() != _session->config.get_timecode_format();
+					_left_btn.set_text (string_compose ("%1%2", tm->display_name()[0], tcmaster->position_string ()), false);
+					_right_btn.set_text (tm->delta_string (), false);
 				}
 			} else {
-				_left_btn.set_text (_("--pending--"), true);
-				_right_btn.set_text ("", true);
+				_left_btn.set_text (_("--pending--"), false);
+				_right_btn.set_text ("", false);
 			}
 			break;
 		}
 	} else {
-		_left_btn.set_text (string_compose ("%1/%2",
-					_("INT"), sync_source_to_string(sync_src, true)), true);
-		_right_btn.set_text ("", true);
+		_left_btn.set_text (string_compose ("%1/%2", _("INT"), tm->display_name()), false);
+		_right_btn.set_text ("", false);
 	}
 }
 
@@ -1003,19 +1082,20 @@ AudioClock::set_out_of_bounds (bool negative)
 }
 
 void
-AudioClock::set_samples (samplepos_t when, bool /*force*/)
+AudioClock::set_samples (timepos_t const & w)
 {
+	timepos_t when (w);
 	char buf[32];
 	bool negative = false;
 
 	if (_off) {
 		_layout->set_text (" ----------");
-		_left_btn.set_text ("", true);
-		_right_btn.set_text ("", true);
+		_left_btn.set_text ("", false);
+		_right_btn.set_text ("", false);
 		return;
 	}
 
-	if (when < 0) {
+	if (when.is_negative ()) {
 		when = -when;
 		negative = true;
 	}
@@ -1023,10 +1103,10 @@ AudioClock::set_samples (samplepos_t when, bool /*force*/)
 	if (when >= _limit_pos) {
 		set_out_of_bounds (negative);
 	} else if (negative) {
-		snprintf (buf, sizeof (buf), "-%10" PRId64, when);
+		snprintf (buf, sizeof (buf), "-%10" PRId64, when.samples());
 		_layout->set_text (buf);
 	} else {
-		snprintf (buf, sizeof (buf), " %10" PRId64, when);
+		snprintf (buf, sizeof (buf), " %10" PRId64, when.samples());
 		_layout->set_text (buf);
 	}
 
@@ -1039,38 +1119,38 @@ AudioClock::set_samples (samplepos_t when, bool /*force*/)
 			sprintf (buf, "%" PRId64 "Hz", rate);
 		}
 
-		_left_btn.set_text (string_compose ("%1 %2", _("SR"), buf), true);
+		_left_btn.set_text (string_compose ("%1 %2", _("SR"), buf), false);
 
 		float vid_pullup = _session->config.get_video_pullup();
 
 		if (vid_pullup == 0.0) {
-			_right_btn.set_text ("", true);
+			_right_btn.set_text ("", false);
 		} else {
 			sprintf (buf, _("%+.4f%%"), vid_pullup);
-			_right_btn.set_text (string_compose ("%1 %2", _("Pull"), buf), true);
+			_right_btn.set_text (string_compose ("%1 %2", _("Pull"), buf), false);
 		}
 	}
 }
 
 void
-AudioClock::set_seconds (samplepos_t when, bool /*force*/)
+AudioClock::set_seconds (timepos_t const & when)
 {
 	char buf[32];
 
 	if (_off) {
 		_layout->set_text (" ----------");
-		_left_btn.set_text ("", true);
-		_right_btn.set_text ("", true);
+		_left_btn.set_text ("", false);
+		_right_btn.set_text ("", false);
 		return;
 	}
 
 	if (when >= _limit_pos || when <= -_limit_pos) {
-		set_out_of_bounds (when < 0);
+		set_out_of_bounds (when.is_negative ());
 	} else {
-		if (when < 0) {
-			snprintf (buf, sizeof (buf), "%12.1f", when / (float)_session->sample_rate());
+		if (when.is_negative ()) {
+			snprintf (buf, sizeof (buf), "%12.1f", when.samples() / (float)_session->sample_rate());
 		} else {
-			snprintf (buf, sizeof (buf), " %11.1f", when / (float)_session->sample_rate());
+			snprintf (buf, sizeof (buf), " %11.1f", when.samples() / (float)_session->sample_rate());
 		}
 		_layout->set_text (buf);
 	}
@@ -1079,7 +1159,7 @@ AudioClock::set_seconds (samplepos_t when, bool /*force*/)
 }
 
 void
-AudioClock::print_minsec (samplepos_t when, char* buf, size_t bufsize, float sample_rate)
+AudioClock::print_minsec (samplepos_t when, char* buf, size_t bufsize, float sample_rate, int decimals)
 {
 	samplecnt_t left;
 	int hrs;
@@ -1095,6 +1175,20 @@ AudioClock::print_minsec (samplepos_t when, char* buf, size_t bufsize, float sam
 		negative = false;
 	}
 
+	float dmult;
+	switch (decimals) {
+		case 1:
+			dmult = 10.f;
+			break;
+		case 2:
+			dmult = 100.f;
+			break;
+		default:
+		case 3:
+			dmult = 1000.f;
+			break;
+	}
+
 	left = when;
 	hrs = (int) floor (left / (sample_rate * 60.0f * 60.0f));
 	left -= (samplecnt_t) floor (hrs * sample_rate * 60.0f * 60.0f);
@@ -1102,33 +1196,42 @@ AudioClock::print_minsec (samplepos_t when, char* buf, size_t bufsize, float sam
 	left -= (samplecnt_t) floor (mins * sample_rate * 60.0f);
 	secs = (int) floor (left / (float) sample_rate);
 	left -= (samplecnt_t) floor ((double)(secs * sample_rate));
-	millisecs = floor (left * 1000.0 / (float) sample_rate);
+	millisecs = floor (left * dmult / (float) sample_rate);
 
-	if (negative) {
-		snprintf (buf, bufsize, "-%02" PRId32 ":%02" PRId32 ":%02" PRId32 ".%03" PRId32, hrs, mins, secs, millisecs);
-	} else {
-		snprintf (buf, bufsize, " %02" PRId32 ":%02" PRId32 ":%02" PRId32 ".%03" PRId32, hrs, mins, secs, millisecs);
+	switch (decimals) {
+		case 0:
+			snprintf (buf, bufsize, "%c%02" PRId32 ":%02" PRId32 ":%02" PRId32, negative ? '-' : ' ', hrs, mins, secs);
+			break;
+		case 1:
+			snprintf (buf, bufsize, "%c%02" PRId32 ":%02" PRId32 ":%02" PRId32 ".%01" PRId32, negative ? '-' : ' ', hrs, mins, secs, millisecs);
+			break;
+		case 2:
+			snprintf (buf, bufsize, "%c%02" PRId32 ":%02" PRId32 ":%02" PRId32 ".%02" PRId32, negative ? '-' : ' ', hrs, mins, secs, millisecs);
+			break;
+		default:
+		case 3:
+			snprintf (buf, bufsize, "%c%02" PRId32 ":%02" PRId32 ":%02" PRId32 ".%03" PRId32, negative ? '-' : ' ', hrs, mins, secs, millisecs);
+			break;
 	}
-
 }
 
 void
-AudioClock::set_minsec (samplepos_t when, bool /*force*/)
+AudioClock::set_minsec (timepos_t const & when)
 {
 	char buf[32];
 
 	if (_off) {
 		_layout->set_text (" --:--:--.---");
-		_left_btn.set_text ("", true);
-		_right_btn.set_text ("", true);
+		_left_btn.set_text ("", false);
+		_right_btn.set_text ("", false);
 
 		return;
 	}
 
 	if (when >= _limit_pos || when <= -_limit_pos) {
-		set_out_of_bounds (when < 0);
+		set_out_of_bounds (when.is_negative ());
 	} else {
-		print_minsec (when, buf, sizeof (buf), _session->sample_rate());
+		print_minsec (when.samples(), buf, sizeof (buf), _session->sample_rate());
 		_layout->set_text (buf);
 	}
 
@@ -1136,19 +1239,20 @@ AudioClock::set_minsec (samplepos_t when, bool /*force*/)
 }
 
 void
-AudioClock::set_timecode (samplepos_t when, bool /*force*/)
+AudioClock::set_timecode (timepos_t const & w)
 {
+	timepos_t when (w);
 	Timecode::Time TC;
 	bool negative = false;
 
 	if (_off) {
 		_layout->set_text (" --:--:--:--");
-		_left_btn.set_text ("", true);
-		_right_btn.set_text ("", true);
+		_left_btn.set_text ("", false);
+		_right_btn.set_text ("", false);
 		return;
 	}
 
-	if (when < 0) {
+	if (when.is_negative ()) {
 		when = -when;
 		negative = true;
 	}
@@ -1159,9 +1263,9 @@ AudioClock::set_timecode (samplepos_t when, bool /*force*/)
 	}
 
 	if (is_duration) {
-		_session->timecode_duration (when, TC);
+		_session->timecode_duration (when.samples(), TC);
 	} else {
-		_session->timecode_time (when, TC);
+		_session->timecode_time (when.samples(), TC);
 	}
 
 	TC.negative = TC.negative || negative;
@@ -1172,46 +1276,45 @@ AudioClock::set_timecode (samplepos_t when, bool /*force*/)
 }
 
 void
-AudioClock::set_bbt (samplepos_t when, samplecnt_t offset, bool /*force*/)
+AudioClock::set_bbt (timecnt_t const & w)
 {
+	timepos_t pos (w);
 	char buf[64];
-	Timecode::BBT_Time BBT;
+	Temporal::BBT_Time BBT;
 	bool negative = false;
 
-	if (_off || when >= _limit_pos || when < -_limit_pos) {
+	if (_off || pos >= _limit_pos || pos < -_limit_pos) {
 		_layout->set_text (" ---|--|----");
-		_left_btn.set_text ("", true);
-		_right_btn.set_text ("", true);
+		_left_btn.set_text ("", false);
+		_right_btn.set_text ("", false);
 		return;
 	}
 
-	if (when < 0) {
-		when = -when;
+	if (pos.is_negative ()) {
+		pos = -pos;
 		negative = true;
 	}
 
 	/* handle a common case */
+
+	TempoMap::SharedPtr tmap (TempoMap::use());
+
 	if (is_duration) {
-		if (when == 0) {
+		if (pos.is_zero ()) {
 			BBT.bars = 0;
 			BBT.beats = 0;
 			BBT.ticks = 0;
 		} else {
-			TempoMap& tmap (_session->tempo_map());
 
-			if (offset == 0) {
-				offset = bbt_reference_time;
-			}
-
-			const double divisions = tmap.meter_section_at_sample (offset).divisions_per_bar();
-			Timecode::BBT_Time sub_bbt;
+			const int divisions = tmap->meter_at (w.position()).divisions_per_bar();
+			Temporal::BBT_Time sub_bbt;
 
 			if (negative) {
-				BBT = tmap.bbt_at_beat (tmap.beat_at_sample (offset));
-				sub_bbt = tmap.bbt_at_sample (offset - when);
+				BBT = tmap->bbt_at (timepos_t (tmap->quarters_at (w.position())));
+				sub_bbt = tmap->bbt_at (last_when().earlier (w.position()));
 			} else {
-				BBT = tmap.bbt_at_beat (tmap.beat_at_sample (when + offset));
-				sub_bbt = tmap.bbt_at_sample (offset);
+				BBT = tmap->bbt_at (timepos_t (tmap->quarters_at (w.end())));
+				sub_bbt = tmap->bbt_at (w.position());
 			}
 
 			BBT.bars -= sub_bbt.bars;
@@ -1223,7 +1326,7 @@ AudioClock::set_bbt (samplepos_t when, samplecnt_t offset, bool /*force*/)
 				} else {
 					BBT.beats--;
 				}
-				BBT.ticks = Timecode::BBT_Time::ticks_per_beat - (sub_bbt.ticks - BBT.ticks);
+				BBT.ticks = Temporal::ticks_per_beat - (sub_bbt.ticks - BBT.ticks);
 			} else {
 				BBT.ticks -= sub_bbt.ticks;
 			}
@@ -1236,7 +1339,7 @@ AudioClock::set_bbt (samplepos_t when, samplecnt_t offset, bool /*force*/)
 			}
 		}
 	} else {
-		BBT = _session->tempo_map().bbt_at_sample (when);
+		BBT = tmap->bbt_at (pos);
 	}
 
 	if (negative) {
@@ -1250,29 +1353,22 @@ AudioClock::set_bbt (samplepos_t when, samplecnt_t offset, bool /*force*/)
 	_layout->set_text (buf);
 
 	if (_with_info) {
-		samplepos_t pos;
 
-		if (bbt_reference_time < 0) {
-			pos = when;
-		} else {
-			pos = bbt_reference_time;
-		}
-
-		TempoMetric m (_session->tempo_map().metric_at (pos));
+		TempoMetric m (tmap->metric_at (pos));
 
 		if (m.tempo().note_type() == 4) {
-			snprintf (buf, sizeof(buf), "\u2669 = %.3f", _session->tempo_map().tempo_at_sample (pos).note_types_per_minute());
-			_left_btn.set_text (string_compose ("%1", buf), true);
+			snprintf (buf, sizeof(buf), u8"\u2669 = %.3f", m.tempo().note_types_per_minute_at_DOUBLE (pos));
+			_left_btn.set_text (string_compose ("%1", buf), false);
 		} else if (m.tempo().note_type() == 8) {
-			snprintf (buf, sizeof(buf), "\u266a = %.3f", _session->tempo_map().tempo_at_sample (pos).note_types_per_minute());
-			_left_btn.set_text (string_compose ("%1", buf), true);
+			snprintf (buf, sizeof(buf), u8"\u266a = %.3f", m.tempo().note_types_per_minute_at_DOUBLE (pos));
+			_left_btn.set_text (string_compose ("%1", buf), false);
 		} else {
-			snprintf (buf, sizeof(buf), "%.1f = %.3f", m.tempo().note_type(), _session->tempo_map().tempo_at_sample (pos).note_types_per_minute());
-			_left_btn.set_text (string_compose ("%1: %2", S_("Tempo|T"), buf), true);
+			snprintf (buf, sizeof(buf), "1/%d = %.3f",m.tempo().note_type(), m.tempo().note_types_per_minute_at_DOUBLE (pos));
+			_left_btn.set_text (buf, false);
 		}
 
-		snprintf (buf, sizeof(buf), "%g/%g", m.meter().divisions_per_bar(), m.meter().note_divisor());
-		_right_btn.set_text (string_compose ("%1: %2", S_("TimeSignature|TS"), buf), true);
+		snprintf (buf, sizeof(buf), "%d/%d", m.meter().divisions_per_bar(), m.meter().note_value());
+		_right_btn.set_text (string_compose ("%1: %2", S_("TimeSignature|TS"), buf), false);
 	}
 }
 
@@ -1284,36 +1380,42 @@ AudioClock::set_session (Session *s)
 	if (_session) {
 
 		int64_t limit_sec = UIConfiguration::instance().get_clock_display_limit ();
+
 		if (limit_sec > 0) {
-			_limit_pos = (samplecnt_t) floor ((double)(limit_sec * _session->sample_rate()));
+			_limit_pos = timepos_t (limit_sec * _session->sample_rate());
 		}
 
-		Config->ParameterChanged.connect (_session_connections, invalidator (*this), boost::bind (&AudioClock::session_configuration_changed, this, _1), gui_context());
-		_session->config.ParameterChanged.connect (_session_connections, invalidator (*this), boost::bind (&AudioClock::session_configuration_changed, this, _1), gui_context());
-		_session->tempo_map().PropertyChanged.connect (_session_connections, invalidator (*this), boost::bind (&AudioClock::session_property_changed, this, _1), gui_context());
-		_session->tempo_map().MetricPositionChanged.connect (_session_connections, invalidator (*this), boost::bind (&AudioClock::session_property_changed, this, _1), gui_context());
+		Config->ParameterChanged.connect (_session_connections, invalidator (*this), std::bind (&AudioClock::session_configuration_changed, this, _1), gui_context());
+		_session->config.ParameterChanged.connect (_session_connections, invalidator (*this), std::bind (&AudioClock::session_configuration_changed, this, _1), gui_context());
 
+		/* try load v6 style settings (session file) */
 		XMLNode* node = _session->extra_xml (X_("ClockModes"));
+		if (!node) {
+			/* get new v7+ settings from instant_xml */
+			node = ARDOUR_UI::instance ()->clock_mode_settings ();
+		}
 
-		if (node) {
-			for (XMLNodeList::const_iterator i = node->children().begin(); i != node->children().end(); ++i) {
-				std::string name;
-				if ((*i)->get_property (X_("name"), name) && name == _name) {
+		for (XMLNodeList::const_iterator i = node->children().begin(); i != node->children().end(); ++i) {
+			std::string name;
+			if ((*i)->get_property (X_("name"), name) && name == _name) {
 
-					AudioClock::Mode amode;
-					if ((*i)->get_property (X_("mode"), amode)) {
-						set_mode (amode, true);
-					}
-					bool on;
-					if ((*i)->get_property (X_("on"), on)) {
-						set_off (!on);
-					}
-					break;
+				AudioClock::Mode amode;
+				if ((*i)->get_property (X_("mode"), amode)) {
+					set_mode (amode);
 				}
+				bool on;
+				if ((*i)->get_property (X_("on"), on)) {
+					set_off (!on);
+				}
+				break;
 			}
 		}
 
-		AudioClock::set (last_when, true);
+		if (is_duration) {
+			AudioClock::set_duration (current_duration (), true);
+		} else {
+			AudioClock::set (last_when(), true);
+		}
 	}
 }
 
@@ -1398,7 +1500,6 @@ AudioClock::on_key_press_event (GdkEventKey* ev)
 
 	case GDK_Escape:
 		end_edit (false);
-		ChangeAborted();  /*  EMIT SIGNAL  */
 		return true;
 
 	case GDK_Delete:
@@ -1650,36 +1751,7 @@ AudioClock::on_button_release_event (GdkEventButton *ev)
 				return true;
 			} else {
 				if (ev->button == 1) {
-
-					if (_edit_by_click_field) {
-
-						int xcenter = (get_width() - layout_width) /2;
-						int index = 0;
-						int trailing;
-						int y = ev->y - ((get_height() - layout_height)/2);
-						int x = ev->x - xcenter;
-						Field f;
-
-						if (!_layout->xy_to_index (x * PANGO_SCALE, y * PANGO_SCALE, index, trailing)) {
-							return true;
-						}
-
-						f = index_to_field (index);
-
-						switch (f) {
-						case Timecode_frames:
-						case MS_Milliseconds:
-						case Ticks:
-						case SS_Deciseconds:
-							f = Field (0);
-							break;
-						default:
-							break;
-						}
-						start_edit (f);
-					} else {
-						start_edit ();
-					}
+					start_edit ();
 				}
 			}
 		}
@@ -1689,11 +1761,33 @@ AudioClock::on_button_release_event (GdkEventButton *ev)
 		if (ops_menu == 0) {
 			build_ops_menu ();
 		}
-		ops_menu->popup (1, ev->time);
+		ops_menu->popup (ev->button, ev->time);
 		return true;
 	}
 
 	return false;
+}
+
+bool
+AudioClock::on_enter_notify_event (GdkEventCrossing* ev)
+{
+	if (UIConfigurationBase::instance().get_widget_prelight() && editable && !_off) {
+		_hovering = true;
+		CairoWidget::set_dirty ();
+	}
+	return CairoWidget::on_enter_notify_event (ev);
+}
+
+bool
+AudioClock::on_leave_notify_event (GdkEventCrossing* ev)
+{
+	_hovering = false;
+
+	if (UIConfigurationBase::instance().get_widget_prelight()) {
+		CairoWidget::set_dirty ();
+  }
+
+	return CairoWidget::on_leave_notify_event (ev);
 }
 
 bool
@@ -1735,32 +1829,40 @@ AudioClock::on_scroll_event (GdkEventScroll *ev)
 	}
 
 	Field f = index_to_field (index);
-	samplepos_t samples = 0;
+	timepos_t step;
+	timecnt_t beat = timecnt_t (Temporal::Beats (1, 0));
 
 	switch (ev->direction) {
 
 	case GDK_SCROLL_UP:
-		samples = get_sample_step (f, current_time(), 1);
-		if (samples != 0) {
+		step = get_incremental_step (f, last_when());
+		if (!step.is_zero ()) {
 			if (Keyboard::modifier_state_equals (ev->state, Keyboard::PrimaryModifier)) {
-				samples *= 10;
+				step *= 10;
 			}
-			AudioClock::set (current_time() + samples, true);
+			if (is_duration) {
+				AudioClock::set_duration (current_duration() + step, true); // XXX step is too small ?!
+			} else {
+				AudioClock::set (last_when() + step, true, step > beat);
+			}
 			ValueChanged (); /* EMIT_SIGNAL */
 		}
 		break;
 
 	case GDK_SCROLL_DOWN:
-		samples = get_sample_step (f, current_time(), -1);
-		if (samples != 0) {
+		step = get_incremental_step (f, last_when());
+		if (!step.is_zero ()) {
 			if (Keyboard::modifier_state_equals (ev->state, Keyboard::PrimaryModifier)) {
-				samples *= 10;
+				step *= 10;
 			}
-
-			if (!_negative_allowed && (double)current_time() - (double)samples < 0.0) {
-				AudioClock::set (0, true);
+			if (is_duration) {
+				if (!(current_duration () - step).is_negative()) {
+					AudioClock::set_duration (current_duration () - step, true);
+				}
+			} else if (!_negative_allowed && last_when() < step) {
+				AudioClock::set (timepos_t (), true);
 			} else {
-				AudioClock::set (current_time() - samples, true);
+				AudioClock::set (last_when().earlier (step), true, step > beat);
 			}
 
 			ValueChanged (); /* EMIT_SIGNAL */
@@ -1782,137 +1884,131 @@ AudioClock::on_motion_notify_event (GdkEventMotion *ev)
 		return false;
 	}
 
-	float pixel_sample_scale_factor = 0.2f;
+	const double y_delta = ev->y - drag_y;
 
-	if (Keyboard::modifier_state_equals (ev->state, Keyboard::PrimaryModifier))  {
-		pixel_sample_scale_factor = 0.1f;
-	}
-
-
-	if (Keyboard::modifier_state_contains (ev->state,
-	                                       Keyboard::PrimaryModifier|Keyboard::SecondaryModifier)) {
-		pixel_sample_scale_factor = 0.025f;
-	}
-
-	double y_delta = ev->y - drag_y;
-
-	drag_accum +=  y_delta*pixel_sample_scale_factor;
-
+	drag_accum += y_delta;
 	drag_y = ev->y;
 
-	if (floor (drag_accum) != 0) {
+	if (drag_accum) {
 
-		samplepos_t samples;
-		samplepos_t pos;
-		int dir;
-		dir = (drag_accum < 0 ? 1:-1);
-		pos = current_time();
-		samples = get_sample_step (drag_field, pos, dir);
 
-		if (samples  != 0 &&  samples * drag_accum < current_time()) {
-			AudioClock::set ((samplepos_t) floor (pos - drag_accum * samples), false); // minus because up is negative in GTK
+		timepos_t pos = last_when ();
+		timepos_t step = get_incremental_step (drag_field, pos);
+		timecnt_t beat = timecnt_t (Temporal::Beats (1, 0));
+
+		step *= fabs (drag_accum);
+
+		if (drag_accum > 0) { /* positive, so downward motion ... decrement clock */
+
+			if (is_duration) {
+				if (!step.is_zero () && (current_duration () >= timecnt_t(step))) {
+					AudioClock::set_duration (current_duration () - step, false);
+				}
+			} else if (!step.is_zero () && (step < pos)) {
+				AudioClock::set (pos.earlier (step), false, step > beat);
+			} else {
+				AudioClock::set (timepos_t (), false);
+			}
+
+		} else if (is_duration) {
+		/* negative so upward motion .. increment clock */
+			AudioClock::set_duration (current_duration () + step, false);
 		} else {
-			AudioClock::set (0 , false);
+			/* negative so upward motion .. increment clock */
+			AudioClock::set (pos + step, false, step > beat);
 		}
 
-		drag_accum= 0;
+
+		drag_accum = 0;
 		ValueChanged();	 /* EMIT_SIGNAL */
+
 	}
 
 	return true;
 }
 
-samplepos_t
-AudioClock::get_sample_step (Field field, samplepos_t pos, int dir)
+timepos_t
+AudioClock::get_incremental_step (Field field, timepos_t const & pos)
 {
-	samplecnt_t f = 0;
-	Timecode::BBT_Time BBT;
+	timepos_t f;
+	Temporal::BBT_Time BBT;
+
 	switch (field) {
 	case Timecode_Hours:
-		f = (samplecnt_t) floor (3600.0 * _session->sample_rate());
+		f = timepos_t (floor (3600.0 * _session->sample_rate()));
 		break;
 	case Timecode_Minutes:
-		f = (samplecnt_t) floor (60.0 * _session->sample_rate());
+		f = timepos_t (floor (60.0 * _session->sample_rate()));
 		break;
 	case Timecode_Seconds:
-		f = _session->sample_rate();
+		f = timepos_t (_session->sample_rate());
 		break;
 	case Timecode_frames:
-		f = (samplecnt_t) floor (_session->sample_rate() / _session->timecode_frames_per_second());
+		f = timepos_t (floor (_session->sample_rate() / _session->timecode_frames_per_second()));
 		break;
 
 	case S_Samples:
-		f = 1;
+		f = timepos_t (1);
 		break;
 
 	case SS_Seconds:
-		f = (samplecnt_t) _session->sample_rate();
+		f = timepos_t (_session->sample_rate());
 		break;
 	case SS_Deciseconds:
-		f = (samplecnt_t) _session->sample_rate() / 10.f;
+		f = timepos_t (_session->sample_rate() / 10.f);
 		break;
 
 	case MS_Hours:
-		f = (samplecnt_t) floor (3600.0 * _session->sample_rate());
+		f = timepos_t (floor (3600.0 * _session->sample_rate()));
 		break;
 	case MS_Minutes:
-		f = (samplecnt_t) floor (60.0 * _session->sample_rate());
+		f = timepos_t (floor (60.0 * _session->sample_rate()));
 		break;
 	case MS_Seconds:
-		f = (samplecnt_t) _session->sample_rate();
+		f = timepos_t (_session->sample_rate());
 		break;
 	case MS_Milliseconds:
-		f = (samplecnt_t) floor (_session->sample_rate() / 1000.0);
+		f = timepos_t (floor (_session->sample_rate() / 1000.0));
 		break;
 
 	case Bars:
 		BBT.bars = 1;
 		BBT.beats = 0;
 		BBT.ticks = 0;
-		f = _session->tempo_map().bbt_duration_at (pos,BBT,dir);
+		f = TempoMap::use()->bbt_duration_at (pos,BBT);
 		break;
 	case Beats:
-		BBT.bars = 0;
-		BBT.beats = 1;
-		BBT.ticks = 0;
-		f = _session->tempo_map().bbt_duration_at(pos,BBT,dir);
+		f = timepos_t (Temporal::Beats (1, 0));
 		break;
 	case Ticks:
-		BBT.bars = 0;
-		BBT.beats = 0;
-		BBT.ticks = 1;
-		f = _session->tempo_map().bbt_duration_at(pos,BBT,dir);
+		f = timepos_t (Temporal::Beats (0, 1));
 		break;
 	default:
 		error << string_compose (_("programming error: %1"), "attempt to get samples from non-text field!") << endmsg;
-		f = 0;
+		f = timepos_t (0);
 		break;
 	}
 
 	return f;
 }
 
-samplepos_t
-AudioClock::current_time (samplepos_t) const
+timecnt_t
+AudioClock::current_duration (timepos_t pos) const
 {
-	return last_when;
-}
+	assert (is_duration);
 
-samplepos_t
-AudioClock::current_duration (samplepos_t pos) const
-{
-	samplepos_t ret = 0;
+	timecnt_t ret;
 
 	switch (_mode) {
 	case BBT:
-		ret = sample_duration_from_bbt_string (pos, _layout->get_text());
+		ret = timecnt_t (sample_duration_from_bbt_string (pos, _layout->get_text()));
 		break;
 
 	case Timecode:
 	case MinSec:
 	case Seconds:
 	case Samples:
-		ret = last_when;
+		ret = last_time;
 		break;
 	}
 
@@ -1922,28 +2018,28 @@ AudioClock::current_duration (samplepos_t pos) const
 bool
 AudioClock::bbt_validate_edit (string & str)
 {
-	AnyTime any;
+	BBT_Time bbt;
 
-	if (sscanf (str.c_str(), BBT_SCANF_FORMAT, &any.bbt.bars, &any.bbt.beats, &any.bbt.ticks) != 3) {
+	if (sscanf (str.c_str(), BBT_SCANF_FORMAT, &bbt.bars, &bbt.beats, &bbt.ticks) != 3) {
 		return false;
 	}
 
-	if (any.bbt.ticks > Timecode::BBT_Time::ticks_per_beat) {
+	if (bbt.ticks > Temporal::ticks_per_beat) {
 		return false;
 	}
 
-	if (!is_duration && any.bbt.bars == 0) {
+	if (!is_duration && bbt.bars == 0) {
 		return false;
 	}
 
-	if (!is_duration && any.bbt.beats == 0) {
+	if (!is_duration && bbt.beats == 0) {
 		/* user could not have mean zero beats because for a
 		 * non-duration clock that's impossible. Assume that they
 		 * mis-entered things and meant Bar|1|ticks
 		 */
 
 		char buf[128];
-		snprintf (buf, sizeof (buf), "%" PRIu32 "|%" PRIu32 "|%" PRIu32, any.bbt.bars, 1, any.bbt.ticks);
+		snprintf (buf, sizeof (buf), "%" PRIu32 "|%" PRIu32 "|%" PRIu32, bbt.bars, 1, bbt.ticks);
 		str = buf;
 	}
 
@@ -1951,14 +2047,13 @@ AudioClock::bbt_validate_edit (string & str)
 }
 
 bool
-AudioClock::timecode_validate_edit (const string&)
+AudioClock::timecode_validate_edit (const string& str)
 {
 	Timecode::Time TC;
 	int hours;
-	char ignored[2];
 
-	if (sscanf (_layout->get_text().c_str(), "%[- _]%" PRId32 ":%" PRId32 ":%" PRId32 "%[:;]%" PRId32,
-	            ignored, &hours, &TC.minutes, &TC.seconds, ignored, &TC.frames) != 6) {
+	if (sscanf (str.c_str(), "%*[- _]%" PRId32 ":%" PRId32 ":%" PRId32 "%*[:;]%" PRId32,
+	            &hours, &TC.minutes, &TC.seconds, &TC.frames) != 4) {
 		return false;
 	}
 
@@ -2016,10 +2111,9 @@ AudioClock::samples_from_timecode_string (const string& str) const
 
 	Timecode::Time TC;
 	samplepos_t sample;
-	char ignored[2];
 	int hours;
 
-	if (sscanf (str.c_str(), "%[- _]%d:%d:%d%[:;]%d", ignored, &hours, &TC.minutes, &TC.seconds, ignored, &TC.frames) != 6) {
+	if (sscanf (str.c_str(), "%*[- _]%d:%d:%d%*[:;]%d", &hours, &TC.minutes, &TC.seconds, &TC.frames) != 4) {
 		error << string_compose (_("programming error: %1 %2"), "badly formatted timecode clock string", str) << endmsg;
 		return 0;
 	}
@@ -2056,45 +2150,48 @@ AudioClock::samples_from_minsec_string (const string& str) const
 }
 
 samplepos_t
-AudioClock::samples_from_bbt_string (samplepos_t pos, const string& str) const
+AudioClock::samples_from_bbt_string (timepos_t const & pos, const string& str) const
 {
 	if (_session == 0) {
-		error << "AudioClock::current_time() called with BBT mode but without session!" << endmsg;
+#ifndef NDEBUG
+		cout << "AudioClock::samples_from_bbt_string() called with BBT mode but without session!\n";
+#endif
 		return 0;
 	}
 
-	AnyTime any;
-	any.type = AnyTime::BBT;
-
-	if (sscanf (str.c_str(), BBT_SCANF_FORMAT, &any.bbt.bars, &any.bbt.beats, &any.bbt.ticks) != 3) {
-		return 0;
-	}
-
-	if (is_duration) {
-		any.bbt.bars++;
-		any.bbt.beats++;
-		return _session->any_duration_to_samples (pos, any);
-	} else {
-		return _session->convert_to_samples (any);
-	}
-}
-
-
-samplepos_t
-AudioClock::sample_duration_from_bbt_string (samplepos_t pos, const string& str) const
-{
-	if (_session == 0) {
-		error << "AudioClock::sample_duration_from_bbt_string() called with BBT mode but without session!" << endmsg;
-		return 0;
-	}
-
-	Timecode::BBT_Time bbt;
+	BBT_Argument bbt;
 
 	if (sscanf (str.c_str(), BBT_SCANF_FORMAT, &bbt.bars, &bbt.beats, &bbt.ticks) != 3) {
 		return 0;
 	}
 
-	return _session->tempo_map().bbt_duration_at(pos,bbt,1);
+	if (is_duration) {
+		bbt.bars++;
+		bbt.beats++;
+		return TempoMap::use()->bbt_duration_at (pos, bbt).samples();
+	} else {
+		return TempoMap::use()->sample_at (bbt);
+	}
+}
+
+
+samplepos_t
+AudioClock::sample_duration_from_bbt_string (timepos_t const & pos, const string& str) const
+{
+	if (_session == 0) {
+#ifndef NDEBUG
+		cout << "AudioClock::sample_duration_from_bbt_string() called with BBT mode but without session!\n";
+#endif
+		return 0;
+	}
+
+	Temporal::BBT_Time bbt;
+
+	if (sscanf (str.c_str(), BBT_SCANF_FORMAT, &bbt.bars, &bbt.beats, &bbt.ticks) != 3) {
+		return 0;
+	}
+
+	return TempoMap::use()->bbt_duration_at(pos,bbt).samples();
 }
 
 samplepos_t
@@ -2139,11 +2236,11 @@ AudioClock::build_ops_menu ()
 	MenuList& ops_items = ops_menu->items();
 	ops_menu->set_name ("ArdourContextMenu");
 
-	ops_items.push_back (MenuElem (_("Timecode"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), Timecode, false)));
-	ops_items.push_back (MenuElem (_("Bars:Beats"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), BBT, false)));
-	ops_items.push_back (MenuElem (_("Minutes:Seconds"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), MinSec, false)));
-	ops_items.push_back (MenuElem (_("Seconds"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), Seconds, false)));
-	ops_items.push_back (MenuElem (_("Samples"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), Samples, false)));
+	ops_items.push_back (MenuElem (_("Timecode"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), Timecode)));
+	ops_items.push_back (MenuElem (_("Bars:Beats"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), BBT)));
+	ops_items.push_back (MenuElem (_("Minutes:Seconds"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), MinSec)));
+	ops_items.push_back (MenuElem (_("Seconds"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), Seconds)));
+	ops_items.push_back (MenuElem (_("Samples"), sigc::bind (sigc::mem_fun(*this, &AudioClock::set_mode), Samples)));
 
 	if (editable && !_off && !is_duration && !_follows_playhead) {
 		ops_items.push_back (SeparatorElem());
@@ -2161,7 +2258,9 @@ AudioClock::set_from_playhead ()
 		return;
 	}
 
-	AudioClock::set (_session->transport_sample());
+	assert (!is_duration);
+
+	AudioClock::set (timepos_t (_session->transport_sample()));
 	ValueChanged ();
 }
 
@@ -2171,22 +2270,29 @@ AudioClock::locate ()
 	if (!_session || is_duration) {
 		return;
 	}
+	if (_session->actively_recording()) {
+		return;
+	}
 
-	_session->request_locate (current_time(), _session->transport_rolling ());
+	_session->request_locate (last_when().samples());
 }
 
 void
-AudioClock::set_mode (Mode m, bool noemit)
+AudioClock::set_mode (Mode m)
 {
 	if (_mode == m) {
 		return;
 	}
 
+	timecnt_t existing_duration;
+
+	if (_session && is_duration) {
+		existing_duration = current_duration ();
+	}
+
 	_mode = m;
 
 	insert_map.clear();
-
-	_layout->set_text ("");
 
 	Gtk::Requisition req;
 	set_clock_dimensions (req);
@@ -2244,19 +2350,13 @@ AudioClock::set_mode (Mode m, bool noemit)
 		break;
 	}
 
-	AudioClock::set (last_when, true);
-
-	if (!is_transient && !noemit) {
-		ModeChanged (); /* EMIT SIGNAL (the static one)*/
+	if (is_duration) {
+		AudioClock::set_duration (existing_duration, true);
+	} else {
+		AudioClock::set (last_when(), true);
 	}
 
 	mode_changed (); /* EMIT SIGNAL (the member one) */
-}
-
-void
-AudioClock::set_bbt_reference (samplepos_t pos)
-{
-	bbt_reference_time = pos;
 }
 
 void
@@ -2264,11 +2364,18 @@ AudioClock::on_style_changed (const Glib::RefPtr<Gtk::Style>& old_style)
 {
 	CairoWidget::on_style_changed (old_style);
 
+	Glib::RefPtr<Gtk::Style> const& new_style = get_style ();
+	if (_layout && (_layout->get_font_description ().gobj () == 0 || _layout->get_font_description () != new_style->get_font ())) {
+		_layout->set_font_description (new_style->get_font ());
+		queue_resize ();
+	} else if (get_realized ()) {
+		queue_resize ();
+	}
+
 	Gtk::Requisition req;
 	set_clock_dimensions (req);
 
-	/* XXXX fix me ... we shouldn't be using GTK styles anyway */
-	// set_font ();
+	/* set-colors also sets up font-attributes */
 	set_colors ();
 }
 
@@ -2276,17 +2383,6 @@ void
 AudioClock::set_editable (bool yn)
 {
 	editable = yn;
-}
-
-void
-AudioClock::set_is_duration (bool yn)
-{
-	if (yn == is_duration) {
-		return;
-	}
-
-	is_duration = yn;
-	AudioClock::set (last_when, true);
 }
 
 void
@@ -2298,11 +2394,15 @@ AudioClock::set_off (bool yn)
 
 	_off = yn;
 
-	/* force a redraw. last_when will be preserved, but the clock text will
+	/* force a redraw. last_time will be preserved, but the clock text will
 	 * change
 	 */
 
-	AudioClock::set (last_when, true);
+	if (is_duration) {
+		set_duration (last_time, true);
+	} else {
+		AudioClock::set (last_when(), true);
+	}
 }
 
 void
@@ -2327,7 +2427,10 @@ AudioClock::dpi_reset ()
 	 */
 	first_width = 0;
 	first_height = 0;
-	queue_resize ();
+
+	if (get_realized ()) {
+		queue_resize ();
+	}
 }
 
 void

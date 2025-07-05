@@ -1,21 +1,24 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-	Copyright (C) 2012 Paul Davis
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2012-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2016 Len Ovens <len@ovenwerks.net>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2019 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 
@@ -29,6 +32,7 @@
 #include "ardour/rc_configuration.h"
 
 #include "mackie_control_protocol.h"
+#include "subview.h"
 #include "surface.h"
 #include "fader.h"
 
@@ -42,7 +46,7 @@ using std::string;
 using namespace ARDOUR;
 using namespace PBD;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 LedState
 MackieControlProtocol::shift_press (Button &)
@@ -98,7 +102,7 @@ MackieControlProtocol::cmd_alt_release (Button &)
 LedState
 MackieControlProtocol::left_press (Button &)
 {
-	if (_subview_mode != None) {
+	if (_subview->subview_mode() != MACKIE_NAMESPACE::Subview::None) {
 		return none;
 	}
 
@@ -107,8 +111,14 @@ MackieControlProtocol::left_press (Button &)
 
 	DEBUG_TRACE (DEBUG::MackieControl, string_compose ("bank left with current initial = %1 nstrips = %2 tracks/busses = %3\n",
 							   _current_initial_bank, strip_cnt, sorted.size()));
+
 	if (_current_initial_bank > 0) {
-		(void) switch_banks ((_current_initial_bank - 1) / strip_cnt * strip_cnt);
+		uint32_t initial = (_current_initial_bank - 1) / strip_cnt * strip_cnt;
+		while (initial >= sorted.size())
+		{
+			initial -= strip_cnt;
+		}
+		(void) switch_banks (initial);
 	} else {
 		(void) switch_banks (0);
 	}
@@ -120,13 +130,13 @@ MackieControlProtocol::left_press (Button &)
 LedState
 MackieControlProtocol::left_release (Button &)
 {
-	return none;
+	return off;
 }
 
 LedState
 MackieControlProtocol::right_press (Button &)
 {
-	if (_subview_mode != None) {
+	if (_subview->subview_mode() != MACKIE_NAMESPACE::Subview::None) {
 		return none;
 	}
 
@@ -144,18 +154,24 @@ MackieControlProtocol::right_press (Button &)
 		(void) switch_banks (new_initial);
 	}
 
-	return none;
+	return on;
 }
 
 LedState
 MackieControlProtocol::right_release (Button &)
 {
-	return none;
+	return off;
 }
 
 LedState
 MackieControlProtocol::cursor_left_press (Button& )
 {
+	bool press_handled_by_subview = _subview->handle_cursor_left_press();
+	if (press_handled_by_subview)
+	{
+		return off;
+	}
+
 	if (zoom_mode()) {
 
 		if (main_modifier_state() & MODIFIER_OPTION) {
@@ -190,6 +206,12 @@ MackieControlProtocol::cursor_left_release (Button&)
 LedState
 MackieControlProtocol::cursor_right_press (Button& )
 {
+	bool press_handled_by_subview = _subview->handle_cursor_right_press();
+	if (press_handled_by_subview)
+	{
+		return off;
+	}
+
 	if (zoom_mode()) {
 
 		if (main_modifier_state() & MODIFIER_OPTION) {
@@ -267,7 +289,12 @@ MackieControlProtocol::cursor_down_release (Button&)
 LedState
 MackieControlProtocol::channel_left_press (Button &)
 {
-	if (_subview_mode != None) {
+	if (_device_info.single_fader_follows_selection()) {
+		access_action ("Editor/select-prev-route");
+		return on;
+	}
+
+	if (_subview->subview_mode() != MACKIE_NAMESPACE::Subview::None) {
 		return none;
 	}
 	Sorted sorted = get_sorted_stripables();
@@ -288,7 +315,12 @@ MackieControlProtocol::channel_left_release (Button &)
 LedState
 MackieControlProtocol::channel_right_press (Button &)
 {
-	if (_subview_mode != None) {
+	if (_device_info.single_fader_follows_selection()) {
+		access_action ("Editor/select-next-route");
+		return on;
+	}
+
+	if (_subview->subview_mode() != MACKIE_NAMESPACE::Subview::None) {
 		return none;
 	}
 	Sorted sorted = get_sorted_stripables();
@@ -306,14 +338,14 @@ MackieControlProtocol::channel_right_release (Button &)
 	return off;
 }
 
-Mackie::LedState
-MackieControlProtocol::zoom_press (Mackie::Button &)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::zoom_press (MACKIE_NAMESPACE::Button &)
 {
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::zoom_release (Mackie::Button &)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::zoom_release (MACKIE_NAMESPACE::Button &)
 {
 	if (_modifier_state & MODIFIER_ZOOM) {
 		_modifier_state &= ~MODIFIER_ZOOM;
@@ -324,18 +356,18 @@ MackieControlProtocol::zoom_release (Mackie::Button &)
 	return (zoom_mode() ? on : off);
 }
 
-Mackie::LedState
-MackieControlProtocol::scrub_press (Mackie::Button &)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::scrub_press (MACKIE_NAMESPACE::Button &)
 {
-	if (!surfaces.empty()) {
-		// surfaces.front()->next_jog_mode ();
+	if (_master_surface) {
 		_master_surface->next_jog_mode ();
 	}
+
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::scrub_release (Mackie::Button &)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::scrub_release (MACKIE_NAMESPACE::Button &)
 {
 	return none;
 }
@@ -355,6 +387,19 @@ LedState
 MackieControlProtocol::undo_release (Button&)
 {
 	return none;
+}
+
+LedState
+MackieControlProtocol::redo_press (Button &)
+{
+	redo ();
+	return on;
+}
+
+LedState
+MackieControlProtocol::redo_release (Button &)
+{
+	return off;
 }
 
 LedState
@@ -391,6 +436,19 @@ LedState
 MackieControlProtocol::save_release (Button &)
 {
 	return none;
+}
+
+LedState
+MackieControlProtocol::open_press (Button &)
+{
+	access_action ("Main/Open");
+	return on;
+}
+
+LedState
+MackieControlProtocol::open_release (Button &)
+{
+	return off;
 }
 
 LedState
@@ -459,13 +517,65 @@ MackieControlProtocol::marker_release (Button &)
 
 	samplepos_t where = session->audible_sample();
 
-	if (session->transport_stopped() && session->locations()->mark_at (where, session->sample_rate() / 100.0)) {
+	if (session->transport_stopped_or_stopping() && session->locations()->mark_at (timepos_t (where), timecnt_t (session->sample_rate() / 100.0))) {
 		return off;
 	}
 
 	session->locations()->next_available_name (markername,"mark");
 	add_marker (markername);
 
+	return off;
+}
+
+LedState
+MackieControlProtocol::prev_marker_press (Button &)
+{
+	prev_marker ();
+	return on;
+}
+
+LedState
+MackieControlProtocol::prev_marker_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::next_marker_press (Button &)
+{
+	next_marker ();
+	return on;
+}
+
+LedState
+MackieControlProtocol::next_marker_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::flip_window_press (Button &)
+{
+	access_action("Common/toggle-editor-and-mixer");
+	return on;
+}
+
+LedState
+MackieControlProtocol::flip_window_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::master_press (Button &)
+{
+	_master_surface->toggle_master_monitor ();
+	return on;
+}
+
+LedState
+MackieControlProtocol::master_release (Button &)
+{
 	return off;
 }
 
@@ -488,7 +598,7 @@ MackieControlProtocol::stop_press (Button &)
 LedState
 MackieControlProtocol::stop_release (Button &)
 {
-	return session->transport_stopped();
+	return session->transport_stopped_or_stopping();
 }
 
 LedState
@@ -498,7 +608,7 @@ MackieControlProtocol::play_press (Button &)
 	   again, jump back to where we started last time
 	*/
 
-	transport_play (session->transport_speed() == 1.0);
+	transport_play (get_transport_speed() == 1.0);
 	return none;
 }
 
@@ -567,7 +677,7 @@ LedState
 MackieControlProtocol::loop_press (Button &)
 {
 	if (main_modifier_state() & MODIFIER_SHIFT) {
-		access_action ("Common/set-loop-from-edit-range");
+		access_action ("Editor/set-loop-from-edit-range");
 		return off;
 	} else {
 		bool was_on = session->get_play_loop();
@@ -588,7 +698,7 @@ MackieControlProtocol::enter_press (Button &)
 	if (main_modifier_state() & MODIFIER_SHIFT) {
 		access_action ("Transport/ToggleFollowEdits");
 	} else {
-		access_action ("Editor/select-all-tracks");
+		access_action ("Common/select-all-tracks");
 	}
 	return none;
 }
@@ -602,7 +712,7 @@ MackieControlProtocol::enter_release (Button &)
 LedState
 MackieControlProtocol::bank_release (Button& b, uint32_t basic_bank_num)
 {
-	if (_subview_mode != None) {
+	if (_subview->subview_mode() != MACKIE_NAMESPACE::Subview::None) {
 		return none;
 	}
 
@@ -707,7 +817,7 @@ LedState
 MackieControlProtocol::pan_press (Button &)
 {
 	/* XXX eventually pan may have its own subview mode */
-	set_subview_mode (MackieControlProtocol::None, boost::shared_ptr<Stripable>());
+	set_subview_mode (MACKIE_NAMESPACE::Subview::None, std::shared_ptr<Stripable>());
 	return none;
 }
 LedState
@@ -718,7 +828,8 @@ MackieControlProtocol::pan_release (Button &)
 LedState
 MackieControlProtocol::plugin_press (Button &)
 {
-	return off;
+	set_subview_mode (Subview::Plugin, first_selected_stripable());
+	return none;
 }
 LedState
 MackieControlProtocol::plugin_release (Button &)
@@ -730,7 +841,7 @@ MackieControlProtocol::plugin_release (Button &)
 LedState
 MackieControlProtocol::eq_press (Button &)
 {
-	set_subview_mode (EQ, first_selected_stripable ());
+	set_subview_mode (Subview::EQ, first_selected_stripable ());
 	return none; /* led state handled by set_subview_mode() */
 
 }
@@ -742,7 +853,7 @@ MackieControlProtocol::eq_release (Button &)
 LedState
 MackieControlProtocol::dyn_press (Button &)
 {
-	set_subview_mode (Dynamics, first_selected_stripable ());
+	set_subview_mode (Subview::Dynamics, first_selected_stripable ());
 	return none; /* led state handled by set_subview_mode() */
 }
 
@@ -754,7 +865,7 @@ MackieControlProtocol::dyn_release (Button &)
 LedState
 MackieControlProtocol::flip_press (Button &)
 {
-	if (subview_mode() == MackieControlProtocol::Sends) {
+	if (_subview->permit_flipping_faders_and_pots()) {
 		if (_flip_mode != Normal) {
 			set_flip_mode (Normal);
 		} else {
@@ -810,7 +921,7 @@ MackieControlProtocol::cancel_release (Button &)
 LedState
 MackieControlProtocol::user_a_press (Button &)
 {
-	transport_play (session->transport_speed() == 1.0);
+	transport_play (get_transport_speed() == 1.0);
 	return off;
 }
 LedState
@@ -831,63 +942,64 @@ MackieControlProtocol::user_b_release (Button &)
 }
 
 LedState
-MackieControlProtocol::master_fader_touch_press (Mackie::Button &)
+MackieControlProtocol::master_fader_touch_press (MACKIE_NAMESPACE::Button &)
 {
-	DEBUG_TRACE (DEBUG::MackieControl, "MackieControlProtocol::master_fader_touch_press\n");
+	if (_master_surface && _master_surface->master_fader() != 0) {
+		DEBUG_TRACE (DEBUG::MackieControl, "MackieControlProtocol::master_fader_touch_press\n");
 
-	Fader* master_fader = _master_surface->master_fader();
+		Fader* master_fader = _master_surface->master_fader();
 
-	boost::shared_ptr<AutomationControl> ac = master_fader->control ();
-
-	master_fader->set_in_use (true);
-	master_fader->start_touch (transport_sample());
-
+		master_fader->set_in_use (true);
+		master_fader->start_touch (timepos_t (transport_sample()));
+	}
 	return none;
 }
 LedState
-MackieControlProtocol::master_fader_touch_release (Mackie::Button &)
+MackieControlProtocol::master_fader_touch_release (MACKIE_NAMESPACE::Button &)
 {
-	DEBUG_TRACE (DEBUG::MackieControl, "MackieControlProtocol::master_fader_touch_release\n");
+	if (_master_surface && _master_surface->master_fader() != 0) {
+		DEBUG_TRACE (DEBUG::MackieControl, "MackieControlProtocol::master_fader_touch_release\n");
 
-	Fader* master_fader = _master_surface->master_fader();
+		Fader* master_fader = _master_surface->master_fader();
 
-	master_fader->set_in_use (false);
-	master_fader->stop_touch (transport_sample());
+		master_fader->set_in_use (false);
+		master_fader->stop_touch (timepos_t (transport_sample()));
 
+	}
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::read_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::read_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::read_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::read_release (MACKIE_NAMESPACE::Button&)
 {
 	set_automation_state (ARDOUR::Play);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::write_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::write_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::write_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::write_release (MACKIE_NAMESPACE::Button&)
 {
 	set_automation_state (ARDOUR::Write);
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::clearsolo_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::clearsolo_press (MACKIE_NAMESPACE::Button&)
 {
 	// clears all solos and listens (pfl/afl)
 
 	if (main_modifier_state() & MODIFIER_SHIFT) {
-		access_action ("Common/set-session-from-edit-range");
+		access_action ("Editor/set-session-from-edit-range");
 		return none;
 	}
 
@@ -895,156 +1007,153 @@ MackieControlProtocol::clearsolo_press (Mackie::Button&)
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::clearsolo_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::clearsolo_release (MACKIE_NAMESPACE::Button&)
 {
 	//return session->soloing();
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::track_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::track_press (MACKIE_NAMESPACE::Button&)
 {
-	set_subview_mode (TrackView, first_selected_stripable());
+	set_subview_mode (Subview::TrackView, first_selected_stripable());
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::track_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::track_release (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::send_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::send_press (MACKIE_NAMESPACE::Button&)
 {
-	set_subview_mode (Sends, first_selected_stripable());
+	set_subview_mode (Subview::Sends, first_selected_stripable());
 	return none; /* led state handled by set_subview_mode() */
 }
-Mackie::LedState
-MackieControlProtocol::send_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::send_release (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::miditracks_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::miditracks_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::miditracks_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::miditracks_release (MACKIE_NAMESPACE::Button&)
 {
 	set_view_mode (MidiTracks);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::inputs_press (Mackie::Button&)
-{
-#ifdef MIXBUS
-	set_view_mode (Mixer);  //in Mixbus, this is the same as Global View (avoid dead buttons)
-#endif
-	return none;
-}
-Mackie::LedState
-MackieControlProtocol::inputs_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::inputs_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::audiotracks_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::inputs_release (MACKIE_NAMESPACE::Button&)
+{
+	set_view_mode (Inputs);
+	return none;
+}
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::audiotracks_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::audiotracks_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::audiotracks_release (MACKIE_NAMESPACE::Button&)
 {
 	set_view_mode (AudioTracks);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::audioinstruments_press (Mackie::Button& b)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::audioinstruments_press (MACKIE_NAMESPACE::Button& b)
 {
-#ifdef MIXBUS
-	set_view_mode (MidiTracks);  //in Mixbus, we do the same thing as MIDI Tracks ( aviod dead buttons )
-#endif
 	return none;
 }
 
-Mackie::LedState
-MackieControlProtocol::audioinstruments_release (Mackie::Button& b)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::audioinstruments_release (MACKIE_NAMESPACE::Button& b)
 {
+	set_view_mode (AudioInstr);
 	return none;
 
 }
-Mackie::LedState
-MackieControlProtocol::aux_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::aux_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::aux_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::aux_release (MACKIE_NAMESPACE::Button&)
 {
 	set_view_mode (Auxes);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::busses_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::busses_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::busses_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::busses_release (MACKIE_NAMESPACE::Button&)
 {
 	set_view_mode (Busses);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::outputs_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::outputs_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::outputs_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::outputs_release (MACKIE_NAMESPACE::Button&)
 {
-	set_view_mode (Hidden);
+	set_view_mode (Outputs);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::user_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::user_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::user_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::user_release (MACKIE_NAMESPACE::Button&)
 {
 	set_view_mode (Selected);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::trim_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::trim_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::trim_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::trim_release (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::latch_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::latch_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::latch_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::latch_release (MACKIE_NAMESPACE::Button&)
+{
+	set_automation_state (ARDOUR::Latch);
+	return none;
+}
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::grp_press (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::grp_press (Mackie::Button&)
-{
-	return none;
-}
-Mackie::LedState
-MackieControlProtocol::grp_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::grp_release (MACKIE_NAMESPACE::Button&)
 {
 	/* There is no "Off" button for automation,
 	   so we use Group for this purpose.
@@ -1052,15 +1161,15 @@ MackieControlProtocol::grp_release (Mackie::Button&)
 	set_automation_state (Off);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::nudge_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::nudge_press (MACKIE_NAMESPACE::Button&)
 {
 	_modifier_state |= MODIFIER_NUDGE;
 	nudge_modifier_consumed_by_button = false;
 	return on;
 }
-Mackie::LedState
-MackieControlProtocol::nudge_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::nudge_release (MACKIE_NAMESPACE::Button&)
 {
 	_modifier_state &= ~MODIFIER_NUDGE;
 
@@ -1076,8 +1185,8 @@ MackieControlProtocol::nudge_release (Mackie::Button&)
 
 	return off;
 }
-Mackie::LedState
-MackieControlProtocol::replace_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::replace_press (MACKIE_NAMESPACE::Button&)
 {
 	if (main_modifier_state() == MODIFIER_SHIFT) {
 		toggle_punch_out();
@@ -1087,36 +1196,169 @@ MackieControlProtocol::replace_press (Mackie::Button&)
 	}
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::replace_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::replace_release (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::click_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::click_press (MACKIE_NAMESPACE::Button&)
 {
 	if (main_modifier_state() & MODIFIER_SHIFT) {
-		access_action ("Common/set-punch-from-edit-range");
-		return off;
+		access_action ("Editor/set-punch-from-edit-range");
+		return none;
 	} else {
 		bool state = !Config->get_clicking();
 		Config->set_clicking (state);
-		return state;
+		return none;
 	}
 }
-Mackie::LedState
-MackieControlProtocol::click_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::click_release (MACKIE_NAMESPACE::Button&)
 {
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::view_press (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::view_press (MACKIE_NAMESPACE::Button&)
 {
 	set_view_mode (Mixer);
 	return none;
 }
-Mackie::LedState
-MackieControlProtocol::view_release (Mackie::Button&)
+MACKIE_NAMESPACE::LedState
+MackieControlProtocol::view_release (MACKIE_NAMESPACE::Button&)
 {
 	return none;
+}
+
+/////////////////////////////////////
+// QCon Pro G2 Buttons
+/////////////////////////////////////
+
+LedState
+MackieControlProtocol::prog2_undo_press (Button &)
+{
+	if(main_modifier_state () & MODIFIER_SHIFT) {
+		access_action ("Common/menu-show-preferences");
+		return on;
+	}
+	undo ();
+	return on;
+}
+
+LedState
+MackieControlProtocol::prog2_undo_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::prog2_clear_solo_press (Button &)
+{
+	if (main_modifier_state() & MODIFIER_SHIFT) {
+
+		StripableList sl;
+		session->get_stripables (sl);
+		for (StripableList::const_iterator i = sl.begin(); i != sl.end(); ++i)
+		{
+			std::shared_ptr<MuteControl> mc = (*i)->mute_control();
+			if (!mc->muted() && !(*i)->is_singleton ()) {
+				mc->set_value(1.0, Controllable::UseGroup);
+			}
+		}
+
+		return none;   
+	}
+	cancel_all_solo ();
+	return none;
+}
+
+LedState
+MackieControlProtocol::prog2_clear_solo_release (Button &)
+{
+	return none;
+}
+
+LedState
+MackieControlProtocol::prog2_save_press (Button &)
+{
+	if (main_modifier_state() & MODIFIER_SHIFT)
+	{
+		access_action("Main/SaveAs");
+		return on;
+	}
+	save_state ();
+	return on;
+}
+
+LedState
+MackieControlProtocol::prog2_save_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::prog2_vst_press (Button &)
+{
+	access_action("Mixer/select-all-processors");
+	access_action("Mixer/toggle-processors");
+
+	return on;
+}
+
+LedState
+MackieControlProtocol::prog2_vst_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::prog2_left_press (Button &)
+{
+	access_action("Mixer/select-prev-stripable");
+	return on;
+}
+
+LedState
+MackieControlProtocol::prog2_left_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::prog2_right_press (Button &)
+{
+	access_action("Mixer/select-next-stripable");
+	return on;
+}
+
+LedState
+MackieControlProtocol::prog2_right_release (Button &)
+{
+	return off;
+}
+
+LedState
+MackieControlProtocol::prog2_marker_press (Button &)
+{
+	if (main_modifier_state() & MODIFIER_SHIFT) {
+		access_action ("Common/remove-location-from-playhead");
+		return on;
+	}
+
+	samplepos_t where = session->audible_sample();
+	if (session->transport_stopped_or_stopping() && session->locations()->mark_at (timepos_t (where), timecnt_t (session->sample_rate() / 100.0))) {
+		return on;
+	}
+
+	string markername;
+	session->locations()->next_available_name (markername,"mark");
+	add_marker (markername);
+
+	return on;
+}
+
+LedState
+MackieControlProtocol::prog2_marker_release (Button &)
+{
+	return off;
 }

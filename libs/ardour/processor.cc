@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -55,9 +58,9 @@ namespace ARDOUR { class Session; }
 // Always saved as Processor, but may be IOProcessor or Send in legacy sessions
 const string Processor::state_node_name = "Processor";
 
-Processor::Processor(Session& session, const string& name)
+Processor::Processor(Session& session, const string& name, Temporal::TimeDomainProvider const & tdp)
 	: SessionObject(session, name)
-	, Automatable (session)
+	, Automatable (session, tdp)
 	, _pending_active(false)
 	, _active(false)
 	, _next_ab_is_active(false)
@@ -79,7 +82,7 @@ Processor::Processor(Session& session, const string& name)
 Processor::Processor (const Processor& other)
 	: Evoral::ControlSet (other)
 	, SessionObject (other.session(), other.name())
-	, Automatable (other.session())
+	, Automatable (other.session(), other)
 	, Latent (other)
 	, _pending_active(other._pending_active)
 	, _active(other._active)
@@ -105,7 +108,7 @@ Processor::~Processor ()
 }
 
 XMLNode&
-Processor::get_state (void)
+Processor::get_state () const
 {
 	return state ();
 }
@@ -125,7 +128,7 @@ Processor::get_state (void)
 */
 
 XMLNode&
-Processor::state ()
+Processor::state () const
 {
 	XMLNode* node = new XMLNode (state_node_name);
 
@@ -146,7 +149,7 @@ Processor::state ()
 		}
 	}
 
-	node->set_property("user-latency", _user_latency);
+	Latent::add_state (node);
 
 	return *node;
 }
@@ -252,7 +255,7 @@ Processor::set_state (const XMLNode& node, int version)
 		}
 	}
 
-	node.get_property ("user-latency", _user_latency);
+	Latent::set_state (node, version);
 
 	return 0;
 }
@@ -265,12 +268,15 @@ Processor::configure_io (ChanCount in, ChanCount out)
 	   Derived classes must override and set _configured_output appropriately
 	   if this is not the case
 	*/
+	bool changed = _configured_input != in || _configured_output != out;
 
 	_configured_input = in;
 	_configured_output = out;
 	_configured = true;
 
-	ConfigurationChanged (in, out); /* EMIT SIGNAL */
+	if (changed) {
+		ConfigurationChanged (in, out); /* EMIT SIGNAL */
+	}
 
 	return true;
 }
@@ -286,12 +292,12 @@ Processor::map_loop_range (samplepos_t& start, samplepos_t& end) const
 		return false;
 	}
 
-	const samplepos_t loop_end = _loop_location->end ();
+	const samplepos_t loop_end = _loop_location->end().samples ();
 	if (start < loop_end) {
 		return false;
 	}
 
-	const samplepos_t loop_start   = _loop_location->start ();
+	const samplepos_t loop_start   = _loop_location->start().samples ();
 	const samplecnt_t looplen      = loop_end - loop_start;
 	const sampleoffset_t start_off = (start - loop_start) % looplen;
 	const samplepos_t start_pos    = loop_start + start_off;

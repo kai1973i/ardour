@@ -1,31 +1,29 @@
 /*
-    Copyright (C) 2012 Paul Davis
-    Author: Robin Gareus
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-#ifndef __ardour_meterbridge_h__
-#define __ardour_meterbridge_h__
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+#pragma once
 
 #include <glibmm/thread.h>
 
-#include <gtkmm/box.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/label.h>
-#include <gtkmm/window.h>
+#include <ytkmm/box.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/label.h>
+#include <ytkmm/window.h>
 
 #include "ardour/ardour.h"
 #include "ardour/types.h"
@@ -50,7 +48,7 @@ public:
 
 	void set_session (ARDOUR::Session *);
 
-	XMLNode& get_state (void);
+	XMLNode& get_state () const;
 	int set_state (const XMLNode& );
 
 	void show_window ();
@@ -81,7 +79,7 @@ private:
 
 	void session_going_away ();
 	void sync_order_keys ();
-	void resync_order ();
+	void resync_order (PBD::PropertyChange what_changed = ARDOUR::Properties::order);
 	mutable Glib::Threads::Mutex _resync_mutex;
 
 	struct MeterBridgeStrip {
@@ -97,8 +95,8 @@ private:
 	struct MeterOrderRouteSorter
 	{
 		bool operator() (struct MeterBridgeStrip ma, struct MeterBridgeStrip mb) {
-			boost::shared_ptr<ARDOUR::Route> a = ma.s->route();
-			boost::shared_ptr<ARDOUR::Route> b = mb.s->route();
+			std::shared_ptr<ARDOUR::Route> a = ma.s->route();
+			std::shared_ptr<ARDOUR::Route> b = mb.s->route();
 			if (a->is_master() || a->is_monitor()) {
 				/* "a" is a special route (master, monitor, etc), and comes
 				 * last in the mixer ordering
@@ -131,10 +129,9 @@ private:
 	void update_title ();
 
 	// for restoring window geometry.
-	int m_root_x, m_root_y, m_width, m_height;
+	mutable int m_root_x, m_root_y, m_width, m_height;
 
 	void set_window_pos_and_size ();
-	void get_window_pos_and_size ();
 
 	bool on_key_press_event (GdkEventKey*);
 	bool on_key_release_event (GdkEventKey*);
@@ -154,6 +151,7 @@ private:
 
 	int _mm_left, _mm_right;
 	ARDOUR::MeterType _mt_left, _mt_right;
+
+	bool on_configure_event (GdkEventConfigure* conf);
 };
 
-#endif

@@ -1,30 +1,31 @@
 /*
-    Copyright (C) 2011 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/menu.h>
-#include <gtkmm/menushell.h>
-#include <gtkmm/treeview.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/menushell.h>
+#include <ytkmm/treeview.h>
 
 #include "pbd/strsplit.h"
 #include "pbd/xml++.h"
 
+#include "context_menu_helper.h"
 #include "visibility_group.h"
 
 #include "pbd/i18n.h"
@@ -49,7 +50,7 @@ VisibilityGroup::VisibilityGroup (std::string const & name)
  */
 
 void
-VisibilityGroup::add (Gtk::Widget* widget, string const & id, string const & name, bool visible, boost::function<boost::optional<bool> ()> override)
+VisibilityGroup::add (Gtk::Widget* widget, string const & id, string const & name, bool visible, std::function<std::optional<bool> ()> override)
 {
 	Member m;
 	m.widget = widget;
@@ -69,16 +70,9 @@ VisibilityGroup::button_press_event (GdkEventButton* ev)
 		return false;
 	}
 
-	menu()->popup (1, ev->time);
-	return true;
-}
-
-Gtk::Menu*
-VisibilityGroup::menu ()
-{
 	using namespace Gtk::Menu_Helpers;
 
-	Gtk::Menu* m = Gtk::manage (new Gtk::Menu);
+	Gtk::Menu* m = ARDOUR_UI_UTILS::shared_popup_menu ();
 	MenuList& items = m->items ();
 
 	for (vector<Member>::iterator i = _members.begin(); i != _members.end(); ++i) {
@@ -88,17 +82,19 @@ VisibilityGroup::menu ()
 		j->signal_activate().connect (sigc::bind (sigc::mem_fun (*this, &VisibilityGroup::toggle), i));
 	}
 
-	return m;
+	m->popup (ev->button, ev->time);
+	return true;
 }
+
 
 /** @return true if the member should be visible, even taking into account any override functor */
 bool
 VisibilityGroup::should_actually_be_visible (Member const & m) const
 {
 	if (m.override) {
-		boost::optional<bool> o = m.override ();
+		std::optional<bool> o = m.override ();
 		if (o) {
-			return o.get ();
+			return o.value ();
 		}
 	}
 

@@ -1,51 +1,54 @@
 /*
-    Copyright (C) 2009-2011 Paul Davis
-    Author: David Robillard
+ * Copyright (C) 2009-2016 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __ardour_uri_map_h__
-#define __ardour_uri_map_h__
+#pragma once
 
 #include <map>
 
-#include <boost/utility.hpp>
-
 #include <glibmm/threads.h>
 
-#include "lv2.h"
-#include "lv2/lv2plug.in/ns/ext/uri-map/uri-map.h"
-#include "lv2/lv2plug.in/ns/ext/urid/urid.h"
+#ifdef HAVE_LV2_1_18_6
+#include <lv2/core/lv2.h>
+#include <lv2/urid/urid.h>
+#else
+#include <lv2/lv2plug.in/ns/lv2core/lv2.h>
+#include <lv2/lv2plug.in/ns/ext/urid/urid.h>
+#endif
 
 #include "ardour/libardour_visibility.h"
 
 namespace ARDOUR {
 
-/** Implementation of the LV2 uri-map and urid extensions.
+/** Implementation of the LV2 urid extension.
  *
  * This just uses a pair of std::map and is not so great in the space overhead
  * department, but it's fast enough and not really performance critical anyway.
  */
-class LIBARDOUR_API URIMap : public boost::noncopyable {
+class LIBARDOUR_API URIMap {
 public:
 	static URIMap& instance();
 
 	URIMap();
+	URIMap(const URIMap&) = delete;
+	URIMap& operator=(const URIMap&) = delete;
 
-	LV2_Feature* uri_map_feature()    { return &_uri_map_feature; }
 	LV2_Feature* urid_map_feature()   { return &_urid_map_feature; }
 	LV2_Feature* urid_unmap_feature() { return &_urid_unmap_feature; }
 
@@ -66,7 +69,10 @@ public:
 		uint32_t atom_URID;
 		uint32_t atom_Blank;
 		uint32_t atom_Object;
+		uint32_t atom_Double;
 		uint32_t atom_Float;
+		uint32_t atom_Long;
+		uint32_t atom_Int;
 		uint32_t log_Error;
 		uint32_t log_Note;
 		uint32_t log_Trace;
@@ -78,8 +84,9 @@ public:
 		uint32_t time_beatUnit;
 		uint32_t time_beatsPerBar;
 		uint32_t time_beatsPerMinute;
-		uint32_t time_sample;
+		uint32_t time_frame;
 		uint32_t time_speed;
+		uint32_t time_scale;
 		uint32_t patch_Get;
 		uint32_t patch_Set;
 		uint32_t patch_property;
@@ -93,6 +100,32 @@ public:
 		uint32_t auto_end;
 		uint32_t auto_parameter;
 		uint32_t auto_value;
+		uint32_t surr_MetaData;
+		uint32_t surr_Channel;
+		uint32_t surr_PosX;
+		uint32_t surr_PosY;
+		uint32_t surr_PosZ;
+		uint32_t surr_Size;
+		uint32_t surr_Snap;
+		uint32_t surr_ElevEn;
+		uint32_t surr_Zones;
+		uint32_t surr_Ramp;
+		uint32_t surr_Settings;
+		uint32_t surr_BinauralRenderMode;
+		uint32_t surr_ChannelCount;
+		uint32_t surr_ChannelDescription;
+		uint32_t surr_ChannelTypes;
+		uint32_t surr_ChannelBedIds;
+		uint32_t surr_ProgramData;
+		uint32_t surr_ContentFFOA;
+		uint32_t surr_ContentStart;
+		uint32_t surr_ContentFPS;
+		uint32_t surr_DownmixMode;
+		uint32_t surr_OutputFormat;
+		uint32_t surr_WarpMode;
+		uint32_t surr_ExportStart;
+		uint32_t surr_ExportStop;
+		uint32_t surr_ReferenceFile;
 #endif
 	};
 
@@ -105,8 +138,6 @@ private:
 	Map   _map;
 	Unmap _unmap;
 
-	LV2_Feature         _uri_map_feature;
-	LV2_URI_Map_Feature _uri_map_feature_data;
 	LV2_Feature         _urid_map_feature;
 	LV2_URID_Map        _urid_map_feature_data;
 	LV2_Feature         _urid_unmap_feature;
@@ -119,4 +150,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif // __ardour_uri_map_h__

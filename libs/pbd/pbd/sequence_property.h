@@ -1,31 +1,30 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libpbd_sequence_property_h__
-#define __libpbd_sequence_property_h__
+#pragma once
 
 #include <iostream>
 
 #include <set>
 #include <list>
 
-#include <boost/function.hpp>
 
 #include "pbd/libpbd_visibility.h"
 #include "pbd/convert.h"
@@ -36,6 +35,7 @@
 #include "pbd/error.h"
 
 namespace PBD {
+class Command;
 
 /** A base class for properties whose state is a container of other
  *  things.  Its behaviour is `specialised' for this purpose in that
@@ -80,7 +80,7 @@ class /*LIBPBD_API*/ SequenceProperty : public PropertyBase
 		ChangeContainer removed;
 	};
 
-	SequenceProperty (PropertyID id, const boost::function<void(const ChangeRecord&)>& update)
+	SequenceProperty (PropertyID id, const std::function<void(const ChangeRecord&)>& update)
                 : PropertyBase (id), _update_callback (update) {}
 
         void invert () {
@@ -138,7 +138,7 @@ class /*LIBPBD_API*/ SequenceProperty : public PropertyBase
 		_changes.removed.clear ();
 	}
 
-	void apply_changes (PropertyBase const * p) {
+	void apply_change (PropertyBase const * p) {
 		const ChangeRecord& change (dynamic_cast<const SequenceProperty*> (p)->changes ());
 		update (change);
 	}
@@ -172,7 +172,7 @@ class /*LIBPBD_API*/ SequenceProperty : public PropertyBase
 			*/
 
 			for (typename ChangeContainer::const_iterator i = a->changes().added.begin(); i != a->changes().added.end(); ++i) {
-				(*i)->DropReferences.connect_same_thread (*cmd, boost::bind (&Destructible::drop_references, cmd));
+				(*i)->DropReferences.connect_same_thread (*cmd, std::bind (&Destructible::drop_references, cmd));
 			}
 		}
         }
@@ -223,7 +223,7 @@ class /*LIBPBD_API*/ SequenceProperty : public PropertyBase
 		}
 	}
 
-	void rdiff (std::vector<Command*>& cmds) const {
+	void rdiff (std::vector<PBD::Command*>& cmds) const {
 		for (typename Container::const_iterator i = begin(); i != end(); ++i) {
 			if ((*i)->changed ()) {
 				StatefulDiffCommand* sdc = new StatefulDiffCommand (*i);
@@ -358,7 +358,7 @@ protected:
 
 	Container _val; ///< our actual container of things
 	ChangeRecord _changes; ///< changes to the container (adds/removes) that have happened since clear_changes() was last called
-	boost::function<void(const ChangeRecord&)> _update_callback;
+	std::function<void(const ChangeRecord&)> _update_callback;
 
 private:
 	virtual SequenceProperty<Container>* create () const = 0;
@@ -366,4 +366,3 @@ private:
 
 }
 
-#endif /* __libpbd_sequence_property_h__ */

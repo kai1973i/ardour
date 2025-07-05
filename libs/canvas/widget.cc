@@ -1,29 +1,32 @@
 /*
-    Copyright (C) 2014 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2014-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <cairomm/context.h>
-#include "pbd/stacktrace.h"
+
 #include "pbd/compose.h"
 
 #include "canvas/canvas.h"
 #include "canvas/widget.h"
 #include "canvas/debug.h"
+
+#include "gtkmm2ext/cairo_widget.h"
 
 using namespace std;
 using namespace ArdourCanvas;
@@ -77,7 +80,6 @@ Widget::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 	//std::cerr << "Render widget " << name << " @ " << position() << endl;
 
 	if (!_bounding_box) {
-		std::cerr << "no bbox\n";
 		return;
 	}
 
@@ -85,7 +87,6 @@ Widget::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 	Rect r = self.intersection (area);
 
 	if (!r) {
-		std::cerr << "no intersection\n";
 		return;
 	}
 
@@ -109,9 +110,9 @@ Widget::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 }
 
 void
-Widget::size_allocate (Rect const & r)
+Widget::_size_allocate (Rect const & r)
 {
-	Item::size_allocate (r);
+	Item::_size_allocate (r);
 	Gtk::Allocation alloc;
 	alloc.set_x (0);
 	alloc.set_y (0);
@@ -123,24 +124,12 @@ Widget::size_allocate (Rect const & r)
 void
 Widget::compute_bounding_box () const
 {
-	std::cerr << "cbbox for widget\n";
+	if (_allocation) {
+		_bounding_box = Rect (0, 0, _allocation.width(), _allocation.height());
+	} else {
+		GtkRequisition req = _widget.size_request ();
+		_bounding_box = Rect (0., 0., req.width, req.height);
+	}
 
-	GtkRequisition req = { 0, 0 };
-	Gtk::Allocation alloc;
-
-	_widget.size_request (req);
-
-	std::cerr << "widget wants " << req.width << " x " << req.height << "\n";
-
-	_bounding_box = Rect (0, 0, req.width, req.height);
-
-	/* make sure the widget knows that it got what it asked for */
-	alloc.set_x (0);
-	alloc.set_y (0);
-	alloc.set_width (req.width);
-	alloc.set_height (req.height);
-
-	_widget.size_allocate (alloc);
-
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }

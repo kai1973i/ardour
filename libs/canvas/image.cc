@@ -1,20 +1,21 @@
 /*
-    Copyright (C) 2013 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2013-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "canvas/image.h"
 
@@ -29,7 +30,7 @@ Image::Image (Canvas* canvas, Cairo::Format fmt, int width, int height)
 	, _height (height)
 	, _need_render (false)
 {
-	DataReady.connect (data_connections, MISSING_INVALIDATOR, boost::bind (&Image::accept_data, this), gui_context());
+	DataReady.connect (data_connections, MISSING_INVALIDATOR, std::bind (&Image::accept_data, this), gui_context());
 }
 
 Image::Image (Item* parent, Cairo::Format fmt, int width, int height)
@@ -39,7 +40,7 @@ Image::Image (Item* parent, Cairo::Format fmt, int width, int height)
 	, _height (height)
 	, _need_render (false)
 {
-	DataReady.connect (data_connections, MISSING_INVALIDATOR, boost::bind (&Image::accept_data, this), gui_context());
+	DataReady.connect (data_connections, MISSING_INVALIDATOR, std::bind (&Image::accept_data, this), gui_context());
 }
 
 void
@@ -68,26 +69,26 @@ void
 Image::compute_bounding_box () const
 {
 	_bounding_box = Rect (0, 0, _width, _height);
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }
 
-boost::shared_ptr<Image::Data>
+std::shared_ptr<Image::Data>
 Image::get_image (bool allocate_data)
 {
 	/* can be called by any thread */
 
 	int stride = Cairo::ImageSurface::format_stride_for_width (_format, _width);
 	if (allocate_data)  {
-		boost::shared_ptr<Data> d (new Data (new uint8_t[stride*_height], _width, _height, stride, _format));
+		std::shared_ptr<Data> d (new Data (new uint8_t[stride*_height], _width, _height, stride, _format));
 		return d;
 	} else {
-		boost::shared_ptr<Data> d (new Data (NULL, _width, _height, stride, _format));
+		std::shared_ptr<Data> d (new Data (NULL, _width, _height, stride, _format));
 		return d;
 	}
 }
 
 void
-Image::put_image (boost::shared_ptr<Data> d)
+Image::put_image (std::shared_ptr<Data> d)
 {
 	/* can be called by any thread */
 

@@ -1,47 +1,88 @@
 # Copyright (C) YEAR "Paul Davis"
 # This file is distributed under the same license as the PACKAGE package.
 #
-# Pavel Fric <pavelfric@seznam.cz>, 2013.
+# Pavel Fric <pavelfric@seznam.cz>, 2013, 2020.
+# Martin Vlk <martin@vlkk.cz>, 2023.
 msgid ""
 msgstr ""
 "Project-Id-Version: \n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2016-07-13 18:09-0400\n"
-"PO-Revision-Date: 2013-06-13 22:33+0200\n"
-"Last-Translator: Pavel Fric <pavelfric@seznam.cz>\n"
-"Language-Team: Czech <kde-i18n-doc@kde.org>\n"
+"POT-Creation-Date: 2023-09-22 08:53+0200\n"
+"PO-Revision-Date: 2023-09-22 17:55+0200\n"
+"Last-Translator: Martin Vlk <martin@vlkk.cz>\n"
+"Language-Team: Czech <translation-team-cs@lists.sourceforge.net>\n"
 "Language: cs\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Lokalize 1.5\n"
+"X-Generator: Lokalize 21.12.3\n"
 
-#: actions.cc:261
-msgid "Unknown action name: %1"
-msgstr "Neznámý název pro činnost: %1"
+#: actions.cc:215
+msgid "Unknown action name: %1/%2"
+msgstr "Neznámý název činnosti: %1/%2"
 
-#: binding_proxy.cc:81
-msgid "operate controller now"
-msgstr "Obsluhovat ovladač nyní"
+#: action_model.cc:56 action_model.cc:171
+msgid "Disabled"
+msgstr "Zakázáno"
 
-#: bindable_button.cc:48
-msgid "button cannot watch state of non-existing Controllable\n"
-msgstr "Tlačítko nemůže sledovat stav neexistujícího ovladatelného cíle\n"
+#: action_model.cc:83
+msgid "Main_menu"
+msgstr "Main_menu"
 
-#: cursors.cc:82
+#: action_model.cc:85
+msgid "JACK"
+msgstr "JACK"
+
+#: action_model.cc:87
+msgid "redirectmenu"
+msgstr "redirectmenu"
+
+#: action_model.cc:89
+msgid "Editor_menus"
+msgstr "Editor_menus"
+
+#: action_model.cc:91
+msgid "RegionList"
+msgstr "RegionList"
+
+#: action_model.cc:93
+msgid "ProcessorMenu"
+msgstr "ProcessorMenu"
+
+#: bindings.cc:502
+msgid "Escape"
+msgstr "Escape"
+
+#: bindings.cc:852 bindings.cc:854
+msgid "Window"
+msgstr "Window"
+
+#: bindings.cc:852
+msgid " (Categorized)"
+msgstr "(Zařazeno)"
+
+#: bindings.cc:854
+msgid " (Alphabetical)"
+msgstr "(Abecedně)"
+
+#: bindings.cc:870
+msgid "Uncategorized"
+msgstr "Nezařazeno"
+
+#: cursors.cc:81
 msgid "cursor hotspots info file %1 has an error on line %2"
-msgstr ""
+msgstr "soubor s údaji o kontrolním bodu ukazatele %1 má chybu na řádku %2"
 
 #: emscale.cc:52
 msgid "ABCDEFGHIJLKMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-msgstr ""
+msgstr "ABCDEFGHIJLKMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-#: gtk_ui.cc:119
+#: gtk_ui.cc:121
 msgid "Log"
 msgstr "Zápis"
 
-#: gtk_ui.cc:388
+#: gtk_ui.cc:410
 msgid ""
 "\n"
 "\n"
@@ -49,104 +90,89 @@ msgid ""
 msgstr ""
 "\n"
 "\n"
-"Kurzbefehl: "
+"Klávesová zkratka: "
 
-#: gtk_ui.cc:688
+#: gtk_ui.cc:702
 msgid "Press To Exit"
 msgstr "Stisknout pro ukončení"
 
-#: gtk_ui.cc:724
+#: gtk_ui.cc:739
 msgid "I'm sorry %1, I can't do that"
 msgstr "Bohužel to nelze udělat, %1"
 
-#: keyboard.cc:70
+#: keyboard.cc:80
 msgid "Command"
-msgstr "Příkaz"
+msgstr "Command"
 
-#: keyboard.cc:71 keyboard.cc:93
+#: keyboard.cc:85 keyboard.cc:146
 msgid "Control"
-msgstr "Ctrl"
+msgstr "Control"
 
-#: keyboard.cc:72 keyboard.cc:77 keyboard.cc:95 keyboard.cc:100
+#: keyboard.cc:90 keyboard.cc:120 keyboard.cc:156 keyboard.cc:186
 msgid "Key|Shift"
 msgstr "Key|Shift"
 
-#: keyboard.cc:73
+#: keyboard.cc:95
 msgid "Option"
 msgstr "Volba"
 
-#: keyboard.cc:75
+#: keyboard.cc:100
+msgid "Middle Click (or Ctrl+Alt+Click)"
+msgstr "Kliknout prostředním (nebo Ctrl+Alt+Click)"
+
+#: keyboard.cc:105
+msgid "Cmd+Click (or Middle-Click)"
+msgstr "Cmd+Klik (nebo Prostřední-Click)"
+
+#: keyboard.cc:110
 msgid "Cmd"
-msgstr ""
+msgstr "Cmd"
 
-#: keyboard.cc:76 keyboard.cc:98
+#: keyboard.cc:115 keyboard.cc:176
 msgid "Ctrl"
-msgstr ""
+msgstr "Ctrl"
 
-#: keyboard.cc:78
+#: keyboard.cc:125
 msgid "Opt"
-msgstr ""
+msgstr "Opt"
 
-#: keyboard.cc:94 keyboard.cc:99
+#: keyboard.cc:151 keyboard.cc:181
 msgid "Alt"
 msgstr "Alt"
 
-#: keyboard.cc:96
+#: keyboard.cc:161
 msgid "Windows"
-msgstr ""
+msgstr "Windows"
 
-#: keyboard.cc:101
+#: keyboard.cc:166 keyboard.cc:171
+msgid "Middle-Click"
+msgstr "Prostřední-Klik"
+
+#: keyboard.cc:191
 msgid "Win"
-msgstr ""
+msgstr "Win"
 
-#: keyboard.cc:152 keyboard.cc:685
+#: keyboard.cc:287 keyboard.cc:771
 msgid "Unknown"
 msgstr "Neznámý"
 
-#: keyboard.cc:696
+#: keyboard.cc:781
 msgid "key bindings file not found at \"%2\" or contains errors."
 msgstr ""
 "Soubor s přiřazením kláves \"%2\"se nepodařilo najít, nebo obsahuje chyby."
 
-#: keyboard.cc:722
+#: keyboard.cc:807
 msgid "Keyboard binding found without a name"
-msgstr ""
+msgstr "Nalezeno přiřazení kláves bez názvu"
 
-#: keyboard.cc:752
+#: keyboard.cc:839
 msgid "Cannot save key bindings to %1"
-msgstr ""
+msgstr "Přiřazení kláves nelze uložit do %1"
 
-#: keyboard.cc:768
+#: keyboard.cc:854
 msgid "Cannot rename your own keybinding file (%1)"
-msgstr ""
-
-#: paths_dialog.cc:32
-msgid "Add"
-msgstr ""
-
-#: paths_dialog.cc:33
-msgid "Delete"
-msgstr ""
-
-#: paths_dialog.cc:34
-msgid "Reset to Default"
-msgstr ""
-
-#: paths_dialog.cc:109
-msgid "Add folder to search path"
-msgstr ""
-
-#: tearoff.cc:57
-msgid "Click to tear this into its own window"
-msgstr "Klepněte pro odtržení do vlastního okna"
-
-#: tearoff.cc:63
-msgid "Click to put this back in the main window"
-msgstr "Klepněte pro ukotvení do hlavního okna"
+msgstr "Nelze přejmenovat váš vlastní soubor s přiřazením kláves (%1)"
 
 #: textviewer.cc:32
 msgid "Close"
 msgstr "Zavřít"
-
-#~ msgid "Meta"
-#~ msgstr "Meta"

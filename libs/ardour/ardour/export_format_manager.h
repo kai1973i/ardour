@@ -1,30 +1,30 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2013 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2012 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2013-2014 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2016-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_export_format_manager_h__
-#define __ardour_export_format_manager_h__
+#pragma once
 
 #include <list>
+#include <memory>
 #include <string>
-
-#include <boost/shared_ptr.hpp>
 
 #include "pbd/signals.h"
 
@@ -61,8 +61,8 @@ class LIBARDOUR_API ExportFormatManager : public PBD::ScopedConnectionList
 			quality (quality) { set_name (name); }
 		ExportFormatBase::Quality  quality;
 	};
-	typedef boost::shared_ptr<QualityState> QualityPtr;
-	typedef boost::weak_ptr<QualityState> WeakQualityPtr;
+	typedef std::shared_ptr<QualityState> QualityPtr;
+	typedef std::weak_ptr<QualityState> WeakQualityPtr;
 	typedef std::list<QualityPtr> QualityList;
 
 	/* Sample rate states */
@@ -73,8 +73,8 @@ class LIBARDOUR_API ExportFormatManager : public PBD::ScopedConnectionList
 			: rate (rate) { set_name (name); }
 		ExportFormatBase::SampleRate  rate;
 	};
-	typedef boost::shared_ptr<SampleRateState> SampleRatePtr;
-	typedef boost::weak_ptr<SampleRateState> WeakSampleRatePtr;
+	typedef std::shared_ptr<SampleRateState> SampleRatePtr;
+	typedef std::weak_ptr<SampleRateState> WeakSampleRatePtr;
 	typedef std::list<SampleRatePtr> SampleRateList;
 
   public:
@@ -84,8 +84,8 @@ class LIBARDOUR_API ExportFormatManager : public PBD::ScopedConnectionList
 
 	/* Signals */
 
-	PBD::Signal1<void,bool> CompleteChanged;
-	PBD::Signal0<void> DescriptionChanged;
+	PBD::Signal<void(bool)> CompleteChanged;
+	PBD::Signal<void()> DescriptionChanged;
 
 	/* Access to lists */
 
@@ -104,16 +104,21 @@ class LIBARDOUR_API ExportFormatManager : public PBD::ScopedConnectionList
 	void select_upload (bool);
 	void set_command (std::string);
 	void select_src_quality (ExportFormatBase::SRCQuality value);
+	void select_codec_quality (int);
 	void select_trim_beginning (bool value);
 	void select_silence_beginning (AnyTime const & time);
 	void select_trim_end (bool value);
 	void select_silence_end (AnyTime const & time);
 	void select_normalize (bool value);
 	void select_normalize_loudness (bool value);
+	void select_tp_limiter (bool value);
 	void select_normalize_dbfs (float value);
 	void select_normalize_lufs (float value);
 	void select_normalize_dbtp (float value);
 	void select_tagging (bool tag);
+	void select_demo_noise_level (float value);
+	void select_demo_noise_duration (int value);
+	void select_demo_noise_interval (int value);
 
   private:
 
@@ -175,4 +180,3 @@ class LIBARDOUR_API ExportFormatManager : public PBD::ScopedConnectionList
 
 } // namespace ARDOUR
 
-#endif /* __ardour_export_format_manager_h__ */

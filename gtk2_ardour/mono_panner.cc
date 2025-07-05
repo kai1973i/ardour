@@ -1,28 +1,31 @@
 /*
-    Copyright (C) 2000-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2011-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <iomanip>
 #include <cstring>
 #include <cmath>
 
-#include <gtkmm/window.h>
+#include <ytkmm/window.h>
 #include <pangomm/layout.h>
 
 #include "pbd/compose.h"
@@ -58,7 +61,7 @@ bool MonoPanner::have_colors = false;
 Pango::AttrList MonoPanner::panner_font_attributes;
 bool            MonoPanner::have_font = false;
 
-MonoPanner::MonoPanner (boost::shared_ptr<ARDOUR::PannerShell> p)
+MonoPanner::MonoPanner (std::shared_ptr<ARDOUR::PannerShell> p)
 	: PannerInterface (p->panner())
 	, _panner_shell (p)
 	, position_control (_panner->pannable()->pan_azimuth_control)
@@ -83,10 +86,10 @@ MonoPanner::MonoPanner (boost::shared_ptr<ARDOUR::PannerShell> p)
 		have_font = true;
 	}
 
-	position_control->Changed.connect (panvalue_connections, invalidator(*this), boost::bind (&MonoPanner::value_change, this), gui_context());
+	position_control->Changed.connect (panvalue_connections, invalidator(*this), std::bind (&MonoPanner::value_change, this), gui_context());
 
-	_panner_shell->Changed.connect (panshell_connections, invalidator (*this), boost::bind (&MonoPanner::bypass_handler, this), gui_context());
-	_panner_shell->PannableChanged.connect (panshell_connections, invalidator (*this), boost::bind (&MonoPanner::pannable_handler, this), gui_context());
+	_panner_shell->Changed.connect (panshell_connections, invalidator (*this), std::bind (&MonoPanner::bypass_handler, this), gui_context());
+	_panner_shell->PannableChanged.connect (panshell_connections, invalidator (*this), std::bind (&MonoPanner::pannable_handler, this), gui_context());
 	UIConfiguration::instance().ColorsChanged.connect (sigc::mem_fun (*this, &MonoPanner::color_handler));
 
 	set_tooltip ();
@@ -110,7 +113,7 @@ MonoPanner::set_tooltip ()
 		 This is expressed as a pair of percentage values that ranges from (100,0)
 		 (hard left) through (50,50) (hard center) to (0,100) (hard right).
 
-		 This is pretty wierd, but its the way audio engineers expect it. Just remember that
+		 This is pretty weird, but its the way audio engineers expect it. Just remember that
 		 the center of the USA isn't Kansas, its (50LA, 50NY) and it will all make sense.
 		 */
 
@@ -144,8 +147,8 @@ MonoPanner::on_expose_event (GdkEventExpose*)
 	o = colors.outline;
 	f = colors.fill;
 	t = colors.text;
-	b = colors.background;
-	pf = colors.pos_fill;
+	b = _send_mode ? colors.send_bg : colors.background;
+	pf = (_send_mode && !_panner_shell->is_linked_to_route()) ? colors.send_pan : colors.pos_fill;
 	po = colors.pos_outline;
 
 	if (_panner_shell->bypassed()) {
@@ -157,9 +160,6 @@ MonoPanner::on_expose_event (GdkEventExpose*)
 		t  = 0x606060ff;
 	}
 
-	if (_send_mode) {
-		b = UIConfiguration::instance().color ("send bg");
-	}
 	/* background */
 	context->set_source_rgba (UINT_RGBA_R_FLT(b), UINT_RGBA_G_FLT(b), UINT_RGBA_B_FLT(b), UINT_RGBA_A_FLT(b));
 	context->rectangle (0, 0, width, height);
@@ -207,7 +207,7 @@ MonoPanner::on_expose_event (GdkEventExpose*)
 
 	/* right box */
 	rounded_right_half_rectangle (context,
-			right - half_lr_box - .5,
+			right - half_lr_box + .5,
 			half_lr_box + step_down,
 			lr_box_size, lr_box_size, corner_radius);
 	context->set_source_rgba (UINT_RGBA_R_FLT(f), UINT_RGBA_G_FLT(f), UINT_RGBA_B_FLT(f), UINT_RGBA_A_FLT(f));
@@ -419,9 +419,8 @@ MonoPanner::on_motion_notify_event (GdkEventMotion* ev)
 	int w = get_width();
 	double delta = (ev->x - last_drag_x) / (double) w;
 
-	/* create a detent close to the center */
-
-	if (!detented && ARDOUR::Panner::equivalent (position_control->get_value(), 0.5)) {
+	/* create a detent close to the center, at approx 1/180 deg */
+	if (!detented && fabs (position_control->get_value() - .5) < 0.006) {
 		detented = true;
 		/* snap to center */
 		position_control->set_value (0.5, Controllable::NoGroup);
@@ -432,10 +431,10 @@ MonoPanner::on_motion_notify_event (GdkEventMotion* ev)
 
 		/* have we pulled far enough to escape ? */
 
-		if (fabs (accumulated_delta) >= 0.025) {
-			position_control->set_value (position_control->get_value() + accumulated_delta, Controllable::NoGroup);
+		if (fabs (accumulated_delta) >= 0.048) {
+			position_control->set_value (position_control->get_value() + (accumulated_delta > 0 ? 0.006 : -0.006), Controllable::NoGroup);
 			detented = false;
-			accumulated_delta = false;
+			accumulated_delta = 0;
 		}
 	} else {
 		double pv = position_control->get_value(); // 0..1.0 ; 0 = left
@@ -486,12 +485,14 @@ MonoPanner::on_key_press_event (GdkEventKey* ev)
 void
 MonoPanner::set_colors ()
 {
-	colors.fill = UIConfiguration::instance().color_mod ("mono panner fill", "panner fill");
-	colors.outline = UIConfiguration::instance().color ("mono panner outline");
-	colors.text = UIConfiguration::instance().color ("mono panner text");
-	colors.background = UIConfiguration::instance().color ("mono panner bg");
+	colors.fill        = UIConfiguration::instance().color_mod ("mono panner fill", "panner fill");
+	colors.outline     = UIConfiguration::instance().color ("mono panner outline");
+	colors.text        = UIConfiguration::instance().color ("mono panner text");
+	colors.background  = UIConfiguration::instance().color ("mono panner bg");
 	colors.pos_outline = UIConfiguration::instance().color ("mono panner position outline");
-	colors.pos_fill = UIConfiguration::instance().color_mod ("mono panner position fill", "mono panner position fill");
+	colors.pos_fill    = UIConfiguration::instance().color_mod ("mono panner position fill", "mono panner position fill");
+	colors.send_bg     = UIConfiguration::instance().color ("send bg");
+	colors.send_pan    = UIConfiguration::instance().color ("send pan");
 }
 
 void
@@ -513,7 +514,7 @@ MonoPanner::pannable_handler ()
 	panvalue_connections.drop_connections();
 	position_control = _panner->pannable()->pan_azimuth_control;
 	position_binder.set_controllable(position_control);
-	position_control->Changed.connect (panvalue_connections, invalidator(*this), boost::bind (&MonoPanner::value_change, this), gui_context());
+	position_control->Changed.connect (panvalue_connections, invalidator(*this), std::bind (&MonoPanner::value_change, this), gui_context());
 	queue_draw ();
 }
 

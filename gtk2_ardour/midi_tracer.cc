@@ -1,25 +1,28 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013 Michael Fisher <mfisher31@gmail.com>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <stdint.h>
-
+#include <cstdint>
 #include <sstream>
+
 #include <sys/time.h>
 #include <time.h>
 
@@ -31,25 +34,29 @@
 #include "ardour/async_midi_port.h"
 #include "ardour/midi_port.h"
 #include "ardour/audioengine.h"
+#include "ardour/transport_master_manager.h"
 
 #include "midi_tracer.h"
 #include "gui_thread.h"
 #include "pbd/i18n.h"
 
+unsigned int MidiTracer::window_count = 0;
+
 using namespace Gtk;
 using namespace std;
 using namespace MIDI;
 using namespace Glib;
+using namespace ARDOUR;
 
 MidiTracer::MidiTracer ()
 	: ArdourWindow (_("MIDI Tracer"))
 	, line_count_adjustment (200, 1, 2000, 1, 10)
 	, line_count_spinner (line_count_adjustment)
 	, line_count_label (_("Line history: "))
+	, _last_receipt (0)
 	, autoscroll (true)
 	, show_hex (true)
 	, show_delta_time (false)
-	, _update_queued (0)
 	, fifo (1024)
 	, buffer_pool ("miditracer", buffer_size, 1024) // 1024 256 byte buffers
 	, autoscroll_button (_("Auto-Scroll"))
@@ -57,11 +64,18 @@ MidiTracer::MidiTracer ()
 	, collect_button (_("Enabled"))
 	, delta_time_button (_("Delta times"))
 {
-	ARDOUR::AudioEngine::instance()->PortRegisteredOrUnregistered.connect
-		(_manager_connection, invalidator (*this), boost::bind (&MidiTracer::ports_changed, this), gui_context());
+	_update_queued.store (0);
 
-	_last_receipt.tv_sec = 0;
-	_last_receipt.tv_usec = 0;
+	std::string portname (string_compose(X_("x-MIDI-tracer-%1"), ++window_count));
+	std::shared_ptr<ARDOUR::Port> port = AudioEngine::instance()->register_input_port (DataType::MIDI, portname, false,  PortFlags (IsInput | Hidden | IsTerminal));
+	tracer_port                          = std::dynamic_pointer_cast<MidiPort> (port);
+
+	_midi_port_list = ListStore::create (_midi_port_cols);
+	_midi_port_combo.set_model (_midi_port_list);
+	_midi_port_combo.pack_start (_midi_port_cols.pretty_name);
+
+	AudioEngine::instance()->PortRegisteredOrUnregistered.connect
+		(_manager_connection, invalidator (*this), std::bind (&MidiTracer::ports_changed, this), gui_context());
 
 	VBox* vbox = manage (new VBox);
 	vbox->set_spacing (4);
@@ -70,8 +84,8 @@ MidiTracer::MidiTracer ()
 	pbox->set_spacing (6);
 	pbox->pack_start (*manage (new Label (_("Port:"))), false, false);
 
-	_port_combo.signal_changed().connect (sigc::mem_fun (*this, &MidiTracer::port_changed));
-	pbox->pack_start (_port_combo);
+	_midi_port_combo.signal_changed().connect (sigc::mem_fun (*this, &MidiTracer::port_changed));
+	pbox->pack_start (_midi_port_combo);
 	pbox->show_all ();
 	vbox->pack_start (*pbox, false, false);
 
@@ -121,33 +135,91 @@ MidiTracer::MidiTracer ()
 	port_changed ();
 }
 
-
 MidiTracer::~MidiTracer()
 {
+	disconnect ();
+	AudioEngine::instance ()->unregister_port (tracer_port);
+}
+
+void
+MidiTracer::on_show ()
+{
+	ArdourWindow::on_show ();
+	collect_toggle ();
+}
+
+void
+MidiTracer::on_hide ()
+{
+	ArdourWindow::on_hide ();
+	disconnect ();
 }
 
 void
 MidiTracer::ports_changed ()
 {
-	string const c = _port_combo.get_active_text ();
-	_port_combo.clear ();
+	TreeModel::iterator r = _midi_port_combo.get_active ();
+	string              cpn;
+	if (r) {
+		cpn = (*r)[_midi_port_cols.port_name];
+	}
 
-	ARDOUR::PortManager::PortList pl;
-	ARDOUR::AudioEngine::instance()->get_ports (ARDOUR::DataType::MIDI, pl);
+	_midi_port_list->clear ();
 
-	if (pl.empty()) {
-		_port_combo.set_active_text ("");
+	if (!AudioEngine::instance()->running()) {
 		return;
 	}
 
-	for (ARDOUR::PortManager::PortList::const_iterator i = pl.begin(); i != pl.end(); ++i) {
-		_port_combo.append_text ((*i)->name());
+	PortManager::PortList pl;
+	AudioEngine::instance()->get_ports (DataType::MIDI, pl);
+
+	std::vector<std::string> pp;
+	AudioEngine::instance ()->get_physical_inputs (DataType::MIDI, pp, MidiPortFlags (0), MidiPortFlags (MidiPortControl | MidiPortVirtual));
+	/* ideally we'd also list external (JACK) ports
+	 * however there is no convenient API
+	 * `PortManager::get_ports (const string& port_name_pattern, DataType type, PortFlags flags, vector<string>& s)`
+	 * lists ALL ports and we'd need to filter any outputs (sinks), except our own sinks (which can be traced).
+	 */
+
+	size_t nth = 0;
+	size_t act = 0;
+
+	/* physical I/Os first */
+	for (auto const& pn : pp) {
+		if (!cpn.empty () && pn == cpn) {
+			act = nth;
+		}
+		++nth;
+		std::string ppn = AudioEngine::instance()->get_pretty_name_by_name (pn);
+		if (ppn.empty ()) {
+			ppn = pn.substr (pn.find (':') + 1);
+		}
+		TreeModel::Row row               = *_midi_port_list->append ();
+		row[_midi_port_cols.pretty_name] = string_compose (_("HW: %1"), ppn);
+		row[_midi_port_cols.port_name]   = pn;
 	}
 
-	if (c.empty()) {
-		_port_combo.set_active_text (pl.front()->name());
-	} else {
-		_port_combo.set_active_text (c);
+	/* Ardour owned ports */
+	for (auto const& p : pl) {
+		if (p->flags() & Hidden) {
+			continue;
+		}
+		std::string const& pn = p->name ();
+		if (!cpn.empty () && pn == cpn) {
+			act = nth;
+		}
+		++nth;
+		std::string ppn = p->pretty_name (false);
+		if (ppn.empty ()) {
+			ppn = pn.substr (pn.find (':') + 1);
+		}
+		TreeModel::Row row               = *_midi_port_list->append ();
+		row[_midi_port_cols.pretty_name] = ppn;
+		row[_midi_port_cols.port_name]   = pn;
+	}
+
+	if (nth > 0) {
+		_midi_port_combo.set_active (act);
 	}
 }
 
@@ -158,33 +230,60 @@ MidiTracer::port_changed ()
 
 	disconnect ();
 
-	boost::shared_ptr<ARDOUR::Port> p = AudioEngine::instance()->get_port_by_name (_port_combo.get_active_text());
-
-	if (!p) {
-		std::cerr << "port not found\n";
+	TreeModel::iterator r = _midi_port_combo.get_active ();
+	if (!r) {
 		return;
 	}
 
-	/* The inheritance heirarchy makes this messy. AsyncMIDIPort has two
+	std::string const pn = (*r)[_midi_port_cols.port_name];
+
+	std::shared_ptr<ARDOUR::Port> p = AudioEngine::instance()->get_port_by_name (pn);
+
+	if (!p) {
+		/* connect to external port */
+		if (0 == tracer_port->connect (pn)) {
+			_midi_parser = std::shared_ptr<MIDI::Parser> (new MIDI::Parser);
+			_midi_parser->any.connect_same_thread (_parser_connection, std::bind (&MidiTracer::tracer, this, _1, _2, _3, _4));
+			tracer_port->set_trace (_midi_parser);
+		} else {
+			std::cerr << "CANNOT TRACE PORT " << pn << "\n";
+		}
+		return;
+	}
+
+	/* The inheritance hierarchy makes this messy. AsyncMIDIPort has two
 	 * available MIDI::Parsers what we could connect to, ::self_parser()
 	 * (from ARDOUR::MidiPort) and ::parser() from MIDI::Port. One day,
 	 * this mess will all go away ...
 	 */
 
-	boost::shared_ptr<AsyncMIDIPort> async = boost::dynamic_pointer_cast<AsyncMIDIPort> (p);
+	/* Some ports have a parser available (Transport Masters and ASYNC ports)
+	 * and some do not. If the port has a parser already, just attach to it.
+	 * If not use our local parser and tell the port that we need it to be called.
+	 */
+
+	std::shared_ptr<AsyncMIDIPort> async = std::dynamic_pointer_cast<AsyncMIDIPort> (p);
 
 	if (!async) {
 
-		boost::shared_ptr<ARDOUR::MidiPort> mp = boost::dynamic_pointer_cast<ARDOUR::MidiPort> (p);
-
+		std::shared_ptr<MidiPort> mp = std::dynamic_pointer_cast<MidiPort> (p);
 		if (mp) {
-			mp->self_parser().any.connect_same_thread (_parser_connection, boost::bind (&MidiTracer::tracer, this, _1, _2, _3));
-			mp->set_trace_on (true);
-			traced_port = mp;
+			if (mp->flags() & TransportMasterPort) {
+				std::shared_ptr<TransportMaster> tm = TransportMasterManager::instance().master_by_port(std::dynamic_pointer_cast<ARDOUR::Port> (p));
+				std::shared_ptr<TransportMasterViaMIDI> tm_midi = std::dynamic_pointer_cast<TransportMasterViaMIDI> (tm);
+				if (tm_midi) {
+					tm_midi->transport_parser().any.connect_same_thread(_parser_connection, std::bind (&MidiTracer::tracer, this, _1, _2, _3, _4));
+				}
+			} else {
+				_midi_parser = std::shared_ptr<MIDI::Parser> (new MIDI::Parser);
+				_midi_parser->any.connect_same_thread (_parser_connection, std::bind (&MidiTracer::tracer, this, _1, _2, _3, _4));
+				mp->set_trace (_midi_parser);
+				traced_port = mp;
+			}
 		}
 
 	} else {
-		async->parser()->any.connect_same_thread (_parser_connection, boost::bind (&MidiTracer::tracer, this, _1, _2, _3));
+		async->parser()->any.connect_same_thread (_parser_connection, std::bind (&MidiTracer::tracer, this, _1, _2, _3, _4));
 	}
 }
 
@@ -193,41 +292,36 @@ MidiTracer::disconnect ()
 {
 	_parser_connection.disconnect ();
 
+	tracer_port->disconnect_all ();
+	tracer_port->set_trace (std::weak_ptr<MIDI::Parser>());
+
 	if (traced_port) {
-		traced_port->set_trace_on (false);
+		traced_port->set_trace (std::weak_ptr<MIDI::Parser>());
 		traced_port.reset ();
 	}
+	_midi_parser.reset ();
 }
 
 void
-MidiTracer::tracer (Parser&, byte* msg, size_t len)
+MidiTracer::tracer (Parser&, MIDI::byte* msg, size_t len, samplecnt_t now)
 {
 	stringstream ss;
-	struct timeval tv;
 	char* buf;
-	struct tm now;
 	size_t bufsize;
 	size_t s;
-
-	gettimeofday (&tv, 0);
 
 	buf = (char *) buffer_pool.alloc ();
 	bufsize = buffer_size;
 
-	if (_last_receipt.tv_sec != 0 && show_delta_time) {
-		struct timeval delta;
-		timersub (&tv, &_last_receipt, &delta);
-		s = snprintf (buf, bufsize, "+%02" PRId64 ":%06" PRId64, (int64_t) delta.tv_sec, (int64_t) delta.tv_usec);
+	if (_last_receipt != 0 && show_delta_time) {
+		s = snprintf (buf, bufsize, "+%12" PRId64, now - _last_receipt);
 		bufsize -= s;
 	} else {
-		localtime_r ((const time_t*)&tv.tv_sec, &now);
-		s = strftime (buf, bufsize, "%H:%M:%S", &now);
-		bufsize -= s;
-		s += snprintf (&buf[s], bufsize, ".%06" PRId64, (int64_t) tv.tv_usec);
+		s = snprintf (buf, bufsize, "%12" PRId64, now);
 		bufsize -= s;
 	}
 
-	_last_receipt = tv;
+	_last_receipt = now;
 
 	switch ((eventType) msg[0]&0xf0) {
 	case off:
@@ -248,9 +342,9 @@ MidiTracer::tracer (Parser&, byte* msg, size_t len)
 
 	case polypress:
 		if (show_hex) {
-			s += snprintf (&buf[s], bufsize, "%16s chn %2d %02x\n", "PolyPressure", (msg[0]&0xf)+1, (int) msg[1]);
+			s += snprintf (&buf[s], bufsize, "%16s chn %2d %02x %02x\n", "PolyPressure", (msg[0]&0xf)+1, (int) msg[1], msg[2]);
 		} else {
-			s += snprintf (&buf[s], bufsize, "%16s chn %2d %-3d\n", "PolyPressure", (msg[0]&0xf)+1, (int) msg[1]);
+			s += snprintf (&buf[s], bufsize, "%16s chn %2d %-3d %-3d\n", "PolyPressure", (msg[0]&0xf)+1, (int) msg[1], msg[2]);
 		}
 		break;
 
@@ -272,9 +366,9 @@ MidiTracer::tracer (Parser&, byte* msg, size_t len)
 
 	case chanpress:
 		if (show_hex) {
-			s += snprintf (&buf[s], bufsize, "%16s chn %2d %02x/%-3d\n", "Channel Pressure", (msg[0]&0xf)+1, (int) msg[1], (int) msg[1]);
+			s += snprintf (&buf[s], bufsize, "%16s chn %2d %02x\n", "Channel Pressure", (msg[0]&0xf)+1, (int) msg[1]);
 		} else {
-			s += snprintf (&buf[s], bufsize, "%16s chn %2d %02x/%-3d\n", "Channel Pressure", (msg[0]&0xf)+1, (int) msg[1], (int) msg[1]);
+			s += snprintf (&buf[s], bufsize, "%16s chn %2d %-3d\n", "Channel Pressure", (msg[0]&0xf)+1, (int) msg[1]);
 		}
 		break;
 
@@ -291,6 +385,9 @@ MidiTracer::tracer (Parser&, byte* msg, size_t len)
 			switch (msg[0]) {
 			case 0xf8:
 				s += snprintf (&buf[s], bufsize, "%16s\n", "Clock");
+				break;
+			case 0xf9:
+				s += snprintf (&buf[s], bufsize, "%16s\n", "Tick");
 				break;
 			case 0xfa:
 				s += snprintf (&buf[s], bufsize, "%16s\n", "Start");
@@ -320,18 +417,63 @@ MidiTracer::tracer (Parser&, byte* msg, size_t len)
 					&buf[s], bufsize, " MMC locate to %02d:%02d:%02d:%02d.%02d\n",
 					msg[7], msg[8], msg[9], msg[10], msg[11]
 					);
+			} else if (cmd == 0x47 && msg[5] == 0x03) {
+				uint8_t sh = msg[6];
+				uint8_t sm = msg[7];
+				uint8_t sl = msg[8];
+
+				bool   forward    = sh & (1<<6) ? false : true;
+				size_t left_shift = sh & 0x38;
+				size_t integral   = ((sh & 0x7) << left_shift) | (sm >> (7 - left_shift));
+				size_t fractional = ((sm << left_shift) << 7) | sl;
+
+				float shuttle_speed = integral + ((float)fractional / (1 << (14 - left_shift)));
+
+				s += snprintf (&buf[s], bufsize, " MMC Shuttle %s%f\n", forward ? "+" : "-", shuttle_speed);
 			} else {
 				std::string name;
-				if (cmd == 0x1) {
-					name = "STOP";
-				} else if (cmd == 0x3) {
-					name = "DEFERRED PLAY";
-				} else if (cmd == 0x6) {
-					name = "RECORD STROBE";
-				} else if (cmd == 0x7) {
-					name = "RECORD EXIT";
-				} else if (cmd == 0x8) {
-					name = "RECORD PAUSE";
+				switch (cmd) {
+					case 0x01:
+						name = "Stop";
+						break;
+					case 0x02:
+						name = "Play";
+						break;
+					case 0x03:
+						name = "Deferred Play";
+						break;
+					case 0x04:
+						name = "Fast Forward";
+						break;
+					case 0x05:
+						name = "Rewind";
+						break;
+					case 0x06:
+						name = "Record Strobe";
+						break;
+					case 0x07:
+						name = "Record Exit";
+						break;
+					case 0x08:
+						name = "Record Pause";
+						break;
+					case 0x09:
+						name = "Pause";
+						break;
+					case 0x0a:
+						name = "Eject";
+						break;
+					case 0x0b:
+						name = "Chase";
+						break;
+					case 0x40:
+						name = "Write (ARM Tracks)";
+						break;
+					case 0x0d:
+						name = "MMC Reset";
+						break;
+					default:
+						break;
 				}
 				if (!name.empty()) {
 					s += snprintf (&buf[s], bufsize, " MMC command %s\n", name.c_str());
@@ -343,19 +485,21 @@ MidiTracer::tracer (Parser&, byte* msg, size_t len)
 		} else if (len == 10 && msg[0] == 0xf0 && msg[1] == 0x7f && msg[9] == 0xf7)  {
 
 			/* MTC full sample */
-			s += snprintf (
-				&buf[s], bufsize, " MTC full sample to %02d:%02d:%02d:%02d\n", msg[5] & 0x1f, msg[6], msg[7], msg[8]
-				);
+			s += snprintf (&buf[s], bufsize, " MTC full sample to %02d:%02d:%02d:%02d\n", msg[5] & 0x1f, msg[6], msg[7], msg[8]);
 		} else if (len == 3 && msg[0] == MIDI::position) {
 
 			/* MIDI Song Position */
 			int midi_beats = (msg[2] << 7) | msg[1];
 			s += snprintf (&buf[s], bufsize, "%16s %d\n", "Position", (int) midi_beats);
+		} else if (len == 2 && msg[0] == MIDI::mtc_quarter) {
+
+			s += snprintf (&buf[s], bufsize, "%16s %02x\n", "MTC Quarter", msg[1]);
+
 		} else {
 
 			/* other sys-ex */
 
-			s += snprintf (&buf[s], bufsize, "%16s (%d) = [", "Sysex", (int) len);
+			s += snprintf (&buf[s], bufsize, "%16s (%" PRId64 ") = [", "Sysex", len);
 			bufsize -= s;
 
 			for (unsigned int i = 0; i < len && bufsize > 3; ++i) {
@@ -414,9 +558,9 @@ MidiTracer::tracer (Parser&, byte* msg, size_t len)
 
 	fifo.write (&buf, 1);
 
-	if (g_atomic_int_get (const_cast<gint*> (&_update_queued)) == 0) {
-		gui_context()->call_slot (invalidator (*this), boost::bind (&MidiTracer::update, this));
-		g_atomic_int_inc (const_cast<gint*> (&_update_queued));
+	int canderef (0);
+	if (_update_queued.compare_exchange_strong (canderef, 1)) {
+		gui_context()->call_slot (invalidator (*this), std::bind (&MidiTracer::update, this));
 	}
 }
 
@@ -424,7 +568,7 @@ void
 MidiTracer::update ()
 {
 	bool updated = false;
-	g_atomic_int_dec_and_test (const_cast<gint*> (&_update_queued));
+	_update_queued.store (0);
 
 	RefPtr<TextBuffer> buf (text.get_buffer());
 

@@ -1,23 +1,27 @@
 /*
-    Copyright (C) 2001-2006 Paul Davis
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2007-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2015-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __gtk_ardour_region_view_h__
-#define __gtk_ardour_region_view_h__
+#pragma once
 
 #ifdef interface
 #undef interface
@@ -27,16 +31,16 @@
 
 #include <sigc++/signal.h>
 #include "ardour/region.h"
-#include "ardour/beats_samples_converter.h"
 
 #include "canvas/fwd.h"
 
 #include "time_axis_view_item.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "enums.h"
+#include "marker.h"
 
 class TimeAxisView;
-class RegionEditor;
+class ArdourWindow;
 class GhostRegion;
 class AutomationTimeAxisView;
 class AutomationRegionView;
@@ -49,26 +53,23 @@ namespace ArdourCanvas {
 class RegionView : public TimeAxisViewItem
 {
 public:
-	RegionView (ArdourCanvas::Container* parent,
-	            TimeAxisView&        time_view,
-	            boost::shared_ptr<ARDOUR::Region> region,
-	            double               samples_per_pixel,
-	            uint32_t             base_color,
-	            bool 		 automation = false);
+	RegionView (ArdourCanvas::Container*          parent,
+	            TimeAxisView&                     time_view,
+	            const std::shared_ptr<ARDOUR::Region>& region,
+	            double                            samples_per_pixel,
+	            uint32_t                          base_color,
+	            bool                              automation = false);
 
 	RegionView (const RegionView& other);
-	RegionView (const RegionView& other, boost::shared_ptr<ARDOUR::Region> other_region);
+	RegionView (const RegionView& other, const std::shared_ptr<ARDOUR::Region>& other_region);
 
 	~RegionView ();
 
-	virtual void set_selected (bool yn) {
-		_region->set_selected_for_solo(yn);
-		TimeAxisViewItem::set_selected(yn);
-	}
+	virtual void set_selected (bool yn);
 
-	virtual void init (bool wait_for_data);
+	virtual void init (bool what_changed);
 
-	boost::shared_ptr<ARDOUR::Region> region() const { return _region; }
+	std::shared_ptr<ARDOUR::Region> region() const { return _region; }
 
 	bool is_valid() const    { return valid; }
 
@@ -76,21 +77,20 @@ public:
 
 	virtual void set_height (double);
 	virtual void set_samples_per_pixel (double);
-	virtual bool set_duration (samplecnt_t, void*);
+	virtual bool set_duration (Temporal::timecnt_t const &, void*);
 
 	void move (double xdelta, double ydelta);
 
+	void visual_layer_on_top();
 	void raise_to_top ();
 	void lower_to_bottom ();
 
-	bool set_position(samplepos_t pos, void* src, double* delta = 0);
+	bool set_position(Temporal::timepos_t const & pos, void* src, double* delta = 0);
 
 	virtual void show_region_editor ();
-	void hide_region_editor ();
+	virtual void hide_region_editor ();
 
 	virtual void region_changed (const PBD::PropertyChange&);
-
-	uint32_t get_fill_color () const;
 
 	virtual GhostRegion* add_ghost (TimeAxisView&) = 0;
 	void remove_ghost_in (TimeAxisView&);
@@ -99,26 +99,51 @@ public:
 	virtual void entered () {}
 	virtual void exited () {}
 
-	virtual void enable_display(bool yn) { _enable_display = yn; }
-	virtual void update_coverage_samples (LayerDisplay);
+	bool display_enabled() const;
+	virtual void redisplay (bool) = 0;
+	void redisplay () {
+		redisplay (true);
+	}
 
-	static PBD::Signal1<void,RegionView*> RegionViewGoingAway;
+	virtual void tempo_map_changed () {
+		redisplay (true);
+	}
+
+	struct DisplaySuspender {
+		DisplaySuspender (RegionView& rv, bool just_view = false) : region_view (rv), view_only (just_view) {
+			region_view.disable_display ();
+		}
+
+		DisplaySuspender (DisplaySuspender const & other) : region_view (other.region_view), view_only (other.view_only) {
+			region_view.disable_display ();
+		}
+
+		~DisplaySuspender () {
+			region_view.enable_display (view_only);
+		}
+		RegionView& region_view;
+		bool view_only;
+	};
+
+	virtual void update_coverage_frame (LayerDisplay);
+
+	static PBD::Signal<void(RegionView*)> RegionViewGoingAway;
 
 	/** Called when a front trim is about to begin */
 	virtual void trim_front_starting () {}
 
-	bool trim_front (samplepos_t, bool, const int32_t sub_num);
+	bool trim_front (Temporal::timepos_t const &, bool);
 
 	/** Called when a start trim has finished */
 	virtual void trim_front_ending () {}
 
-	bool trim_end (samplepos_t, bool, const int32_t sub_num);
-	void move_contents (ARDOUR::sampleoffset_t);
+	bool trim_end (Temporal::timepos_t const &, bool);
+	void move_contents (Temporal::timecnt_t const &);
 	virtual void thaw_after_trim ();
 
-	void set_silent_samples (const ARDOUR::AudioIntervalResult&, double threshold);
-	void drop_silent_samples ();
-	void hide_silent_samples ();
+	void set_silent_frames (const ARDOUR::AudioIntervalResult&, double threshold);
+	void drop_silent_frames ();
+	void hide_silent_frames ();
 
 	struct PositionOrder {
 		bool operator()(const RegionView* a, const RegionView* b) {
@@ -126,7 +151,14 @@ public:
 		}
 	};
 
-	ARDOUR::MusicSample snap_sample_to_sample (ARDOUR::sampleoffset_t, bool ensure_snap = false) const;
+	Temporal::timecnt_t snap_region_time_to_region_time (Temporal::timecnt_t const &, bool ensure_snap = false) const;
+
+	void update_visibility ();
+
+	ARDOUR::CueMarker find_model_cue_marker (ArdourMarker*);
+	void drop_cue_marker (ArdourMarker*);
+
+	virtual void color_handler() { set_colors(); }
 
 protected:
 
@@ -135,7 +167,7 @@ protected:
 	 */
 	RegionView (ArdourCanvas::Container *,
 	            TimeAxisView&,
-	            boost::shared_ptr<ARDOUR::Region>,
+	            const std::shared_ptr<ARDOUR::Region>&,
 	            double samples_per_pixel,
 	            uint32_t basic_color,
 	            bool recording,
@@ -159,22 +191,26 @@ protected:
 	virtual void set_sync_mark_color ();
 	virtual void reset_width_dependent_items (double pixel_width);
 
-	virtual void color_handler () {}
+	virtual void parameter_changed (std::string const&);
 
-	boost::shared_ptr<ARDOUR::Region> _region;
+	void maybe_raise_cue_markers ();
 
-	ArdourCanvas::Polygon* sync_mark; ///< polgyon for sync position
-	ArdourCanvas::Line* sync_line; ///< polgyon for sync position
+	Temporal::timecnt_t region_relative_distance (Temporal::timecnt_t const &, Temporal::TimeDomain desired_time_domain);
 
-	RegionEditor* editor;
+	std::shared_ptr<ARDOUR::Region> _region;
+
+	ArdourCanvas::Polygon* sync_mark; ///< polygon for sync position
+	ArdourCanvas::Line* sync_line; ///< polygon for sync position
+
+	ArdourWindow* _editor;
 
 	std::vector<ControlPoint *> control_points;
 	double current_visible_sync_position;
 
-	bool    valid; ///< see StreamView::redisplay_diskstream()
-	bool    _enable_display; ///< see StreamView::redisplay_diskstream()
-	double  _pixel_width;
-	bool    in_destructor;
+	bool      valid; ///< see StreamView::redisplay_diskstream()
+	uint32_t _disable_display; ///< see StreamView::redisplay_diskstream()
+	double   _pixel_width;
+	bool      in_destructor;
 
 	bool wait_for_data;
 
@@ -184,16 +220,42 @@ protected:
 	 * different bits of regions according to whether or not they are the one
 	 * that will be played at any given time.
 	 */
-	std::list<ArdourCanvas::Rectangle*> _coverage_samples;
+	std::list<ArdourCanvas::Rectangle*> _coverage_frame;
 
 	/** a list of rectangles used to show silent segments
 	*/
-	std::list<ArdourCanvas::Rectangle*> _silent_samples;
+	std::list<ArdourCanvas::Rectangle*> _silent_frames;
 	/** a list of rectangles used to show the current silence threshold
 	*/
 	std::list<ArdourCanvas::Rectangle*> _silent_threshold_samples;
 	/** a text item to display strip silence statistics */
 	ArdourCanvas::Text* _silence_text;
+
+private:
+	void update_xrun_markers ();
+	std::list<std::pair<samplepos_t, ArdourCanvas::Arrow*> > _xrun_markers;
+	bool _xrun_markers_visible;
+
+	void update_cue_markers ();
+
+	void clear_coverage_frame ();
+
+	struct ViewCueMarker {
+		ArdourMarker* view_marker;
+		ARDOUR::CueMarker     model_marker;
+
+		ViewCueMarker (ArdourMarker* m, ARDOUR::CueMarker const & c) : view_marker (m), model_marker (c) {}
+		~ViewCueMarker();
+	};
+
+	typedef std::list<ViewCueMarker*> ViewCueMarkers;
+	ViewCueMarkers _cue_markers;
+	bool _cue_markers_visible;
+
+  private:
+	friend struct DisplaySuspender;
+	void enable_display (bool view_only);
+	void disable_display();
+
 };
 
-#endif /* __gtk_ardour_region_view_h__ */

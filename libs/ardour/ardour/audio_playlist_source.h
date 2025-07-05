@@ -1,28 +1,26 @@
 /*
-    Copyright (C) 2011 Paul Davis
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_audio_playlist_source_h__
-#define __ardour_audio_playlist_source_h__
-
+#include <memory>
 #include <string>
-
-#include <boost/shared_ptr.hpp>
 
 #include "ardour/ardour.h"
 #include "ardour/audiosource.h"
@@ -42,22 +40,22 @@ public:
 	bool clamped_at_unity () const { return false; }
 
 	samplecnt_t read_unlocked (Sample *dst, samplepos_t start, samplecnt_t cnt) const;
-	samplecnt_t write_unlocked (Sample *src, samplecnt_t cnt);
+	samplecnt_t write_unlocked (Sample const * src, samplecnt_t cnt);
 
 	float sample_rate () const;
 	int setup_peakfile ();
 
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
 	bool can_truncate_peaks() const { return false; }
-	bool can_be_analysed() const    { return _length > 0; }
+	bool can_be_analysed() const    { return _length.is_positive(); }
 
 protected:
 	friend class SourceFactory;
 
-	AudioPlaylistSource (Session&, const PBD::ID& orig, const std::string& name, boost::shared_ptr<AudioPlaylist>, uint32_t chn,
-	                     sampleoffset_t begin, samplecnt_t len, Source::Flag flags);
+	AudioPlaylistSource (Session&, const PBD::ID& orig, const std::string& name, std::shared_ptr<AudioPlaylist>, uint32_t chn,
+	                     timepos_t const & begin, timepos_t const & len, Source::Flag flags);
 	AudioPlaylistSource (Session&, const XMLNode&);
 
 
@@ -70,4 +68,3 @@ private:
 
 } /* namespace */
 
-#endif /* __ardour_audio_playlist_source_h__ */

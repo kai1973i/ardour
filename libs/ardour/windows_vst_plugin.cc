@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2004 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "fst.h"
 
@@ -59,7 +60,7 @@ WindowsVSTPlugin::WindowsVSTPlugin (const WindowsVSTPlugin &other)
 
 	XMLNode* root = new XMLNode (other.state_node_name ());
 	other.add_state (root);
-	set_state (*root, Stateful::loading_state_version);
+	set_state (*root, Stateful::current_state_version);
 	delete root;
 
 	init_plugin ();
@@ -84,6 +85,7 @@ WindowsVSTPluginInfo::load (Session& session)
 
 			if (!handle) {
 				error << string_compose(_("VST: cannot load module from \"%1\""), path) << endmsg;
+				return PluginPtr ((Plugin*) 0);
 			} else {
 				plugin.reset (new WindowsVSTPlugin (session.engine(), session, handle, PBD::atoi(unique_id)));
 			}
@@ -105,8 +107,8 @@ std::vector<Plugin::PresetRecord>
 WindowsVSTPluginInfo::get_presets (bool user_only) const
 {
 	std::vector<Plugin::PresetRecord> p;
-#ifndef NO_PLUGIN_STATE
-	if (!Config->get_use_lxvst()) {
+
+	if (!Config->get_use_windows_vst()) {
 		return p;
 	}
 
@@ -129,13 +131,11 @@ WindowsVSTPluginInfo::get_presets (bool user_only) const
 		}
 	}
 	delete t;
-#endif
-
 	return p;
 }
 
-WindowsVSTPluginInfo::WindowsVSTPluginInfo()
+WindowsVSTPluginInfo::WindowsVSTPluginInfo (VST2Info const& nfo) : VSTPluginInfo (nfo)
 {
-       type = ARDOUR::Windows_VST;
+	type = ARDOUR::Windows_VST;
 }
 

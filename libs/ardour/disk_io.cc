@@ -1,24 +1,25 @@
 /*
-    Copyright (C) 2009-2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2017-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/debug.h"
 #include "pbd/error.h"
+#include "pbd/playback_buffer.h"
 
 #include "ardour/audioplaylist.h"
 #include "ardour/butler.h"
@@ -34,6 +35,7 @@
 #include "ardour/rc_configuration.h"
 #include "ardour/session.h"
 #include "ardour/session_playlists.h"
+#include "ardour/track.h"
 
 #include "pbd/i18n.h"
 
@@ -43,25 +45,46 @@ using namespace std;
 
 const string DiskIOProcessor::state_node_name = X_("DiskIOProcessor");
 
-// PBD::Signal0<void> DiskIOProcessor::DiskOverrun;
-// PBD::Signal0<void>  DiskIOProcessor::DiskUnderrun;
+// PBD::Signal<void()> DiskIOProcessor::DiskOverrun;
+// PBD::Signal<void()>  DiskIOProcessor::DiskUnderrun;
 
-DiskIOProcessor::DiskIOProcessor (Session& s, string const & str, Flag f)
-	: Processor (s, str)
+DiskIOProcessor::DiskIOProcessor (Session& s, Track& t, string const & str, Flag f, Temporal::TimeDomainProvider const & tdp)
+	: Processor (s, str, tdp)
 	, _flags (f)
-	, i_am_the_modifier (false)
-	, _seek_required (false)
 	, _slaved (false)
 	, in_set_state (false)
 	, playback_sample (0)
 	, _need_butler (false)
+	, _track (t)
 	, channels (new ChannelList)
-	, _midi_buf (new MidiRingBuffer<samplepos_t> (s.butler()->midi_diskstream_buffer_size()))
-	, _samples_written_to_ringbuffer (0)
-	, _samples_read_from_ringbuffer (0)
+	, _midi_buf (0)
 {
 	set_display_to_user (false);
 }
+
+DiskIOProcessor::~DiskIOProcessor ()
+{
+	{
+		RCUWriter<ChannelList> writer (channels);
+		std::shared_ptr<ChannelList> c = writer.get_copy();
+
+		for (ChannelList::iterator chan = c->begin(); chan != c->end(); ++chan) {
+			delete *chan;
+		}
+
+		c->clear();
+	}
+
+	channels.flush ();
+	delete _midi_buf;
+
+	for (uint32_t n = 0; n < DataType::num_types; ++n) {
+		if (_playlists[n]) {
+			_playlists[n]->release ();
+		}
+	}
+}
+
 
 void
 DiskIOProcessor::init ()
@@ -147,7 +170,7 @@ DiskIOProcessor::configure_io (ChanCount in, ChanCount out)
 
 	{
 		RCUWriter<ChannelList> writer (channels);
-		boost::shared_ptr<ChannelList> c = writer.get_copy();
+		std::shared_ptr<ChannelList> c = writer.get_copy();
 
 		uint32_t n_audio = in.n_audio();
 
@@ -163,13 +186,13 @@ DiskIOProcessor::configure_io (ChanCount in, ChanCount out)
 	}
 
 	if (in.n_midi() > 0 && !_midi_buf) {
-		const size_t size = _session.butler()->midi_diskstream_buffer_size();
+		const size_t size = _session.butler()->midi_buffer_size();
 		_midi_buf = new MidiRingBuffer<samplepos_t>(size);
 		changed = true;
 	}
 
 	if (changed) {
-		seek (_session.transport_sample());
+		configuration_changed ();
 	}
 
 	return Processor::configure_io (in, out);
@@ -189,21 +212,6 @@ DiskIOProcessor::non_realtime_locate (samplepos_t location)
 	seek (location, true);
 }
 
-void
-DiskIOProcessor::non_realtime_speed_change ()
-{
-	if (_seek_required) {
-		seek (_session.transport_sample(), true);
-		_seek_required = false;
-	}
-}
-
-bool
-DiskIOProcessor::realtime_speed_change ()
-{
-	return true;
-}
-
 int
 DiskIOProcessor::set_state (const XMLNode& node, int version)
 {
@@ -219,36 +227,20 @@ DiskIOProcessor::set_state (const XMLNode& node, int version)
 }
 
 int
-DiskIOProcessor::add_channel_to (boost::shared_ptr<ChannelList> c, uint32_t how_many)
-{
-	while (how_many--) {
-		c->push_back (new ChannelInfo (_session.butler()->audio_diskstream_playback_buffer_size()));
-		interpolation.add_channel ();
-		DEBUG_TRACE (DEBUG::DiskIO, string_compose ("%1: new channel, write space = %2 read = %3\n",
-		                                            name(),
-		                                            c->back()->buf->write_space(),
-		                                            c->back()->buf->read_space()));
-	}
-
-	return 0;
-}
-
-int
 DiskIOProcessor::add_channel (uint32_t how_many)
 {
 	RCUWriter<ChannelList> writer (channels);
-	boost::shared_ptr<ChannelList> c = writer.get_copy();
+	std::shared_ptr<ChannelList> c = writer.get_copy();
 
 	return add_channel_to (c, how_many);
 }
 
 int
-DiskIOProcessor::remove_channel_from (boost::shared_ptr<ChannelList> c, uint32_t how_many)
+DiskIOProcessor::remove_channel_from (std::shared_ptr<ChannelList> c, uint32_t how_many)
 {
 	while (how_many-- && !c->empty()) {
 		delete c->back();
 		c->pop_back();
-		interpolation.remove_channel ();
 	}
 
 	return 0;
@@ -258,15 +250,15 @@ int
 DiskIOProcessor::remove_channel (uint32_t how_many)
 {
 	RCUWriter<ChannelList> writer (channels);
-	boost::shared_ptr<ChannelList> c = writer.get_copy();
+	std::shared_ptr<ChannelList> c = writer.get_copy();
 
 	return remove_channel_from (c, how_many);
 }
 
 void
-DiskIOProcessor::playlist_deleted (boost::weak_ptr<Playlist> wpl)
+DiskIOProcessor::playlist_deleted (std::weak_ptr<Playlist> wpl)
 {
-	boost::shared_ptr<Playlist> pl (wpl.lock());
+	std::shared_ptr<Playlist> pl (wpl.lock());
 
 	if (!pl) {
 		return;
@@ -285,20 +277,20 @@ DiskIOProcessor::playlist_deleted (boost::weak_ptr<Playlist> wpl)
 	}
 }
 
-boost::shared_ptr<AudioPlaylist>
+std::shared_ptr<AudioPlaylist>
 DiskIOProcessor::audio_playlist () const
 {
-	return boost::dynamic_pointer_cast<AudioPlaylist> (_playlists[DataType::AUDIO]);
+	return std::dynamic_pointer_cast<AudioPlaylist> (_playlists[DataType::AUDIO]);
 }
 
-boost::shared_ptr<MidiPlaylist>
+std::shared_ptr<MidiPlaylist>
 DiskIOProcessor::midi_playlist () const
 {
-	return boost::dynamic_pointer_cast<MidiPlaylist> (_playlists[DataType::MIDI]);
+	return std::dynamic_pointer_cast<MidiPlaylist> (_playlists[DataType::MIDI]);
 }
 
 int
-DiskIOProcessor::use_playlist (DataType dt, boost::shared_ptr<Playlist> playlist)
+DiskIOProcessor::use_playlist (DataType dt, std::shared_ptr<Playlist> playlist)
 {
 	if (!playlist) {
 		return 0;
@@ -320,10 +312,10 @@ DiskIOProcessor::use_playlist (DataType dt, boost::shared_ptr<Playlist> playlist
 	_playlists[dt] = playlist;
 	playlist->use();
 
-	playlist->ContentsChanged.connect_same_thread (playlist_connections, boost::bind (&DiskIOProcessor::playlist_modified, this));
-	playlist->LayeringChanged.connect_same_thread (playlist_connections, boost::bind (&DiskIOProcessor::playlist_modified, this));
-	playlist->DropReferences.connect_same_thread (playlist_connections, boost::bind (&DiskIOProcessor::playlist_deleted, this, boost::weak_ptr<Playlist>(playlist)));
-	playlist->RangesMoved.connect_same_thread (playlist_connections, boost::bind (&DiskIOProcessor::playlist_ranges_moved, this, _1, _2));
+	playlist->ContentsChanged.connect_same_thread (playlist_connections, std::bind (&DiskIOProcessor::playlist_modified, this));
+	playlist->LayeringChanged.connect_same_thread (playlist_connections, std::bind (&DiskIOProcessor::playlist_modified, this));
+	playlist->DropReferences.connect_same_thread (playlist_connections, std::bind (&DiskIOProcessor::playlist_deleted, this, std::weak_ptr<Playlist>(playlist)));
+	playlist->RangesMoved.connect_same_thread (playlist_connections, std::bind (&DiskIOProcessor::playlist_ranges_moved, this, _1, _2));
 
 	DEBUG_TRACE (DEBUG::DiskIO, string_compose ("%1 now using playlist %1 (%2)\n", name(), playlist->name(), playlist->id()));
 
@@ -331,49 +323,18 @@ DiskIOProcessor::use_playlist (DataType dt, boost::shared_ptr<Playlist> playlist
 }
 
 DiskIOProcessor::ChannelInfo::ChannelInfo (samplecnt_t bufsize)
-	: buf (new RingBufferNPT<Sample> (bufsize))
+	: rbuf (0)
+	, wbuf (0)
+	, curr_capture_cnt (0)
 {
-	/* touch the ringbuffer buffer, which will cause
-	   them to be mapped into locked physical RAM if
-	   we're running with mlockall(). this doesn't do
-	   much if we're not.
-	*/
-
-	memset (buf->buffer(), 0, sizeof (Sample) * buf->bufsize());
-	capture_transition_buf = new RingBufferNPT<CaptureTransition> (256);
-}
-
-void
-DiskIOProcessor::ChannelInfo::resize (samplecnt_t bufsize)
-{
-	delete buf;
-	buf = new RingBufferNPT<Sample> (bufsize);
-	memset (buf->buffer(), 0, sizeof (Sample) * buf->bufsize());
 }
 
 DiskIOProcessor::ChannelInfo::~ChannelInfo ()
 {
-	delete buf;
-	buf = 0;
-
-	delete capture_transition_buf;
-	capture_transition_buf = 0;
-}
-
-void
-DiskIOProcessor::drop_route ()
-{
-	_route.reset ();
-}
-
-void
-DiskIOProcessor::set_route (boost::shared_ptr<Route> r)
-{
-	_route = r;
-
-	if (_route) {
-		_route->DropReferences.connect_same_thread (*this, boost::bind (&DiskIOProcessor::drop_route, this));
-	}
+	delete rbuf;
+	delete wbuf;
+	rbuf = 0;
+	wbuf = 0;
 }
 
 /** Get the start, end, and length of a location "atomically".
@@ -385,14 +346,14 @@ DiskIOProcessor::set_route (boost::shared_ptr<Route> r)
  */
 void
 DiskIOProcessor::get_location_times(const Location* location,
-                   samplepos_t*     start,
-                   samplepos_t*     end,
-                   samplepos_t*     length)
+                   timepos_t*     start,
+                   timepos_t*     end,
+                   timecnt_t*     length)
 {
 	if (location) {
 		*start  = location->start();
 		*end    = location->end();
-		*length = *end - *start;
+		*length = location->length();
 	}
 }
 

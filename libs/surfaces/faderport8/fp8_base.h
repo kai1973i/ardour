@@ -1,19 +1,19 @@
 /*
  * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef _ardour_surfaces_fp8base_h_
@@ -25,9 +25,11 @@
 #include "pbd/signals.h"
 
 #ifdef FADERPORT16
-#define FP_NAMESPACE FP16
+# define FP_NAMESPACE FP16
+#elif defined FADERPORT2
+# define FP_NAMESPACE FP2
 #else
-#define FP_NAMESPACE FP8
+# define FP_NAMESPACE FP8
 #endif
 
 namespace ArdourSurface { namespace FP_NAMESPACE {
@@ -108,6 +110,9 @@ public:
 
 		 for  (size_t i = 0; i < txt.size(); ++i)
 		 {
+			 if (txt[i] < 0) {
+				 continue;
+			 }
 			 d.push_back (txt[i]);
 			 if (i >= 8) {
 				 break;
@@ -118,12 +123,12 @@ public:
 	}
 
 	/* modifier keys */
-	PBD::Signal1<void, bool> ShiftButtonChange;
-	PBD::Signal1<void, bool> ARMButtonChange;
+	PBD::Signal<void(bool)> ShiftButtonChange;
+	PBD::Signal<void(bool)> ARMButtonChange;
 
 	/* timer events */
-	PBD::Signal1<void, bool> BlinkIt;
-	PBD::Signal0<void> Periodic;
+	PBD::Signal<void(bool)> BlinkIt;
+	PBD::Signal<void()> Periodic;
 
 private:
 	void sysexhdr (std::vector<uint8_t>& d)
@@ -157,7 +162,8 @@ namespace FP8Types {
 		NavBank,
 		NavMaster,
 		NavSection,
-		NavMarker
+		NavMarker,
+		NavPan /* FP2 only */
 	};
 
 	enum MixMode {

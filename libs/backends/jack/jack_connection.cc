@@ -1,24 +1,22 @@
 /*
-    Copyright (C) 2013 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include <iostream>
-
-#include <boost/scoped_ptr.hpp>
 
 #include <glibmm/timer.h>
 
@@ -63,7 +61,7 @@ JackConnection::JackConnection (const std::string& arg1, const std::string& arg2
 	 */
 
         EnvironmentalProtectionAgency* global_epa = EnvironmentalProtectionAgency::get_global_epa ();
-        boost::scoped_ptr<EnvironmentalProtectionAgency> current_epa;
+        std::unique_ptr<EnvironmentalProtectionAgency> current_epa;
 
         /* revert all environment settings back to whatever they were when
 	 * ardour started, because ardour's startup script may have reset
@@ -97,7 +95,7 @@ int
 JackConnection::open ()
 {
         EnvironmentalProtectionAgency* global_epa = EnvironmentalProtectionAgency::get_global_epa ();
-        boost::scoped_ptr<EnvironmentalProtectionAgency> current_epa;
+        std::unique_ptr<EnvironmentalProtectionAgency> current_epa;
 	jack_status_t status;
 
 	close ();

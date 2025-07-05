@@ -1,25 +1,26 @@
 /*
-    Copyright (C) 1999-2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 1999-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 
 #include "pbd/compose.h"
+#include "pbd/configuration.h"
 #include "pbd/configuration_variable.h"
 #include "pbd/debug.h"
 
@@ -32,7 +33,7 @@ using namespace std;
 using namespace PBD;
 
 void
-ConfigVariableBase::add_to_node (XMLNode& node)
+ConfigVariableBase::add_to_node (XMLNode& node) const
 {
 	const std::string v = get_as_string ();
 	DEBUG_TRACE (DEBUG::Configuration, string_compose ("Config variable %1 stored as [%2]\n", _name, v));
@@ -108,4 +109,19 @@ ConfigVariableBase::miss ()
 {
 	// placeholder for any debugging desired when a config variable
 	// is set but to the same value as it already has
+}
+
+std::map<std::string,Configuration::Metadata> Configuration::all_metadata;
+
+Configuration::Metadata const *
+Configuration::get_metadata (std::string const & name)
+{
+	auto i = all_metadata.find (name);
+	if (i != all_metadata.end()) {
+		/* Only return actual, useful metadata */
+		if (!i->second.empty() && !i->second.front().empty()) {
+			return &i->second;
+		}
+	}
+	return 0;
 }

@@ -5,7 +5,6 @@ set -e
 # script for pulling together a MacOSX app bundle.
 
 GTKSTACK_ROOT=$HOME/gtk/inst
-ARDOURSTACK_ROOT=$HOME/a3/inst
 BUILD_ROOT=../../build
 
 # where harvid and xjadeo binaries are cached
@@ -14,86 +13,89 @@ if test -z "$CACHEDIR" -o ! -d "$CACHEDIR"; then
 fi
 mkdir -p "$CACHEDIR"
 
-SAE=
 MIXBUS=
-MIXBUS32C=
+VBM=
 WITH_HARVID=1
+WITH_XJADEO=1
 WITH_HARRISON_LV2=
-WITH_X42_LV2=
+WITH_HARRISON_VBM=
+WITH_COMMERCIAL_X42_LV2=
+WITH_GRATIS_X42_LV2=
+WITH_GMSYNTH=
 STRIP=1
 PRINT_SYSDEPS=
-WITH_NLS=
+WITH_NLS=1
+X42PLUGINS="x42-autotune x42-midifilter x42-stereoroute setBfree x42-avldrums x42-limiter x42-tuner"
 
 : ${HARRISONCHANNELSTRIP=harrison_channelstrip}
 : ${HARRISONLV2=harrison_lv2s-n}
-: ${HARRISONDSPURL=http://www.harrisonconsoles.com/plugins/releases/public}
+: ${HARRISONDSPURL=https://builder.harrisonconsoles.com/pub/dsp}
 
 . ../define_versions.sh
 
 while [ $# -gt 0 ] ; do
-    echo "arg = $1"
-    case $1 in
+	echo "arg = $1"
+	case $1 in
 
 	#
 	# top level build targets
 	#
 
-	--sae)
-		SAE=1 ;
-		STRIP= ;
-		PRODUCT_PKG_DIR=ArdourSAE ;
-		APPNAME=Ardour ;
-		BUNDLENAME=Ardour${major_version} ;
-		lower_case_appname=ardour;
-		shift ;;
 	--mixbus) MIXBUS=1;
 		WITH_HARRISON_LV2=1 ;
-		WITH_X42_LV2=1 ;
-		WITH_NLS=1 ;
-		SAE= ;
-		STRIP= ;
+		WITH_COMMERCIAL_X42_LV2=1
+		WITH_GRATIS_X42_LV2=1
+		WITH_GMSYNTH=1
 		PRODUCT_PKG_DIR=Mixbus;
 		APPNAME=Mixbus ;
 		BUNDLENAME=Mixbus${major_version} ;
 		lower_case_appname=mixbus;
+		BUNDLE_ID_BASE=com.harrisonconsoles
 		shift ;;
-	--mixbus32c) MIXBUS=1;
-		MIXBUS32C=1;
+	--livetrax)
+		LIVETRAX=1 ;
+		WITH_XJADEO= ;
+		APPNAME=LiveTrax ;
+		PRODUCT_PKG_DIR=LiveTrax;
+		BUNDLENAME=LiveTrax${major_version} ;
+		lower_case_appname=livetrax;
+		BUNDLE_ID_BASE=com.harrisonconsoles
+		shift ;;
+	--vbm)
+		VBM=1
 		WITH_HARRISON_LV2=1 ;
-		WITH_X42_LV2=1 ;
-		WITH_NLS=1 ;
-		SAE= ;
+		WITH_HARRISON_VBM=1 ;
+		WITH_COMMERCIAL_X42_LV2=1
+		WITH_GRATIS_X42_LV2=1
 		STRIP= ;
-		PRODUCT_PKG_DIR=Mixbus32C;
-		lower_case_appname=mixbus32c;
-		APPNAME=Mixbus32C ;
-		BUNDLENAME=Mixbus32C-${major_version} ;
+		PRODUCT_PKG_DIR=MixbusVBM;
+		lower_case_appname=mixbusvbm;
+		APPNAME=MixbusVBM ;
+		BUNDLENAME=MixbusVBM${major_version} ;
+		X42PLUGINS="$X42PLUGINS x42-testsignal x42-nodelay"
 		shift ;;
 	--public)
-		SAE= ;
 		WITH_HARRISON_LV2=1 ;
-		WITH_X42_LV2=1 ;
+		WITH_GMSYNTH=1
 		PRODUCT_PKG_DIR=Ardour;
 		APPNAME=Ardour ;
 		BUNDLENAME=Ardour${major_version} ;
 		lower_case_appname=ardour;
+		BUNDLE_ID_BASE=org.ardour
 		shift ;;
-	--allinone) SAE= ;
-		STRIP= ;
-		PRODUCT_PKG_DIR=Ardour ;
-		shift ;;
-	--test) SAE= ; STRIP= ; shift ;;
 
 	#
 	# specific build flags
 	#
 
-	--noharvid) WITH_HARVID= ; shift ;;
+	--noharvid) shift ;;
 	--nostrip) STRIP= ; shift ;;
 	--sysdeps) PRINT_SYSDEPS=1; shift ;;
+	--no-nls) WITH_NLS= ; shift ;;
 	--nls) WITH_NLS=1 ; shift ;;
 	--chanstrip) HARRISONCHANNELSTRIP=$2 ; shift; shift ;;
-    esac
+	--stack) GTKSTACK_ROOT=$2 ; shift; shift ;;
+	esac
 done
 
 if test -z "$PRODUCT_PKG_DIR" -o -z "$APPNAME"; then
@@ -103,9 +105,9 @@ fi
 
 echo "Version is $release_version"
 if [ "x$commit" != "x" ] ; then
-    info_string="$release_version ($commit) built on `hostname` by `whoami` on `date`"
+	info_string="$release_version ($commit) built on `hostname` by `whoami` on `date`"
 else
-    info_string="$release_version built on `hostname` by `whoami` on `date`"
+	info_string="$release_version built on `hostname` by `whoami` on `date`"
 fi
 echo "Info string is $info_string"
 
@@ -130,7 +132,7 @@ Resources=$APPROOT/Resources
 # Since this is OS X, don't try to distinguish between etc and shared
 # (machine dependent and independent data) - just put everything
 # into Resources.
-# 
+#
 Shared=$Resources
 Etc=$Resources
 Locale=$Resources/locale
@@ -140,10 +142,14 @@ Panners=$Frameworks/panners
 Backends=$Frameworks/backends
 MidiMaps=$Shared/midi_maps
 PluginMetadata=$Shared/plugin_metadata
+MixerSettings=$Shared/mixer_settings
 ExportFormats=$Shared/export
 Templates=$Shared/templates
+LRDFPresets=$Shared/rdf
 PatchFiles=$Shared/patchfiles
 LuaScripts=$Shared/scripts
+MediaClips=$Shared/media
+WebSurfaces=$Shared/web_surfaces
 MackieControl=$Shared/mcp
 OSC=$Shared/osc
 Themes=$Shared/themes
@@ -153,13 +159,13 @@ if [ x$PRINT_SYSDEPS != x ] ; then
 # print system dependencies
 #
 
-for file in $APPROOT/MacOS/* $Frameworks/* $Frameworks/modules/* ; do
+for file in $APPROOT/MacOS/* $Frameworks/* ; do
 	if ! file $file | grep -qs Mach-O ; then
 	    continue
 	fi
-	otool -L $file | awk '{print $1}' | egrep -v "(^@executable_path|^Ardour[0-9][.0-9]*.app)" 
-    done | sort | uniq
-    exit 0
+	otool -L $file | awk '{print $1}' | egrep -v "(^@executable_path|^Ardour[0-9][.0-9]*.app)"
+	done | sort | uniq
+	exit 0
 fi
 
 echo "Removing old $APPDIR tree ..."
@@ -177,15 +183,15 @@ mkdir -p $Panners
 mkdir -p $Backends
 mkdir -p $MidiMaps
 mkdir -p $ExportFormats
-mkdir -p $Frameworks/modules
 mkdir -p $Etc
 mkdir -p $MackieControl
 mkdir -p $OSC
-mkdir -p $PatchFiles
 mkdir -p $LuaScripts
 mkdir -p $Themes
 
-
+if test -z "$VBM"; then
+mkdir -p $PatchFiles
+fi
 
 EXECUTABLE=${BUNDLENAME}
 
@@ -205,6 +211,7 @@ env="<key>LSEnvironment</key><dict>$env<key>ARDOUR_BUNDLED</key><string>true</st
 sed -e "s?@ENV@?$env?g" \
     -e "s?@VERSION@?$release_version?g" \
     -e "s?@INFOSTRING@?$info_string?g" \
+    -e "s?@IDBASE@?$BUNDLE_ID_BASE?g" \
     -e "s?@IDSUFFIX@?$EXECUTABLE?g" \
     -e "s?@BUNDLENAME@?$BUNDLENAME?g" \
     -e "s?@EXECUTABLE@?$EXECUTABLE?g" < Info.plist.in > Info.plist
@@ -223,28 +230,32 @@ cp -R Resources $APPROOT
 rm -f Info.plist
 rm -f Resources/InfoPlist.strings
 
-#
 # if we build a bundle without jack, then
 # make the Ardour executable a helper
 # script that checks to see if JACK is
 # installed.
 #
+#cp startup_script $APPROOT/MacOS/$EXECUTABLE
+#chmod 775 $APPROOT/MacOS/$EXECUTABLE
+#MAIN_EXECUTABLE=Ardour.bin  ## used in startup_script
 
-cp startup_script $APPROOT/MacOS/$EXECUTABLE
-chmod 775 $APPROOT/MacOS/$EXECUTABLE
-MAIN_EXECUTABLE=Ardour.bin  ## used in startup_script
+# For Catalina we cannot use a shell script wrapper
+# the binary mentioned in the .plist must match
+# the actual executable, otherwise the user is
+# not prompted to grant permissions to access the audio-device
+
+MAIN_EXECUTABLE=$EXECUTABLE
 
 echo "Copying ardour executable ...."
 cp $BUILD_ROOT/gtk2_ardour/ardour-$release_version $APPROOT/MacOS/$MAIN_EXECUTABLE
-if test x$SAE != x ; then
-    # cp $BUILD_ROOT/gtk2_ardour/evtest $APPROOT/MacOS/gtkevents
-    cp  Ardour3-SAE.icns $Resources/appIcon.icns
-elif test x$MIXBUS32C != x ; then
-    cp  Mixbus32C.icns $Resources/appIcon.icns
-elif test x$MIXBUS != x ; then
-    cp  Mixbus.icns $Resources/appIcon.icns
+if test x$MIXBUS != x ; then
+	cp  Mixbus.icns $Resources/appIcon.icns
+elif test x$LIVETRAX != x ; then
+	cp  LiveTrax.icns $Resources/appIcon.icns
+elif test x$VBM != x ; then
+	cp  MixbusVBM.icns $Resources/appIcon.icns
 else
-    cp  Ardour.icns $Resources/appIcon.icns
+	cp  Ardour.icns $Resources/appIcon.icns
 fi
 cp  typeArdour.icns $Resources/
 
@@ -252,67 +263,67 @@ set +e # things below are not error-free (optional files etc) :(
 
 # copy locale files
 if test x$WITH_NLS != x ; then
-    echo "NLS support ..."
-    echo "I hope you remembered to run waf i18n"
-    LINGUAS=
+	echo "NLS support ..."
+	echo "I hope you remembered to run waf i18n"
+	LINGUAS=
 
-    for pkg in gtk2_ardour libs/ardour libs/gtkmm2ext ; do 
-	files=`find ../../$pkg -name "*.mo"`
-	
-            #
-            # the package name is appended with a number so that
-            # it can be parallel installed during a regular install
-            # with older (and newer) versions. it is just the major
-            # number of the release (i.e. leading digits)
-            #
-	
-        vsuffix=`echo $release_version | sed 's/^\([0-9][0-9]*\).*/\1/'`
-	
-	if [ -z "$files" ]; then
-	    echo ""
-	    echo "!!!! WARNING !!!! - Did not find any .mo files in ../../$pkg"
-	    echo ""
-	fi
-	
-	for file in $files 
-	do
-	    echo $file
-	    lang=`basename $file | sed 's/\.mo//'`
-	    mkdir -p $Locale/$lang/LC_MESSAGES
-	    cp $file $Locale/$lang/LC_MESSAGES/`basename $pkg`$vsuffix.mo
-	    echo copy $file to $Locale/$lang/LC_MESSAGES/`basename $pkg`$vsuffix.mo
-            if echo $LINGUAS | grep $lang >/dev/null 2>&1 ; then
-                :
-            else 
-		LINGUAS="$LINGUAS $lang"
-            fi
+	for pkg in gtk2_ardour libs/ardour libs/gtkmm2ext lib/tk/ytk  ; do
+		files=`find ../../$pkg -not -path "*/appdata/*" -name "*.mo"`
+
+		#
+		# the package name is appended with a number so that
+		# it can be parallel installed during a regular install
+		# with older (and newer) versions. it is just the major
+		# number of the release (i.e. leading digits)
+		#
+
+		vsuffix=`echo $release_version | sed 's/^\([0-9][0-9]*\).*/\1/'`
+
+		if [ -z "$files" ]; then
+			echo ""
+			echo "!!!! WARNING !!!! - Did not find any .mo files in ../../$pkg"
+			echo ""
+		fi
+
+		for file in $files
+		do
+			echo $file
+			lang=`basename $file | sed 's/\.mo//'`
+			mkdir -p $Locale/$lang/LC_MESSAGES
+			cp $file $Locale/$lang/LC_MESSAGES/`basename $pkg`$vsuffix.mo
+			echo copy $file to $Locale/$lang/LC_MESSAGES/`basename $pkg`$vsuffix.mo
+			if echo $LINGUAS | grep $lang >/dev/null 2>&1 ; then
+				:
+			else
+				LINGUAS="$LINGUAS $lang"
+			fi
+		done
 	done
-    done
 
-    for l in $LINGUAS
-    do
-      if [ -d $GTKSTACK_ROOT/share/locale/$l ] ; then
-	  echo "Copying GTK i18n files for $l..."
-	  cp -r $GTKSTACK_ROOT/share/locale/$l $Locale
-      else
-	  # try with just the language spec
-	  just_lang=`echo $l | sed 's/_[A-Z][A-Z]$//'`
-	  if [ -d $GTKSTACK_ROOT/share/locale/$just_lang ] ; then
-	      echo "Copying GTK i18n files for $l..."
-	      cp -r $GTKSTACK_ROOT/share/locale/$just_lang $Locale
-	  fi
-      fi
-    done
+	for l in $LINGUAS
+	do
+		if [ -d $GTKSTACK_ROOT/share/locale/$l ] ; then
+			echo "Copying GTK i18n files for $l..."
+			cp -r $GTKSTACK_ROOT/share/locale/$l $Locale
+		else
+			# try with just the language spec
+			just_lang=`echo $l | sed 's/_[A-Z][A-Z]$//'`
+			if [ -d $GTKSTACK_ROOT/share/locale/$just_lang ] ; then
+				echo "Copying GTK i18n files for $l..."
+				cp -r $GTKSTACK_ROOT/share/locale/$just_lang $Locale
+			fi
+		fi
+	done
 else
-    echo "Skipping NLS support"
+	echo "Skipping NLS support"
 fi
 
 #
 # Copy stuff that may be dynamically loaded
-# 
+#
 
-cp -R $GTKSTACK_ROOT/etc/* $Etc
-cp -R $GTKSTACK_ROOT/lib/charset.alias $Resources
+#cp -R $GTKSTACK_ROOT/etc/* $Etc
+#cp -R $GTKSTACK_ROOT/lib/charset.alias $Resources
 
 # We rely on clearlooks, so include a version from our own build tree
 # this one is special - we will set GTK_PATH to $Frameworks/gtkengines
@@ -321,110 +332,152 @@ GTK_ENGINE_DIR=$Frameworks/gtkengines/engines
 mkdir -p $GTK_ENGINE_DIR
 
 echo "Copying GTK engines ..."
-cp $BUILD_ROOT/libs/clearlooks-newer/libclearlooks.dylib $Frameworks
-(cd $GTK_ENGINE_DIR && ln -s ../../libclearlooks.dylib . && ln -s ../../libclearlooks.dylib libclearlooks.so)
-
-cp $GTKSTACK_ROOT/lib/gtk-2.0/2.10.0/engines/libpixmap.so $Frameworks
-(cd $GTK_ENGINE_DIR && ln -s ../../libpixmap.so)
-
+cp $BUILD_ROOT/libs/clearlooks-newer/libclearlooks.dylib $GTK_ENGINE_DIR/libclearlooks.so
 
 # Control Surface shared libraries
 cp $BUILD_ROOT/libs/surfaces/*/libardour_*.dylib $Surfaces
-cp $BUILD_ROOT/libs/surfaces/control_protocol/libardourcp*.dylib $Frameworks
+cp $BUILD_ROOT/libs/ctrl-interface/*/libardour_*.dylib $Frameworks
 
 # Panners
 cp $BUILD_ROOT/libs/panners/*/lib*.dylib $Panners
 
 # Backends
-for backend in jack wavesaudio dummy coreaudio; do
-    cp $BUILD_ROOT/libs/backends/$backend/lib*.dylib $Backends
-done
+cp $BUILD_ROOT/libs/backends/*/lib*.dylib $Backends
 
 # Export Formats/Presets
-for f in $BUILD_ROOT/../export/*.preset $BUILD_ROOT/../export/*.format ; do 
-    cp "$f" $ExportFormats ; 
+for f in $BUILD_ROOT/../share/export/*.preset $BUILD_ROOT/../share/export/*.format ; do
+	cp "$f" $ExportFormats ;
 done
 
 #Session templates
-cp -av $BUILD_ROOT/../templates $Templates
+cp -R $BUILD_ROOT/../share/templates $Templates
+
+#LADSPA Presets
+cp -av $BUILD_ROOT/../share/rdf $LRDFPresets
 
 # PluginMetadata
-cp -av $BUILD_ROOT/../plugin_metadata $PluginMetadata
+cp -R $BUILD_ROOT/../share/plugin_metadata $PluginMetadata
 
 # MidiMaps
 # got to be careful with names here
-for x in $BUILD_ROOT/../midi_maps/*.map ; do
-    cp "$x" $MidiMaps
+for x in $BUILD_ROOT/../share/midi_maps/*.map ; do
+	cp "$x" $MidiMaps
 done
 
 # MIDNAM Patch Files
 # got to be careful with names here
-for x in $BUILD_ROOT/../patchfiles/*.midnam ; do
-    cp "$x" $PatchFiles
-done
+if test -z "$VBM"; then
+	for x in $BUILD_ROOT/../share/patchfiles/*.midnam ; do
+		cp "$x" $PatchFiles
+	done
+fi
 
 # Lua Script Files
 # got to be careful with names here
-for x in $BUILD_ROOT/../scripts/*.lua ; do
-		BN=$(basename $x)
-	  if test "${BN:0:1}" = "_"; then
-			continue;
-		fi
-    cp "$x" $LuaScripts
+for x in $BUILD_ROOT/../share/scripts/*.lua ; do
+	BN=$(basename $x)
+	if test "${BN:0:1}" = "_"; then
+		continue;
+	fi
+	cp "$x" $LuaScripts
 done
+
+# recursively copy web-surface html/js
+cp -R $BUILD_ROOT/../share/web_surfaces $WebSurfaces
+rm $WebSurfaces/wscript
+
+# recursively copy clips/media
+cp -R $BUILD_ROOT/../share/media $MediaClips
+rm $MediaClips/wscript
 
 # MackieControl data
 # got to be careful with names here
-for x in $BUILD_ROOT/../mcp/*.device $BUILD_ROOT/../mcp/*.profile ; do
-    cp "$x" $MackieControl
+for x in $BUILD_ROOT/../share/mcp/*.device $BUILD_ROOT/../share/mcp/*.profile ; do
+	cp "$x" $MackieControl
 done
 
 # OSC data
 # got to be careful with names here
-for x in $BUILD_ROOT/../osc/*.preset ; do
-    cp "$x" $OSC
+for x in $BUILD_ROOT/../share/osc/*.preset ; do
+	cp "$x" $OSC
+done
+
+# Mixbus MixerSettings (if any)
+for x in $BUILD_ROOT/../share/mixer_settings/*.lua ; do
+	mkdir -p $MixerSettings  # create on demand
+	cp "$x" $MixerSettings
 done
 
 # VAMP plugins that we use
 cp $BUILD_ROOT/libs/vamp-plugins/libardourvampplugins.dylib $Frameworks
+cp $BUILD_ROOT/libs/vamp-pyin/libardourvamppyin.dylib $Frameworks
 
 # Suil modules (new dir 'build-stack')
-if test -d $GTKSTACK_ROOT/lib/suil-0/ ; then
-    cp $GTKSTACK_ROOT/lib/suil-0/lib* $Frameworks
-fi
-
-# Suil modules (old dir 'build-ardour-stack')
-if test -d $ARDOURSTACK_ROOT/lib/suil-0/ ; then
-    cp $ARDOURSTACK_ROOT/lib/suil-0/lib* $Frameworks
+if test -d $BUILD_ROOT/libs/tk/suil/ ; then
+	cp $BUILD_ROOT/libs/tk/suil/libsuil_cocoa_in_gtk2.dylib $Frameworks
+elif test -d $GTKSTACK_ROOT/lib/suil-0/ ; then
+	cp $GTKSTACK_ROOT/lib/suil-0/lib* $Frameworks
 fi
 
 # VST scanner app and wrapper script, if they exist
 if test -d $BUILD_ROOT/libs/fst ; then
-    cp $BUILD_ROOT/libs/fst/ardour-vst-scanner* $Frameworks/
+	cp $BUILD_ROOT/libs/fst/ardour-vst-scanner* $Frameworks/ || true
+	cp $BUILD_ROOT/libs/fst/ardour-vst3-scanner* $Frameworks/ || true
+fi
+if test -d $BUILD_ROOT/libs/auscan ; then
+	cp $BUILD_ROOT/libs/auscan/ardour-au-scanner* $Frameworks/ || true
 fi
 
 # vfork wrapper
 if test -f $BUILD_ROOT/libs/vfork/ardour-exec-wrapper ; then
-    mkdir -p $Frameworks/vfork
-    cp $BUILD_ROOT/libs/vfork/ardour-exec-wrapper $Frameworks/
+	cp $BUILD_ROOT/libs/vfork/ardour-exec-wrapper $Frameworks/
 fi
+
+# session utils start script (temp file)
+cat >> $Frameworks/ardour-util.sh << EOF
+#!/bin/sh
+
+BIN_DIR=\$(dirname "\$0")
+BUNDLE_DIR=\$(dirname "\$BIN_DIR")
+
+export ARDOUR_DATA_PATH="\$BUNDLE_DIR/Resources"
+export ARDOUR_CONFIG_PATH="\$BUNDLE_DIR/Resources"
+export ARDOUR_DLL_PATH="\$BUNDLE_DIR/lib"
+export VAMP_PATH="\$BUNDLE_DIR/lib"\${VAMP_PATH:+:\$VAMP_PATH}
+
+SELF=\$(basename "\$0")
+exec "\$BUNDLE_DIR/lib/\$SELF" "\$@"
+EOF
+chmod +x $Frameworks/ardour-util.sh
 
 # session-utils
 HAVE_SESSION_UTILS=false
-for file in $BUILD_ROOT/session_utils/${lower_case_appname}${major_version}-*; do
-	BN=$(basename $file)
-	cp -v $file $Frameworks/
+if test -d $BUILD_ROOT/session_utils/; then
+	for file in $BUILD_ROOT/session_utils/${lower_case_appname}${major_version}-*; do
+		BN=$(basename $file)
+		cp $file $Frameworks/
+		if test x$STRIP = xall ; then
+			strip -s $Frameworks/${BN}
+		fi
+		cp -R $Frameworks/ardour-util.sh ${APPROOT}/MacOS/${BN}
+		HAVE_SESSION_UTILS=true
+	done
+fi
+
+if test -x $BUILD_ROOT/luasession/luasession; then
+	BN=${lower_case_appname}${major_version}-lua
+	cp $BUILD_ROOT/luasession/luasession $Frameworks/$BN
 	if test x$STRIP = xall ; then
 		strip -s $Frameworks/${BN}
 	fi
-	ln -s ../lib/ardour-util.sh ${APPROOT}/MacOS/${BN}
+	cp -R $Frameworks/ardour-util.sh ${APPROOT}/MacOS/${BN}
 	HAVE_SESSION_UTILS=true
-done
+fi
 
 # dynamically loaded NSS/SSL libs
 nsslibs="libsoftokn3.dylib libnsspem.dylib libnssckbi.dylib libfreebl3.dylib libnssdbm3.dylib libplds4.dylib"
 for nsslib in $nsslibs; do
-	cp $GTKSTACK_ROOT/lib/$nsslib $Frameworks/ || true
+	cp $GTKSTACK_ROOT/lib/$nsslib $Frameworks/ 2>/dev/null || true
 done
 
 # TODO check if this is still needed, even when building on 10.5
@@ -434,39 +487,47 @@ else
 STDCPP=
 fi
 
-while [ true ] ; do 
-    missing=false
-    for file in $APPROOT/MacOS/* $Frameworks/* $Frameworks/modules/* $Panners/*.dylib $Backends/*.dylib $Surfaces/*.dylib ; do
-	if ! file $file | grep -qs Mach-O ; then
-	    continue
-	fi
-	# libffi contains "S" (other section symbols) that should not be stripped.
-	if [[ $file == *"libffi"* ]] ; then
-	    continue
-	fi
-
-	if test x$STRIP != x ; then
-		strip -u -r -arch all $file &>/dev/null
-	fi
-
-	deps=`otool -L $file | awk '{print $1}' | egrep "($GTKSTACK_ROOT|$ARDOURSTACK_ROOT|/opt/|/local/|libs/$STDCPP)" | grep -v 'libjack\.' | grep -v "$(basename $file)"`
-	# echo -n "."
-	for dep in $deps ; do
-	    base=`basename $dep`
-	    if ! test -f $Frameworks/$base; then
-		if echo $dep | grep -sq '^libs' ; then
-		    cp $BUILD_ROOT/$dep $Frameworks
-		else
-		    cp $dep $Frameworks
+echo "Stripping symbols and architectures."
+while [ true ] ; do
+	missing=false
+	for file in $APPROOT/MacOS/* $Frameworks/* $Panners/*.dylib $Backends/*.dylib $Surfaces/*.dylib $GTK_ENGINE_DIR/*.dylib ; do
+		if ! file $file | grep -qs Mach-O ; then
+			continue
 		fi
-		missing=true
-	    fi
+		# libffi contains "S" (other section symbols) that should not be stripped.
+		if [[ $file = *"libffi"* ]] ; then
+			continue
+		fi
+
+		if test x$STRIP != x ; then
+			# NSS is dynamically loaded, symbols cannot be stripped
+			if test "`basename $file`" = "libnspr4.dylib" -o "`basename $file`" = "libplds4.dylib"; then
+				# only remove debug and local symbols
+				strip -S -x -u -r -arch all $file &>/dev/null
+			else
+				strip -u -r -arch all $file &>/dev/null
+			fi
+		fi
+
+		deps=`otool -L $file | awk '{print $1}' | egrep "($GTKSTACK_ROOT|/opt/|/local/|libs/$STDCPP)" | grep -v 'libjack\.' | grep -v "$(basename $file)"`
+		# echo -n "."
+		for dep in $deps ; do
+			base=`basename $dep`
+			if ! test -f $Frameworks/$base; then
+				if echo $dep | grep -sq '^libs' ; then
+					cp $BUILD_ROOT/$dep $Frameworks
+				else
+					cp $dep $Frameworks
+				fi
+				missing=true
+				chmod 755 $Frameworks/$base
+			fi
+		done
 	done
-    done
-    if test x$missing = xfalse ; then
-	# everything has been found
-	break
-    fi
+	if test x$missing = xfalse ; then
+		# everything has been found
+		break
+	fi
 done
 echo
 
@@ -477,6 +538,10 @@ cp $BUILD_ROOT/gtk2_ardour/ardour.menus $Resources
 cp $BUILD_ROOT/gtk2_ardour/default_ui_config $Resources
 cp $BUILD_ROOT/gtk2_ardour/clearlooks.rc $Resources
 
+if test -n "$LIVETRAX"; then
+	cp $BUILD_ROOT/gtk2_ardour/livetrax.keys $Resources
+fi
+
 # Copied directly from source tree
 
 mkdir ${Resources}/icons
@@ -485,54 +550,30 @@ cp ../../system_config $Resources/system_config
 cp ../../gtk2_ardour/icons/*.png ${Resources}/icons/
 cp -r ../../gtk2_ardour/icons/cursor_* ${Resources}/icons/
 cp ../../gtk2_ardour/ArdourMono.ttf $Shared
+cp ../../gtk2_ardour/ArdourSans.ttf $Shared
 cp ../../gtk2_ardour/resources/${PRODUCT_PKG_DIR}-* ${Resources}/resources/
 
 
 # Themes: only install those named for this app
 cp ../../gtk2_ardour/themes/*-${lower_case_appname}.colors $Themes
 
-# go through and recursively remove any .svn dirs in the bundle
-for svndir in `find $APPDIR -name .svn -type dir`; do
-    rm -rf $svndir
-done
-
-# session utils start script
-if test "$HAVE_SESSION_UTILS" = true ; then
-	cat >> $Frameworks/ardour-util.sh << EOF
-#!/bin/sh
-
-BIN_DIR=\$(dirname "\$0")
-BUNDLE_DIR=\$(dirname "\$BIN_DIR")
-
-export ARDOUR_DATA_PATH="\$BUNDLE_DIR/share"
-export ARDOUR_CONFIG_PATH="\$BUNDLE_DIR/etc"
-export ARDOUR_DLL_PATH="\$BUNDLE_DIR/lib"
-export VAMP_PATH="\$BUNDLE_DIR/lib"\${VAMP_PATH:+:\$VAMP_PATH}
-
-SELF=\$(basename "\$0")
-exec "\$BUNDLE_DIR/lib/\$SELF" "\$@"
-EOF
-	chmod +x $Frameworks/ardour-util.sh
-fi
-
+# remove temp session utils start script
+rm $Frameworks/ardour-util.sh
 
 # install bundled LV2s to <app>/Contents/lib/LV2/
-cp -R $BUILD_ROOT/libs/LV2 $Frameworks/
+cp -R $BUILD_ROOT/libs/LV2 $Frameworks/ || true
 
-# lv2 core, classifications etc - TODO check if we need the complete LV2 ontology
-if test -d $ARDOURSTACK_ROOT/lib/lv2/lv2core.lv2 ; then
-	cp -R $ARDOURSTACK_ROOT/lib/lv2/lv2core.lv2 $Frameworks/LV2/
-elif test -d $GTKSTACK_ROOT/lib/lv2/lv2core.lv2 ; then
-	cp -R $GTKSTACK_ROOT/lib/lv2/lv2core.lv2 $Frameworks/LV2/
-fi
+# lv2 core, classifications
+for file in $GTKSTACK_ROOT/lib/lv2/*.lv2; do
+	BN=$(basename $file)
+	mkdir -p $Frameworks/LV2/$BN
+	cp $GTKSTACK_ROOT/lib/lv2/${BN}/*.ttl $Frameworks/LV2/${BN}/
+done
 
 
 # now fix up the executables
 echo "Fixing up executable dependency names ..."
 executables=$MAIN_EXECUTABLE
-if test x$SAE != x ; then
-    executables="$executables"
-fi
 if test "$HAVE_SESSION_UTILS" = true ; then
 	for file in  $Frameworks/${lower_case_appname}${major_version}-*; do
 		BN=$(basename $file)
@@ -544,63 +585,72 @@ if test -f "$Frameworks/ardour-vst-scanner"; then
 	executables="$executables ../lib/ardour-vst-scanner"
 fi
 
+if test -f "$Frameworks/ardour-vst3-scanner"; then
+	executables="$executables ../lib/ardour-vst3-scanner"
+fi
+
+if test -f "$Frameworks/ardour-au-scanner"; then
+	executables="$executables ../lib/ardour-au-scanner"
+fi
+
 for exe in $executables; do
-    echo "Processing Executable: $exe"
-    EXE=$APPROOT/MacOS/$exe
-    changes=""
-    for lib in `otool -L $EXE | egrep "($GTKSTACK_ROOT|$ARDOURSTACK_ROOT|/opt/|/local/|libs/$STDCPP)" | awk '{print $1}' | grep -v 'libjack\.'` ; do
-      base=`basename $lib`
-      changes="$changes -change $lib @executable_path/../lib/$base"
-    done
-    if test "x$changes" != "x" ; then
-	install_name_tool $changes $EXE
-    fi
+	echo "Processing Executable: $exe"
+	EXE=$APPROOT/MacOS/$exe
+	changes=""
+	for lib in `otool -L $EXE | egrep "($GTKSTACK_ROOT|/opt/|/local/|libs/$STDCPP)" | awk '{print $1}' | grep -v 'libjack\.'` ; do
+		base=`basename $lib`
+		changes="$changes -change $lib @executable_path/../lib/$base"
+	done
+	if test "x$changes" != "x" ; then
+		install_name_tool $changes $EXE
+	fi
 done
 
 echo "Fixing up library names ..."
 # now do the same for all the libraries we include
-for libdir in $Frameworks $Frameworks/modules $Surfaces $Panners $Backends $Frameworks/LV2/* ; do
+for libdir in $Frameworks $Surfaces $Panners $Backends $Frameworks/LV2/* $GTK_ENGINE_DIR; do
 
-    libbase=`basename $libdir`
-    
-    for dylib in $libdir/*.dylib $libdir/*.so ; do
-	
-       # skip symlinks
-	
-	if test -L $dylib ; then
-	    continue
-	fi
-	
-        # change all the dependencies
-	
-	changes=""
-	for lib in `otool -L $dylib | egrep "($GTKSTACK_ROOT|$ARDOURSTACK_ROOT|/opt/|/local/|libs/$STDCPP)" | awk '{print $1}' | grep -v 'libjack\.'` ; do
-	    base=`basename $lib`
-	    if echo $lib | grep -s libbase; then
-		changes="$changes -change $lib @executable_path/../$libbase/$base"
-	    else
-		changes="$changes -change $lib @executable_path/../lib/$base"
-	    fi
+	libbase=`echo "$libdir" | sed 's#^'$Frameworks'##'`
+
+	for dylib in $libdir/*.dylib $libdir/*.so ; do
+
+		# skip symlinks
+		if test -L $dylib ; then
+			echo "FOUND SYMLINK"
+			exit
+		fi
+		if ! test -f $dylib ; then
+			continue
+		fi
+
+		# change all the dependencies
+
+		changes=""
+		for lib in `otool -L $dylib | egrep "($GTKSTACK_ROOT|/opt/|/local/|libs/$STDCPP)" | awk '{print $1}' | grep -v 'libjack\.'` ; do
+			base=`basename $lib`
+			if test -f $Frameworks/$base ; then
+				changes="$changes -change $lib @executable_path/../lib/$base"
+			fi
+		done
+
+		if test "x$changes" != x ; then
+			if  install_name_tool $changes $dylib ; then
+				:
+			else
+				exit 1
+			fi
+		fi
+
+		# now the change what the library thinks its own name is
+
+		base=`basename $dylib`
+		install_name_tool -id @executable_path/../lib$libbase/$base $dylib
 	done
-	
-	if test "x$changes" != x ; then
-	    if  install_name_tool $changes $dylib ; then
-		:
-	    else
-		exit 1
-	    fi
-	fi
-	
-	# now the change what the library thinks its own name is
-	
-	base=`basename $dylib`
-	install_name_tool -id @executable_path/../$libbase/$base $dylib
-    done
 done
 
 #
 # and now ... the DMG
-# 
+#
 
 rm -rf $PRODUCT_PKG_DIR
 mkdir $PRODUCT_PKG_DIR
@@ -608,42 +658,53 @@ mkdir $PRODUCT_PKG_DIR
 DMGWINBOTTOM=440
 DMGBACKGROUND=dmgbg
 
-if [ x$SAE != x ] ; then
-	
-    # SAE packaging
-    
-    echo "Creating SAE packaging directory"
-    mv $APPDIR $PRODUCT_PKG_DIR/Ardour3-SAE.app
-    cp HowToInstallArdourSAE.pdf "$PRODUCT_PKG_DIR/How To Install Ardour SAE.pdf"
-    cp SAE-de-keypad.pdf "$PRODUCT_PKG_DIR/Ardour SAE Shortcuts (keypad).pdf"
-    cp SAE-de-nokeypad.pdf "$PRODUCT_PKG_DIR/Ardour SAE Shortcuts.pdf"
-    
-elif [ x$MIXBUS != x ] ; then
-
-     # Mixbus packaging
-
-    echo "Creating Mixbus packaging directory"
-    mv $APPDIR $PRODUCT_PKG_DIR/
-    DMGBACKGROUND=dmgbgMB
-else 
-
-    echo "Creating $APPNAME packaging directory"
-    mv $APPDIR $PRODUCT_PKG_DIR/
-
+if test -n "$MIXBUS" -o -n "$LIVETRAX" -o -n "$VBM" ; then
+	DMGBACKGROUND=dmgbgMB
 fi
+
+echo "Creating $APPNAME packaging directory"
+mv $APPDIR $PRODUCT_PKG_DIR/
+
+################################################################################
+# from here on $PRODUCT_PKG_DIR/ prefix is needed
+################################################################################
 
 if file ${PRODUCT_PKG_DIR}/$APPROOT/MacOS/$MAIN_EXECUTABLE | grep -q x86_64; then
 	OSX_ARCH=x86_64
+	OSX_X42URI=x42-plugins.com/x42/osx
+	OSX_X42ID=osx
 	OSX_BENSID=osx64
+	HARVID_ARCH="osx"
+	XJADEO_ARCH=""
+	ARDOUR_ARCH="-x86_64"
 elif file ${PRODUCT_PKG_DIR}/$APPROOT/MacOS/$MAIN_EXECUTABLE | grep -q ppc; then
 	OSX_ARCH=ppc
+	OSX_X42URI=x42-plugins.com/x42/osx
+	OSX_X42ID=osx
 	OSX_BENSID=osxppc
+	HARVID_ARCH="osx"
+	XJADEO_ARCH=""
+	ARDOUR_ARCH=""
+elif file ${PRODUCT_PKG_DIR}/$APPROOT/MacOS/$MAIN_EXECUTABLE | grep -q arm64; then
+	OSX_ARCH=arm64
+	OSX_X42URI=x42-plugins.com/x42/mac
+	OSX_X42ID="macOS"
+	OSX_BENSID=macarm64
+	HARVID_ARCH="macOS-arm64"
+	XJADEO_ARCH="-arm64"
+	ARDOUR_ARCH="-arm64"
 else
 	OSX_ARCH=i386
+	OSX_X42URI=x42-plugins.com/x42/osx
+	OSX_X42ID=osx
 	OSX_BENSID=osx32
+	HARVID_ARCH="osx"
+	XJADEO_ARCH=""
+	ARDOUR_ARCH="-i386"
 fi
 
 if test x$WITH_HARRISON_LV2 != x ; then
+	echo "Bundling Harrison XT plugins"
 	curl -s -S --fail -#  \
 		-z "${CACHEDIR}/${HARRISONLV2}.${OSX_BENSID}.zip" \
 		-o "${CACHEDIR}/${HARRISONLV2}.${OSX_BENSID}.zip" \
@@ -654,26 +715,39 @@ if test x$WITH_HARRISON_LV2 != x ; then
 		"${CACHEDIR}/${HARRISONLV2}.${OSX_BENSID}.zip"
 fi
 
+if test x$WITH_HARRISON_VBM != x ; then
+	curl -s -S --fail -#  \
+		-z "${CACHEDIR}/harrison_vbm.${OSX_BENSID}.zip" \
+		-o "${CACHEDIR}/harrison_vbm.${OSX_BENSID}.zip" \
+		"${HARRISONDSPURL}/harrison_vbm.${OSX_BENSID}.zip"
+
+	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
+	bsdtar -C "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/" -xf \
+		"${CACHEDIR}/harrison_vbm.${OSX_BENSID}.zip"
+fi
+
 if test x$WITH_HARVID != x ; then
-	echo "installing video tools.."
+	echo "installing harvid..."
 	HARVID_VERSION=$(curl -s -S http://ardour.org/files/video-tools/harvid_version.txt)
-	XJADEO_VERSION=$(curl -s -S http://ardour.org/files/video-tools/xjadeo_version.txt)
-	MULTIARCH=osx
-	echo "copying harvid and xjadeo ..."
 
 	rsync -Pa \
-		rsync://ardour.org/video-tools/harvid-osx-${HARVID_VERSION}.tgz \
-		"$CACHEDIR/harvid-${MULTIARCH}-${HARVID_VERSION}.tgz"
-
-	rsync -Pa \
-		rsync://ardour.org/video-tools/jadeo-${XJADEO_VERSION:1}.dmg \
-		"$CACHEDIR/jadeo-${XJADEO_VERSION:1}.dmg"
+		rsync://ardour.org/video-tools/harvid-${HARVID_ARCH}-${HARVID_VERSION}.tgz \
+		"$CACHEDIR/harvid-${HARVID_ARCH}-${HARVID_VERSION}.tgz"
 
 	tar -x -z \
 		-C $PRODUCT_PKG_DIR/$APPROOT \
-		-f "$CACHEDIR/harvid-${MULTIARCH}-${HARVID_VERSION}.tgz" || exit 1
+		-f "$CACHEDIR/harvid-${HARVID_ARCH}-${HARVID_VERSION}.tgz" || exit 1
+fi
 
-	JADEO=$(hdiutil attach "$CACHEDIR/jadeo-${XJADEO_VERSION:1}.dmg" | grep Apple_HFS | grep dev/ | cut -f 3)
+if test x$WITH_XJADEO != x ; then
+	echo "installing video monitor.."
+	XJADEO_VERSION=$(curl -s -S http://ardour.org/files/video-tools/xjadeo_version.txt)
+
+	rsync -Pa \
+		rsync://ardour.org/video-tools/jadeo${XJADEO_ARCH}-${XJADEO_VERSION:1}.dmg \
+		"$CACHEDIR/jadeo${XJADEO_ARCH}-${XJADEO_VERSION:1}.dmg"
+
+	JADEO=$(hdiutil attach "$CACHEDIR/jadeo${XJADEO_ARCH}-${XJADEO_VERSION:1}.dmg" | grep Apple_HFS | grep dev/ | cut -f 3)
 	cp -r "${JADEO}/Jadeo.app" "$PRODUCT_PKG_DIR/"
 	hdiutil detach "${JADEO}"
 
@@ -681,7 +755,7 @@ if test x$WITH_HARVID != x ; then
 	HVLIBS=${PRODUCT_PKG_DIR}/$APPROOT/lib/harvid
 
 	for file in ${XJCONTENT}/MacOS/Jadeo-bin ${XJCONTENT}/Frameworks/*.dylib ${HVLIBS}/*.dylib ${PRODUCT_PKG_DIR}/$APPROOT/MacOS/*harvid* ; do
-		lipo -extract_family ${OSX_ARCH} ${file} -output ${file}.thin && \
+		lipo -extract_family ${OSX_ARCH} ${file} -output ${file}.thin 2>/dev/null && \
 		mv ${file}.thin ${file}
 	done
 
@@ -692,49 +766,72 @@ if test x$WITH_HARVID != x ; then
 	DMGBACKGROUND=${DMGBACKGROUND}xj
 fi
 
+echo "Using image '$DMGBACKGROUND' for the DMG."
+
 ################################################################################
 ### Mixbus plugins, etc
-if true; then
+if test x$WITH_GMSYNTH != x ; then
 	echo "Bundling General MIDI Synth LV2"
 	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
 
 	for proj in x42-gmsynth; do
-		X42_VERSION=$(curl -s -S http://x42-plugins.com/x42/osx/${proj}.latest.txt)
+		X42_VERSION=$(curl -s -S http://${OSX_X42URI}/${proj}.latest.txt)
 		rsync -a -q --partial \
-			rsync://x42-plugins.com/x42/osx/${proj}-lv2-osx-${X42_VERSION}.zip \
-			"$CACHEDIR/${proj}-lv2-osx-${X42_VERSION}.zip"
+			rsync://${OSX_X42URI}/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip \
+			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
 		bsdtar -C "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/" -xf \
-			"$CACHEDIR/${proj}-lv2-osx-${X42_VERSION}.zip"
+			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
 	done
-
-	for file in ${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/*/*.dylib ; do
-		lipo -extract_family ${OSX_ARCH} ${file} -output ${file}.thin
-		mv ${file}.thin ${file}
-	done
-
 fi
 
-if test x$WITH_X42_LV2 != x ; then
-	echo "bundling x42 plugins"
+if test x$WITH_COMMERCIAL_X42_LV2 != x ; then
+	echo "Adding commercial x42 plugins"
 	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
 
-	for proj in x42-meters x42-midifilter x42-midimap x42-stereoroute x42-eq setBfree x42-avldrums; do
-		X42_VERSION=$(curl -s -S http://x42-plugins.com/x42/osx/${proj}.latest.txt)
+	for proj in x42-meters x42-eq x42-whirl; do
+		X42_VERSION=$(curl -s -S http://${OSX_X42URI}/${proj}.latest.txt)
 		rsync -a -q --partial \
-			rsync://x42-plugins.com/x42/osx/${proj}-lv2-osx-${X42_VERSION}.zip \
-			"$CACHEDIR/${proj}-lv2-osx-${X42_VERSION}.zip"
+			rsync://${OSX_X42URI}/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip \
+			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
 		bsdtar -C "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/" -xf \
-			"$CACHEDIR/${proj}-lv2-osx-${X42_VERSION}.zip"
+			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
 	done
+fi
 
+if test x$WITH_GRATIS_X42_LV2 != x ; then
+	echo "Adding gratis x42 plugins"
+	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2"
+
+	for proj in $X42PLUGINS; do
+
+		if test -n "$VBM"; then
+			if test "$proj" = "setBfree"; then
+				continue
+			fi
+			if test "$proj" = "x42-avldrums"; then
+				continue
+			fi
+		fi
+
+		X42_VERSION=$(curl -s -S http://${OSX_X42URI}/${proj}.latest.txt)
+		rsync -a -q --partial \
+			rsync://${OSX_X42URI}/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip \
+			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
+		bsdtar -C "${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/" -xf \
+			"$CACHEDIR/${proj}-lv2-${OSX_X42ID}-${X42_VERSION}.zip"
+	done
+fi
+
+if test -d ${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/; then
+	echo "Removing unused architectures from LV2 plugins"
 	for file in ${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2/*/*.dylib ; do
-		lipo -extract_family ${OSX_ARCH} ${file} -output ${file}.thin
+		lipo -extract_family ${OSX_ARCH} ${file} -output ${file}.thin 2>/dev/null && \
 		mv ${file}.thin ${file}
 	done
 fi
 
 if test -n "$MIXBUS"; then
-	echo "deploying harrison channelstrip for $OSX_BENSID"
+	echo "Deploying harrison channelstrip for $OSX_BENSID"
 
 	mkdir -p "${PRODUCT_PKG_DIR}/${APPROOT}/lib/ladspa/strip"
 
@@ -755,16 +852,181 @@ if test -n "$MIXBUS"; then
 
 	cp "${CACHEDIR}/harrison_vamp.${OSX_BENSID}.dylib" \
 		"${PRODUCT_PKG_DIR}/${APPROOT}/lib/harrison_vamp.dylib"
+
+	# Mixbus Bundled Media Content
+	curl -s -S --fail -#  \
+		-z "${CACHEDIR}/MixbusBundledMedia.zip" \
+		-o "${CACHEDIR}/MixbusBundledMedia.zip" \
+		"https://builder.harrisonconsoles.com/pub/share/MixbusBundledMedia.zip"
+
+	if test -f "${CACHEDIR}/MixbusBundledMedia.zip"; then
+		echo "Adding Mixbus Bundled Content"
+		rm -f "${PRODUCT_PKG_DIR}/${MediaClips}/"*.*
+		bsdtar -C "${PRODUCT_PKG_DIR}/${MediaClips}" -xf \
+			"${CACHEDIR}/MixbusBundledMedia.zip"
+	fi
+elif test -z "$LIVETRAX" -a -z "$VBM" ; then
+	echo "Fetching Ardour bundled content"
+	curl -s -S --fail -#  \
+		-z "${CACHEDIR}/ArdourBundledMedia.zip" \
+		-o "${CACHEDIR}/ArdourBundledMedia.zip" \
+		"http://stuff.ardour.org/loops/ArdourBundledMedia.zip"
+
+	if test -f "${CACHEDIR}/ArdourBundledMedia.zip"; then
+		echo "Adding Ardour Bundled Content"
+		rm -f "${PRODUCT_PKG_DIR}/${MediaClips}/"*.*
+		bsdtar -C "${PRODUCT_PKG_DIR}/${MediaClips}" -xf \
+			"${CACHEDIR}/ArdourBundledMedia.zip"
+	fi
+fi
+
+echo "Setting Bundled Media dir/file permissions"
+find "${MediaClips}" -type d -exec chmod 755 "{}" \;
+find "${MediaClips}" -type f -exec chmod 644 "{}" \;
+
+################################################################################
+if test -n "$MIXBUS"; then
+
+	for file in `find ${PRODUCT_PKG_DIR}/${APPROOT}/lib/LV2 ${PRODUCT_PKG_DIR}/${APPROOT}/lib/ladspa -name "*.so"`; do
+		echo "Checking Plugin Binary: $file"
+		changes=""
+		for lib in `otool -L $file | egrep "(gtk/inst/|/opt/|/local/|libs/$STDCPP)" | awk '{print $1}'` ; do
+			base=`basename $lib`
+			changes="$changes -change $lib @executable_path/../lib/$base"
+		done
+		if test "x$changes" != "x" ; then
+			install_name_tool $changes $file
+		fi
+	done
+
+fi
+################################################################################
+
+if test x$DEMO_SESSION_URL != x ; then
+	mkdir -p ${PRODUCT_PKG_DIR}/$Shared/sessions
+	DEMO_SESSIONS=$(curl -s -S --fail $DEMO_SESSION_URL/index.txt)
+	for demo in $DEMO_SESSIONS; do
+		curl -s -S --fail -# -o ${PRODUCT_PKG_DIR}/$Shared/sessions/$demo $DEMO_SESSION_URL/$demo
+	done
 fi
 
 ################################################################################
 
-if test x$DEMO_SESSION_URL != x ; then
-	mkdir -p $Shared/sessions
-	DEMO_SESSIONS=$(curl -s -S --fail $DEMO_SESSION_URL/index.txt)
-	for demo in $DEMO_SESSIONS; do
-		curl -s -S --fail -# -o $Shared/sessions/$demo $DEMO_SESSION_URL/$demo
-	done
+
+
+##### App Signing ##############################################################
+
+if test $(sw_vers -productVersion | cut -d '.' -f 1) -lt 11 -a $(sw_vers -productVersion | cut -d '.' -f 2) -lt 14 -a $(sw_vers -productVersion | cut -d '.' -f 2) -lt 7; then
+	#less than 10.13.6 does not support notariztion
+	HARDENED_OPTIONS=
+else
+	HARDENED_OPTIONS="--options runtime --entitlements entitlements.plist"
+fi
+
+echo "checking for signing credentials"
+
+if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}"; then
+
+	####################
+	## Env compatibility
+
+	if test -n "$ALTOOL_PASSWORD"; then
+		ALTOOL_PASS_ARG="--password $ALTOOL_PASSWORD"
+	elif test -n "$NOTARYTOOL_PROFILE"; then
+		# store profile in keychain:
+		# notarytool store-credentials $NOTARYTOOL_PROFILE --apple-id apple@example.com --team-id 1234567890
+		ALTOOL_PASS_ARG="-p $NOTARYTOOL_PROFILE"
+	else
+		echo "either ALTOOL_PASSWORD or NOTARYTOOL_PROFILE needs to be set"
+		exit 1;
+	fi
+
+	if test -n "$ALTOOL_USERNAME" -a -z "$APPLE_ID"; then
+		APPLE_ID=$ALTOOL_USERNAME
+	fi
+
+	if test -z "$APPLE_TEAM_ID"; then
+		APPLE_TEAM_ID="$(echo $APPLE_DEVELOPER_ID_FOR_APPLICATION | sed 's/.*(\(.*\))/\1/')"
+	fi
+
+	####################
+	## Sign the main APP
+
+	echo "signing the main app"
+
+	# Sign everything from inside level working out, but skip MIDI files includes (there are too many to reasonably sign)
+	find ${PRODUCT_PKG_DIR}/${APPROOT}/Resources -type f -not -name \*.mid -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
+	find ${PRODUCT_PKG_DIR}/${APPROOT}/lib -type f -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
+
+	find ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS -name "${lower_case_appname}${major_version}-*" -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
+
+	if test x$WITH_HARVID != x ; then
+		codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/ffmpeg_harvid
+		codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/ffprobe_harvid
+		codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/harvid
+	fi
+
+	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPROOT}/MacOS/${MAIN_EXECUTABLE}
+
+	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/${APPDIR}
+
+	# Notarize
+	if test -n "${HARDENED_OPTIONS}"; then
+		echo "Notarizing the main app"
+
+		ZIP_PATH=${PRODUCT_PKG_DIR}/${BUNDLENAME}.zip
+		/usr/bin/ditto -c -k --keepParent ${PRODUCT_PKG_DIR}/${APPDIR} $ZIP_PATH
+
+		xcrun notarytool submit $ZIP_PATH --apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} $ALTOOL_PASS_ARG --wait
+
+		if [ $? = 0 ]; then
+			echo "Main app notarize success"
+			xcrun stapler staple ${PRODUCT_PKG_DIR}/${APPDIR}
+		else
+			echo "ERROR: Notarize upload failed"
+			exit 1;
+		fi
+
+		rm $ZIP_PATH
+	fi
+fi
+
+if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" -a -n "$WITH_XJADEO"; then
+	#############
+	## Sign Jadeo
+
+	echo "signing the Jadeo app"
+
+	# Sign everything from inside level working out.
+	find ${PRODUCT_PKG_DIR}/Jadeo.app/Contents/Resources -type f -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
+	find ${PRODUCT_PKG_DIR}/Jadeo.app/Contents/Frameworks -type f -print0 | xargs -0 -I {} -P 7 codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" "{}"
+
+	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/Jadeo.app/Contents/MacOS/Jadeo-bin
+	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/Jadeo.app/Contents/MacOS/xjremote
+
+	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/Jadeo.app/Contents/MacOS/Jadeo
+
+	codesign --verbose --timestamp ${HARDENED_OPTIONS} --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${PRODUCT_PKG_DIR}/Jadeo.app
+
+	# Notarize
+	if test -n "${HARDENED_OPTIONS}"; then
+		echo "notarizing Jadeo app"
+
+		ZIP_PATH=${PRODUCT_PKG_DIR}/Jadeo.zip
+		/usr/bin/ditto -c -k --keepParent ${PRODUCT_PKG_DIR}/Jadeo.app $ZIP_PATH
+
+		xcrun notarytool submit $ZIP_PATH --apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} $ALTOOL_PASS_ARG --wait
+
+		if [ $? = 0 ]; then
+			echo "Jadeo notarize success"
+			xcrun stapler staple ${PRODUCT_PKG_DIR}/Jadeo.app
+		else
+			echo "ERROR: Notarize upload failed"
+			exit 1;
+		fi
+
+		rm $ZIP_PATH
+	fi
 fi
 
 ################################################################################
@@ -773,21 +1035,28 @@ fi
 
 echo "Building DMG ..."
 
-# UC_DMG=$APPNAME-${release_version}-UC.dmg
-# FINAL_DMG=$APPNAME-${release_version}.dmg
+BUILDTYPE=""
 
 if [ x$DEBUG = xT ]; then
-	UC_DMG=$APPNAME-$release_version-dbg.dmg
-else
-	UC_DMG=$APPNAME-$release_version.dmg
+	BUILDTYPE="-dbg"
 fi
+if [ x$FREEBI = xT ]; then
+	BUILDTYPE="-demo"
+fi
+if [ x$DEBUG$FREEBI = xTT ]; then
+  BUILDTYPE="-demo-dbg"
+fi
+
+UC_DMG=$APPNAME-$release_version${BUILDTYPE}${ARDOUR_ARCH}.dmg
+
 VOLNAME=$APPNAME-$release_version
 
 MNTPATH=`mktemp -d -t ardourimg`
 TMPDMG=`mktemp -t ardour`
 ICNSTMP=`mktemp -t ardouricon`
-EXTRA_SPACE_MB=30
-DMGMEGABYTES=$[ `du -sk "$PRODUCT_PKG_DIR" | cut -f 1` * 1024 / 1048576 + $EXTRA_SPACE_MB ]
+DMGMEGABYTES=$[ `du -sk "$PRODUCT_PKG_DIR" | cut -f 1` * 1024 / 1000000 ]
+EXTRA_SPACE_MB=$[ ($DMGMEGABYTES * 25) / 100 ]          #25 percent without using floating point math
+DMGMEGABYTES=$[ $DMGMEGABYTES + $EXTRA_SPACE_MB ]
 
 echo "DMG MB = " $DMGMEGABYTES
 
@@ -797,7 +1066,7 @@ mkdir -p "$MNTPATH"
 
 TMPDMG="${TMPDMG}.dmg"
 
-trap "rm -rf $MNTPATH $TMPDMG ${TMPDMG}.dmg $ICNSTMP" EXIT
+trap "rm -rf $MNTPATH $TMPDMG $ICNSTMP" EXIT
 
 hdiutil create -megabytes $DMGMEGABYTES -fs HFS+ -volname "${VOLNAME}" "$TMPDMG"
 DiskDevice=$(hdid -nomount "$TMPDMG" | grep Apple_HFS | cut -f 1 -d ' ')
@@ -805,11 +1074,11 @@ mount -t hfs -o nobrowse "${DiskDevice}" "${MNTPATH}"
 
 cp -r ${PRODUCT_PKG_DIR}/* "${MNTPATH}" || exit
 mkdir "${MNTPATH}/.background"
-cp -vi ${DMGBACKGROUND}.png "${MNTPATH}/.background/dmgbg.png"
+cp ${DMGBACKGROUND}.png "${MNTPATH}/.background/dmgbg.png"
 
 echo "setting DMG background ..."
 
-if test $(sw_vers -productVersion | cut -d '.' -f 2) -lt 9; then
+if test $(sw_vers -productVersion | cut -d '.' -f 1) -lt 11 -a $(sw_vers -productVersion | cut -d '.' -f 2) -lt 9; then
 	# OSX ..10.8.X
 	DISKNAME=${VOLNAME}
 else
@@ -819,6 +1088,7 @@ fi
 
 osascript << EOF
   tell application "Finder"
+    close every window
     activate
     tell disk "${DISKNAME}"
       open
@@ -857,12 +1127,14 @@ EOF
 
 chmod -Rf go-w "${MNTPATH}"
 sync
+sleep 1
+sync
 
 set -e
 echo "compressing Image ..."
 
 # Umount the image ('eject' above may already have done that)
-umount "${DiskDevice}" || true
+hdiutil detach "${DiskDevice}" || true
 hdiutil eject "${DiskDevice}" || true
 # Create a read-only version, use zlib compression
 hdiutil convert -format UDZO "${TMPDMG}" -imagekey zlib-level=9 -o "${UC_DMG}"
@@ -871,8 +1143,14 @@ if test $(sw_vers -productVersion | cut -d '.' -f 2) -gt 5; then
 echo "setting file icon ..."
 
 cp ${PRODUCT_PKG_DIR}/$Resources/appIcon.icns ${ICNSTMP}.icns
-sips -i ${ICNSTMP}.icns
-DeRez -only icns ${ICNSTMP}.icns > ${ICNSTMP}.rsrc
+if test $(sw_vers -productVersion | cut -d '.' -f 2) -lt 13; then
+	sips -i ${ICNSTMP}.icns
+	DeRez -only icns ${ICNSTMP}.icns > ${ICNSTMP}.rsrc
+else
+	ICNSBASE=`basename ${ICNSTMP}.icns`
+	echo "read 'icns' (-16455) \"${ICNSBASE}\";" > ${ICNSTMP}.rsrc
+fi
+
 Rez -append ${ICNSTMP}.rsrc -o "$UC_DMG"
 SetFile -a C "$UC_DMG"
 
@@ -882,8 +1160,32 @@ fi
 rm -rf ${PRODUCT_PKG_DIR}
 
 echo
-echo "packaging suceeded."
+echo "packaging succeeded."
 ls -l "$UC_DMG"
+
+echo "dmg: checking for signing credentials"
+
+if test -n "${APPLE_DEVELOPER_ID_FOR_APPLICATION}"; then
+	echo "dmg: signing"
+
+	codesign --verbose --timestamp --force --sign "${APPLE_DEVELOPER_ID_FOR_APPLICATION}" ${UC_DMG}
+
+	if test -n "${HARDENED_OPTIONS}"; then
+		echo "dmg: notarizing"
+
+		xcrun notarytool submit ${UC_DMG} --apple-id ${APPLE_ID} --team-id ${APPLE_TEAM_ID} $ALTOOL_PASS_ARG --wait
+
+		if [ $? = 0 ]; then
+			echo "dmg: notarize success"
+			xcrun stapler staple ${UC_DMG}
+		else
+			echo "ERROR: Notarize upload failed"
+			exit 1;
+		fi
+
+	fi
+fi
+
 
 echo "Done."
 exit

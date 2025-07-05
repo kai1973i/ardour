@@ -1,29 +1,28 @@
 /*
-    Copyright (C) 2014 Paul Davis
+ * Copyright (C) 2014 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libardour_midi_scene_change_h__
-#define __libardour_midi_scene_change_h__
-
-#include "evoral/PatchChange.hpp"
+#include "evoral/PatchChange.h"
 
 #include "pbd/signals.h"
 
+#include "ardour/libardour_visibility.h"
 #include "ardour/scene_change.h"
 
 namespace ARDOUR
@@ -31,7 +30,7 @@ namespace ARDOUR
 
 class MidiPort;
 
-class MIDISceneChange : public SceneChange
+class LIBARDOUR_API MIDISceneChange : public SceneChange
 {
   public:
 	MIDISceneChange (int channel, int bank = -1, int program = -1);
@@ -50,7 +49,7 @@ class MIDISceneChange : public SceneChange
 	size_t get_bank_lsb_message (uint8_t* buf, size_t size) const;
 	size_t get_program_message (uint8_t* buf, size_t size) const;
 
-	XMLNode& get_state();
+	XMLNode& get_state() const;
 	int set_state (const XMLNode&, int version);
 
 	bool operator==(const MIDISceneChange& other) const;
@@ -64,4 +63,3 @@ class MIDISceneChange : public SceneChange
 } /* namespace */
 
 
-#endif /* __libardour_scene_change_h__ */

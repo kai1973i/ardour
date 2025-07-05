@@ -1,34 +1,38 @@
 /*
-    Copyright (C) 2000 Paul Davis
+ * Copyright (C) 2005-2006 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2011 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2009 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_plugin_selector_h__
-#define __ardour_plugin_selector_h__
-
-#include <gtkmm/button.h>
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treeview.h>
+#include <ytkmm/button.h>
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treeview.h>
 
 #include "widgets/ardour_button.h"
 #include "widgets/ardour_dropdown.h"
@@ -38,8 +42,6 @@
 #include "ardour/plugin.h"
 #include "ardour/plugin_manager.h"
 #include "ardour/session_handle.h"
-
-#include "widgets/ardour_button.h"
 
 #include "plugin_interest.h"
 #include "ardour_dialog.h"
@@ -82,7 +84,6 @@ private:
 	/* combobox filters */
 	ArdourWidgets::ArdourDropdown _fil_type_combo;
 	ArdourWidgets::ArdourDropdown _fil_creator_combo;
-	ArdourWidgets::ArdourDropdown _fil_channel_combo;
 
 	PluginInterestedObject* interested_object;
 
@@ -109,7 +110,6 @@ private:
 	struct PluginColumns : public Gtk::TreeModel::ColumnRecord {
 		PluginColumns () {
 			add (favorite);
-			add (hidden);
 			add (name);
 			add (tags);
 			add (creator);
@@ -119,7 +119,6 @@ private:
 			add (plugin);
 		}
 		Gtk::TreeModelColumn<bool> favorite;
-		Gtk::TreeModelColumn<bool> hidden;
 		Gtk::TreeModelColumn<std::string> name;
 		Gtk::TreeModelColumn<std::string> type_name;
 		Gtk::TreeModelColumn<std::string> creator;
@@ -155,6 +154,7 @@ private:
 	void mac_vst_refiller (const std::string&);
 	void au_refiller (const std::string&);
 	void lua_refiller (const std::string&);
+	void vst3_refiller (const std::string&);
 
 	Gtk::Menu* _plugin_menu;
 	ARDOUR::PluginManager& manager;
@@ -169,10 +169,7 @@ private:
 	ARDOUR::PluginPtr load_plugin (ARDOUR::PluginInfoPtr);
 	bool show_this_plugin (const ARDOUR::PluginInfoPtr&, const std::string&);
 
-	void setup_search_string (std::string&);
-
 	void favorite_changed (const std::string& path);
-	void hidden_changed (const std::string& path);
 	bool in_row_change;
 
 	void plugin_chosen_from_menu (const ARDOUR::PluginInfoPtr&);
@@ -180,6 +177,7 @@ private:
 	void plugin_status_changed ( ARDOUR::PluginType t, std::string unique_id, ARDOUR::PluginManager::PluginStatusType s );
 
 	Gtk::Menu* create_favs_menu (ARDOUR::PluginInfoList&);
+	Gtk::Menu* create_charts_menu (ARDOUR::PluginInfoList&);
 	Gtk::Menu* create_by_creator_menu (ARDOUR::PluginInfoList&);
 	Gtk::Menu* create_by_tags_menu (ARDOUR::PluginInfoList&);
 	void build_plugin_menu ();
@@ -188,9 +186,6 @@ private:
 	bool _need_tag_save;
 	bool _need_status_save;
 	bool _need_menu_rebuild;
-
 	bool _inhibit_refill;
 };
-
-#endif // __ardour_plugin_selector_h__
 

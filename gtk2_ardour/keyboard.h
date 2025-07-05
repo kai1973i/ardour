@@ -1,24 +1,26 @@
 /*
-    Copyright (C) 2001 Paul Davis
+ * Copyright (C) 2005-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2008-2010 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_keyboard_h__
-#define __ardour_keyboard_h__
+#pragma once
 
 #include <map>
 #include <string>
@@ -35,12 +37,12 @@ class ArdourKeyboard : public Gtkmm2ext::Keyboard
 public:
 	ArdourKeyboard(ARDOUR_UI&);
 
-	XMLNode& get_state (void);
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
 	void setup_keybindings ();
 
-	static Selection::Operation selection_type (guint state);
+	static ARDOUR::SelectionOperation selection_type (guint state);
 
 	ARDOUR_UI& ui;
 
@@ -70,9 +72,9 @@ public:
 	/** @return Modifier mask to constrain drags in a particular direction; */
 	static ModifierMask constraint_modifier () { return ModifierMask (constraint_mod); }
 
-	static void set_trim_contents_modifier (guint);
+	static void set_slip_contents_modifier (guint);
 	/** @return Modifier mask to move contents rather than region bounds during trim; */
-	static ModifierMask trim_contents_modifier () { return ModifierMask (trim_contents_mod); }
+	static ModifierMask slip_contents_modifier () { return ModifierMask (slip_contents_mod); }
 
 	static void set_trim_overlap_modifier (guint);
 	/** @return Modifier mask to remove region overlaps during trim; */
@@ -95,7 +97,7 @@ public:
 	static ModifierMask note_size_relative_modifier () { return ModifierMask (note_size_relative_mod); }
 private:
 	static guint     constraint_mod;
-	static guint     trim_contents_mod;
+	static guint     slip_contents_mod;
 	static guint     trim_overlap_mod;
 	static guint     trim_anchored_mod;
 	static guint     fine_adjust_mod;
@@ -105,4 +107,3 @@ private:
 	void find_bindings_files (std::map<std::string,std::string>& files);
 };
 
-#endif /* __ardour_keyboard_h__ */

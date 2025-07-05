@@ -1,21 +1,20 @@
 /*
-    Copyright (C) 2006-2015 Paul Davis
-    Author: David Robillard
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2015-2016 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/buffer_set.h"
 #include "ardour/midi_buffer.h"
@@ -25,8 +24,9 @@
 namespace ARDOUR {
 
 MidiChannelFilter::MidiChannelFilter()
-	: _mode_mask(0x0000FFFF)
-{}
+{
+	_mode_mask.store (0x0000FFFF);
+}
 
 void
 MidiChannelFilter::filter(BufferSet& bufs)
@@ -115,7 +115,7 @@ MidiChannelFilter::set_channel_mode(ChannelMode mode, uint16_t mask)
 
 	if (old_mode != mode || old_mask != mask) {
 		mask = force_mask(mode, mask);
-		g_atomic_int_set(&_mode_mask, (uint32_t(mode) << 16) | uint32_t(mask));
+		_mode_mask.store ((uint32_t(mode) << 16) | uint32_t(mask));
 		ChannelModeChanged();
 		return true;
 	}
@@ -132,7 +132,7 @@ MidiChannelFilter::set_channel_mask(uint16_t mask)
 
 	if (old_mask != mask) {
 		mask = force_mask(mode, mask);
-		g_atomic_int_set(&_mode_mask, (uint32_t(mode) << 16) | uint32_t(mask));
+		_mode_mask.store ((uint32_t(mode) << 16) | uint32_t(mask));
 		ChannelMaskChanged();
 		return true;
 	}

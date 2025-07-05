@@ -1,34 +1,41 @@
 /*
-    Copyright (C) 2004
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2016 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2015-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2015-2018 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef COMPILER_MSVC
 #include <stdbool.h>
 #endif
 #include <cstdio>
 
+#include "evoral/midi_util.h"
+
 #include "ardour/audioengine.h"
 #include "ardour/debug.h"
 #include "ardour/session.h"
 #include "ardour/tempo.h"
-#include "ardour/plugin_insert.h"
+#include "ardour/plug_insert_base.h"
 #include "ardour/windows_vst_plugin.h"
-#include "ardour/vestige/aeffectx.h"
+#include "ardour/vestige/vestige.h"
 #include "ardour/vst_types.h"
 #ifdef WINDOWS_VST_SUPPORT
 #include <fst.h>
@@ -37,6 +44,7 @@
 #include "pbd/i18n.h"
 
 using namespace ARDOUR;
+using namespace Temporal;
 
 #define SHOW_CALLBACK(MSG) DEBUG_TRACE (PBD::DEBUG::VSTCallbacks, string_compose (MSG " val = %1 idx = %2\n", index, value))
 
@@ -50,7 +58,8 @@ const char* Session::vst_can_do_strings[] = {
 	X_("receiveVstMidiEvent"),
 	X_("supportShell"),
 	X_("shellCategory"),
-	X_("shellCategorycurID")
+	X_("shellCategorycurID"),
+	X_("sizeWindow")
 };
 const int Session::vst_can_do_string_count = sizeof (vst_can_do_strings) / sizeof (char*);
 
@@ -76,6 +85,9 @@ intptr_t Session::vst_callback (
 		DEBUG_TRACE (PBD::DEBUG::VSTCallbacks, string_compose ("am callback 0x%1%2, opcode = %3%4, plugin = \"%5\"\n",
 					std::hex, (void*) DEBUG_THREAD_SELF,
 					std::dec, opcode, plug->name()));
+		if (plug->_for_impulse_analysis) {
+			plug = 0;
+		}
 	} else {
 		plug = 0;
 		session = 0;
@@ -172,33 +184,34 @@ intptr_t Session::vst_callback (
 		timeinfo->nanoSeconds = g_get_monotonic_time () * 1000;
 
 		if (plug && session) {
+			TempoMap::SharedPtr tmap (TempoMap::fetch());
 			samplepos_t now = plug->transport_sample();
 
 			timeinfo->samplePos = now;
 			timeinfo->sampleRate = session->sample_rate();
 
 			if (value & (kVstTempoValid)) {
-				const Tempo& t (session->tempo_map().tempo_at_sample (now));
+				const Tempo& t (tmap->metric_at (timepos_t (now)).tempo());
 				timeinfo->tempo = t.quarter_notes_per_minute ();
 				newflags |= (kVstTempoValid);
 			}
 			if (value & (kVstTimeSigValid)) {
-				const MeterSection& ms (session->tempo_map().meter_section_at_sample (now));
+				const Meter& ms (tmap->metric_at (timepos_t (now)).meter());
 				timeinfo->timeSigNumerator = ms.divisions_per_bar ();
-				timeinfo->timeSigDenominator = ms.note_divisor ();
+				timeinfo->timeSigDenominator = ms.note_value ();
 				newflags |= (kVstTimeSigValid);
 			}
 			if ((value & (kVstPpqPosValid)) || (value & (kVstBarsValid))) {
-				Timecode::BBT_Time bbt;
+				Temporal::BBT_Argument bbt;
 
 				try {
-					bbt = session->tempo_map().bbt_at_sample_rt (now);
+					bbt = tmap->bbt_at (timepos_t (now));
 					bbt.beats = 1;
 					bbt.ticks = 0;
 					/* exact quarter note */
-					double ppqBar = session->tempo_map().quarter_note_at_bbt_rt (bbt);
+					double ppqBar = DoubleableBeats (tmap->quarters_at (BBT_Argument (bbt))).to_double ();
 					/* quarter note at sample position (not rounded to note subdivision) */
-					double ppqPos = session->tempo_map().quarter_note_at_sample_rt (now);
+					double ppqPos = DoubleableBeats (tmap->quarters_at_sample (now)).to_double();
 					if (value & (kVstPpqPosValid)) {
 						timeinfo->ppqPos = ppqPos;
 						newflags |= kVstPpqPosValid;
@@ -259,16 +272,17 @@ intptr_t Session::vst_callback (
 				newflags |= kVstTransportCycleActive;
 				Location * looploc = session->locations ()->auto_loop_location ();
 				if (looploc) try {
-					timeinfo->cycleStartPos = session->tempo_map ().quarter_note_at_sample_rt (looploc->start ());
-					timeinfo->cycleEndPos = session->tempo_map ().quarter_note_at_sample_rt (looploc->end ());
-
-					newflags |= kVstCyclePosValid;
+						const DoubleableBeats sdb (looploc->start().beats());
+						const DoubleableBeats edb (looploc->end().beats());
+						timeinfo->cycleStartPos = sdb.to_double();
+						timeinfo->cycleEndPos = edb.to_double(); 
+						 newflags |= kVstCyclePosValid;
 				} catch (...) { }
 			}
 
 		} else {
 			timeinfo->samplePos = 0;
-			timeinfo->sampleRate = AudioEngine::instance()->sample_rate();
+			timeinfo->sampleRate = TEMPORAL_SAMPLE_RATE;
 		}
 
 		if ((timeinfo->flags & (kVstTransportPlaying | kVstTransportRecording | kVstTransportCycleActive))
@@ -288,8 +302,14 @@ intptr_t Session::vst_callback (
 			VstEvents* v = (VstEvents*)ptr;
 			for (int n = 0 ; n < v->numEvents; ++n) {
 				VstMidiEvent *vme = (VstMidiEvent*) (v->events[n]->dump);
-				if (vme->type == kVstMidiType) {
-					plug->midi_buffer()->push_back(vme->deltaSamples, 3, (uint8_t*)vme->midiData);
+				int size = Evoral::midi_event_size((uint8_t)vme->midiData[0]);
+				if (vme->type == kVstMidiType && size > 0) {
+					plug->midi_buffer()->push_back(
+						vme->deltaSamples,
+						Evoral::MIDI_EVENT,
+						size,
+						(uint8_t*)vme->midiData
+					);
 				}
 			}
 		}
@@ -298,12 +318,14 @@ intptr_t Session::vst_callback (
 	case audioMasterSetTime:
 		SHOW_CALLBACK ("audioMasterSetTime");
 		// VstTimenfo* in <ptr>, filter in <value>, not supported
+		return 0;
 
 	case audioMasterTempoAt:
 		SHOW_CALLBACK ("audioMasterTempoAt");
 		// returns tempo (in bpm * 10000) at sample sample location passed in <value>
 		if (session) {
-			const Tempo& t (session->tempo_map().tempo_at_sample (value));
+			TempoMap::SharedPtr tmap (TempoMap::fetch());
+			const Tempo& t (tmap->metric_at (timepos_t (value)).tempo());
 			return t.quarter_notes_per_minute() * 1000;
 		} else {
 			return 0;
@@ -346,7 +368,7 @@ intptr_t Session::vst_callback (
 				plug->VSTSizeWindow (); /* EMIT SIGNAL */
 			}
 		}
-		return 0;
+		return 1;
 
 	case audioMasterGetSampleRate:
 		SHOW_CALLBACK ("audioMasterGetSampleRate");
@@ -378,6 +400,7 @@ intptr_t Session::vst_callback (
 	case audioMasterGetNextPlug:
 		SHOW_CALLBACK ("audioMasterGetNextPlug");
 		// output pin in <value> (-1: first to come), returns cEffect*
+		return 0;
 
 	case audioMasterWillReplaceOrAccumulate:
 		SHOW_CALLBACK ("audioMasterWillReplaceOrAccumulate");
@@ -436,7 +459,7 @@ intptr_t Session::vst_callback (
 		SHOW_CALLBACK ("audioMasterGetVendorString");
 		// fills <ptr> with a string identifying the vendor (max 64 char)
 		strcpy ((char*) ptr, "Linux Audio Systems");
-		return 0;
+		return 1;
 
 	case audioMasterGetProductString:
 		SHOW_CALLBACK ("audioMasterGetProductString");
@@ -491,9 +514,14 @@ intptr_t Session::vst_callback (
 
 	case audioMasterUpdateDisplay:
 		SHOW_CALLBACK ("audioMasterUpdateDisplay");
-		// something has changed, update 'multi-fx' display
-		if (effect) {
-			effect->dispatcher(effect, effEditIdle, 0, 0, NULL, 0.0f);
+		/* Something has changed, update 'multi-fx' display.
+		 * (Ardour watches output ports already, and redraws when idle.)
+		 *
+		 * We assume that the internal state of the plugin has changed,
+		 * and session as well as preset is marked as modified.
+		 */
+		if (plug) {
+			plug->state_changed ();
 		}
 		return 0;
 
@@ -501,9 +529,9 @@ intptr_t Session::vst_callback (
 		SHOW_CALLBACK ("audioMasterBeginEdit");
 		// begin of automation session (when mouse down), parameter index in <index>
 		if (plug && plug->plugin_insert ()) {
-			boost::shared_ptr<AutomationControl> ac = plug->plugin_insert ()->automation_control (Evoral::Parameter (PluginAutomation, 0, index));
+			std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl>(plug->plugin_insert ()->control (Evoral::Parameter (PluginAutomation, 0, index)));
 			if (ac) {
-				ac->start_touch (ac->session().transport_sample());
+				ac->start_touch (timepos_t (ac->session().transport_sample()));
 			}
 		}
 		return 0;
@@ -512,9 +540,9 @@ intptr_t Session::vst_callback (
 		SHOW_CALLBACK ("audioMasterEndEdit");
 		// end of automation session (when mouse up),     parameter index in <index>
 		if (plug && plug->plugin_insert ()) {
-			boost::shared_ptr<AutomationControl> ac = plug->plugin_insert ()->automation_control (Evoral::Parameter (PluginAutomation, 0, index));
+			std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl>(plug->plugin_insert ()->control (Evoral::Parameter (PluginAutomation, 0, index)));
 			if (ac) {
-				ac->stop_touch (ac->session().transport_sample());
+				ac->stop_touch (timepos_t (ac->session().transport_sample()));
 			}
 		}
 		return 0;

@@ -1,55 +1,61 @@
 /*
-    Copyright (C) 2001, 2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2005-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2007 Jesse Chappell <jesse@essej.net>
+ * Copyright (C) 2006-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2014-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 
-#include <gtkmm.h>
+#include <ytkmm/ytkmm.h>
 
+#include <gtkmm2ext/colors.h>
 #include <gtkmm2ext/gtk_ui.h>
 #include <gtkmm2ext/utils.h>
 
-#include "ardour/playlist.h"
 #include "ardour/region.h"
 #include "ardour/track.h"
-#include "ardour/session.h"
 
 #include "pbd/compose.h"
 
 #include "canvas/rectangle.h"
 #include "canvas/debug.h"
 
+#include "audio_region_view.h"
 #include "streamview.h"
 #include "region_view.h"
 #include "route_time_axis.h"
+#include "region_gain_line.h"
 #include "region_selection.h"
 #include "selection.h"
 #include "public_editor.h"
 #include "timers.h"
-#include "rgb_macros.h"
 #include "gui_thread.h"
 #include "ui_config.h"
-#include "utils.h"
 
 #include "pbd/i18n.h"
 
 using namespace std;
 using namespace ARDOUR;
-using namespace ARDOUR_UI_UTILS;
 using namespace PBD;
 using namespace Editing;
 
@@ -62,7 +68,7 @@ StreamView::StreamView (RouteTimeAxisView& tv, ArdourCanvas::Container* canvas_g
 	, stream_base_color(0xFFFFFFFF)
 	, _layers (1)
 	, _layer_display (Overlaid)
-	, height (tv.height)
+	, _height (tv.height)
 	, last_rec_data_sample(0)
 {
 	CANVAS_DEBUG_NAME (_canvas_group, string_compose ("SV canvas group %1", _trackview.name()));
@@ -77,11 +83,11 @@ StreamView::StreamView (RouteTimeAxisView& tv, ArdourCanvas::Container* canvas_g
 	canvas_rect->Event.connect (sigc::bind (sigc::mem_fun (_trackview.editor(), &PublicEditor::canvas_stream_view_event), canvas_rect, &_trackview));
 
 	if (_trackview.is_track()) {
-		_trackview.track()->rec_enable_control()->Changed.connect (*this, invalidator (*this), boost::bind (&StreamView::rec_enable_changed, this), gui_context());
+		_trackview.track()->rec_enable_control()->Changed.connect (*this, invalidator (*this), std::bind (&StreamView::rec_enable_changed, this), gui_context());
 
-		_trackview.session()->TransportStateChange.connect (*this, invalidator (*this), boost::bind (&StreamView::transport_changed, this), gui_context());
-		_trackview.session()->TransportLooped.connect (*this, invalidator (*this), boost::bind (&StreamView::transport_looped, this), gui_context());
-		_trackview.session()->RecordStateChanged.connect (*this, invalidator (*this), boost::bind (&StreamView::sess_rec_enable_changed, this), gui_context());
+		_trackview.session()->TransportStateChange.connect (*this, invalidator (*this), std::bind (&StreamView::transport_changed, this), gui_context());
+		_trackview.session()->TransportLooped.connect (*this, invalidator (*this), std::bind (&StreamView::transport_looped, this), gui_context());
+		_trackview.session()->RecordStateChanged.connect (*this, invalidator (*this), std::bind (&StreamView::sess_rec_enable_changed, this), gui_context());
 	}
 
 	UIConfiguration::instance().ColorsChanged.connect (sigc::mem_fun (*this, &StreamView::color_handler));
@@ -90,7 +96,6 @@ StreamView::StreamView (RouteTimeAxisView& tv, ArdourCanvas::Container* canvas_g
 StreamView::~StreamView ()
 {
 	undisplay_track ();
-
 	delete canvas_rect;
 }
 
@@ -114,16 +119,16 @@ StreamView::set_height (double h)
 {
 	/* limit the values to something sane-ish */
 
-	if (h < 10.0 || h > 1000.0) {
+	if (h < 10.0 || h > 2500.0) {
 		return -1;
 	}
 
-	if (height == h) {
+	if (_height == h) {
 		return 0;
 	}
 
-	height = h;
-	canvas_rect->set_y1 (height);
+	_height = h;
+	canvas_rect->set_y1 (_height);
 	update_contents_height ();
 
 	return 0;
@@ -158,15 +163,15 @@ StreamView::set_samples_per_pixel (double fpp)
 		recbox.rectangle->set_x1 (xend);
 	}
 
-	update_coverage_samples ();
+	update_coverage_frame ();
 
 	return 0;
 }
 
 void
-StreamView::add_region_view (boost::weak_ptr<Region> wr)
+StreamView::add_region_view (std::weak_ptr<Region> wr)
 {
-	boost::shared_ptr<Region> r (wr.lock());
+	std::shared_ptr<Region> r (wr.lock());
 	if (!r) {
 		return;
 	}
@@ -179,14 +184,31 @@ StreamView::add_region_view (boost::weak_ptr<Region> wr)
 }
 
 void
-StreamView::remove_region_view (boost::weak_ptr<Region> weak_r)
+StreamView::remove_region_view (std::weak_ptr<Region> weak_r)
 {
 	ENSURE_GUI_THREAD (*this, &StreamView::remove_region_view, weak_r)
 
-	boost::shared_ptr<Region> r (weak_r.lock());
+	std::shared_ptr<Region> r (weak_r.lock());
 
 	if (!r) {
 		return;
+	}
+
+	bool clear_rec_rects = false;
+	for (list<pair<std::shared_ptr<Region>,RegionView*> >::iterator i = rec_regions.begin(); i != rec_regions.end();) {
+		if (i->first == r) {
+			i = rec_regions.erase (i);
+			clear_rec_rects = true;
+		} else {
+			++i;
+		}
+	}
+
+	if (clear_rec_rects) {
+		for (auto const& i : rec_rects) {
+			delete i.rectangle;
+		}
+		rec_rects.clear();
 	}
 
 	for (list<RegionView *>::iterator i = region_views.begin(); i != region_views.end(); ++i) {
@@ -204,22 +226,20 @@ StreamView::remove_region_view (boost::weak_ptr<Region> weak_r)
 void
 StreamView::undisplay_track ()
 {
-	for (RegionViewList::iterator i = region_views.begin(); i != region_views.end() ; ) {
-		RegionViewList::iterator next = i;
-		++next;
-		delete *i;
-		i = next;
-	}
+	RegionViewList copy (region_views);
+	region_views.clear ();
 
-	region_views.clear();
+	for (auto const & rv : copy) {
+		delete rv;
+	}
 }
 
 void
-StreamView::display_track (boost::shared_ptr<Track> tr)
+StreamView::display_track (std::shared_ptr<Track> tr)
 {
 	playlist_switched_connection.disconnect();
 	playlist_switched (tr);
-	tr->PlaylistChanged.connect (playlist_switched_connection, invalidator (*this), boost::bind (&StreamView::playlist_switched, this, boost::weak_ptr<Track> (tr)), gui_context());
+	tr->PlaylistChanged.connect (playlist_switched_connection, invalidator (*this), std::bind (&StreamView::playlist_switched, this, std::weak_ptr<Track> (tr)), gui_context());
 }
 
 void
@@ -239,8 +259,6 @@ StreamView::layer_regions()
 			region_views.erase (i);
 			i = tmp;
 			continue;
-		} else {
-			(*i)->enable_display(true);
 		}
 
 		if (copy.size() == 0) {
@@ -275,14 +293,14 @@ StreamView::layer_regions()
 
 	// Fix canvas layering by raising each to the top in the sorted order.
 	for (RegionViewList::iterator i = copy.begin(); i != copy.end(); ++i) {
-		(*i)->get_canvas_group()->raise_to_top ();
+		(*i)->visual_layer_on_top ();
 	}
 }
 
 void
-StreamView::playlist_layered (boost::weak_ptr<Track> wtr)
+StreamView::playlist_layered (std::weak_ptr<Track> wtr)
 {
-	boost::shared_ptr<Track> tr (wtr.lock());
+	std::shared_ptr<Track> tr (wtr.lock());
 
 	if (!tr) {
 		return;
@@ -296,7 +314,7 @@ StreamView::playlist_layered (boost::weak_ptr<Track> wtr)
 	if (_layer_display == Stacked) {
 		update_contents_height ();
 		/* tricky. playlist_changed() does this as well, and its really inefficient. */
-		update_coverage_samples ();
+		update_coverage_frame ();
 	} else {
 		/* layering has probably been modified. reflect this in the canvas. */
 		layer_regions();
@@ -304,9 +322,9 @@ StreamView::playlist_layered (boost::weak_ptr<Track> wtr)
 }
 
 void
-StreamView::playlist_switched (boost::weak_ptr<Track> wtr)
+StreamView::playlist_switched (std::weak_ptr<Track> wtr)
 {
-	boost::shared_ptr<Track> tr (wtr.lock());
+	std::shared_ptr<Track> tr (wtr.lock());
 
 	if (!tr) {
 		return;
@@ -315,7 +333,7 @@ StreamView::playlist_switched (boost::weak_ptr<Track> wtr)
 	/* disconnect from old playlist */
 
 	playlist_connections.drop_connections ();
-	//undisplay_track ();
+	undisplay_track ();
 
 	/* draw it */
 	tr->playlist()->freeze();
@@ -324,33 +342,20 @@ StreamView::playlist_switched (boost::weak_ptr<Track> wtr)
 	/* update layers count and the y positions and heights of our regions */
 	_layers = tr->playlist()->top_layer() + 1;
 	update_contents_height ();
-	update_coverage_samples ();
+	update_coverage_frame ();
 
 	/* catch changes */
 
-	tr->playlist()->LayeringChanged.connect (playlist_connections, invalidator (*this), boost::bind (&StreamView::playlist_layered, this, boost::weak_ptr<Track> (tr)), gui_context());
-	tr->playlist()->RegionAdded.connect (playlist_connections, invalidator (*this), boost::bind (&StreamView::add_region_view, this, _1), gui_context());
-	tr->playlist()->RegionRemoved.connect (playlist_connections, invalidator (*this), boost::bind (&StreamView::remove_region_view, this, _1), gui_context());
-	tr->playlist()->ContentsChanged.connect (playlist_connections, invalidator (*this), boost::bind (&StreamView::update_coverage_samples, this), gui_context());
-}
-
-
-void
-StreamView::diskstream_changed ()
-{
-	boost::shared_ptr<Track> t;
-
-	if ((t = _trackview.track()) != 0) {
-		Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), boost::bind (&StreamView::display_track, this, t));
-	} else {
-		Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), boost::bind (&StreamView::undisplay_track, this));
-	}
+	tr->playlist()->LayeringChanged.connect (playlist_connections, invalidator (*this), std::bind (&StreamView::playlist_layered, this, std::weak_ptr<Track> (tr)), gui_context());
+	tr->playlist()->RegionAdded.connect (playlist_connections, invalidator (*this), std::bind (&StreamView::add_region_view, this, _1), gui_context());
+	tr->playlist()->RegionRemoved.connect (playlist_connections, invalidator (*this), std::bind (&StreamView::remove_region_view, this, _1), gui_context());
+	tr->playlist()->ContentsChanged.connect (playlist_connections, invalidator (*this), std::bind (&StreamView::update_coverage_frame, this), gui_context());
 }
 
 void
 StreamView::apply_color (Gdk::Color const& c, ColorTarget target)
 {
-	return apply_color (gdk_color_to_rgba (c), target);
+	return apply_color (Gtkmm2ext::gdk_color_to_rgba (c), target);
 }
 
 void
@@ -405,7 +410,7 @@ StreamView::transport_looped()
 {
 	// to force a new rec region
 	rec_active = false;
-	Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), boost::bind (&StreamView::setup_rec_box, this));
+	Gtkmm2ext::UI::instance()->call_slot (invalidator (*this), std::bind (&StreamView::setup_rec_box, this));
 }
 
 void
@@ -463,12 +468,6 @@ StreamView::update_rec_box ()
 			xend = _trackview.editor().sample_to_pixel (at);
 			break;
 
-		case Destructive:
-			rect.length = 2;
-			xstart = _trackview.editor().sample_to_pixel (_trackview.track()->current_capture_start());
-			xend = _trackview.editor().sample_to_pixel (at);
-			break;
-
 		default:
 			fatal << string_compose (_("programming error: %1"), "illegal track mode") << endmsg;
 			abort(); /*NOTREACHED*/
@@ -480,8 +479,38 @@ StreamView::update_rec_box ()
 	}
 }
 
+void
+StreamView::cleanup_rec_box ()
+{
+	if (rec_rects.empty() && rec_regions.empty()) {
+		return;
+	}
+
+	/* disconnect rapid update */
+	screen_update_connection.disconnect();
+	rec_data_ready_connections.drop_connections ();
+	rec_updating = false;
+	rec_active = false;
+
+	/* remove temp regions */
+	auto rr (rec_regions);
+	for (auto const& i : rr) {
+		i.first->drop_references ();
+	}
+
+	rec_regions.clear();
+
+	// cerr << "\tclear " << rec_rects.size() << " rec rects\n";
+
+	/* transport stopped, clear boxes */
+	for (auto const& i : rec_rects) {
+		delete i.rectangle;
+	}
+	rec_rects.clear();
+}
+
 RegionView*
-StreamView::find_view (boost::shared_ptr<const Region> region)
+StreamView::find_view (std::shared_ptr<const Region> region)
 {
 	for (list<RegionView*>::iterator i = region_views.begin(); i != region_views.end(); ++i) {
 
@@ -532,8 +561,10 @@ StreamView::set_selected_regionviews (RegionSelection& regions)
 
 		selected = false;
 
+		/* Linear search: probably as good as anything else */
+
 		for (RegionSelection::iterator ii = regions.begin(); ii != regions.end(); ++ii) {
-			if (*i == *ii) {
+			if ((*i)->region() == (*ii)->region()) {
 				selected = true;
 				break;
 			}
@@ -551,12 +582,8 @@ StreamView::set_selected_regionviews (RegionSelection& regions)
  *  @param result Filled in with selectable things.
  */
 void
-StreamView::get_selectables (samplepos_t start, samplepos_t end, double top, double bottom, list<Selectable*>& results, bool within)
+StreamView::_get_selectables (timepos_t const & start, timepos_t const & end, double top, double bottom, list<Selectable*>& results, bool within)
 {
-	if (_trackview.editor().internal_editing()) {
-		return;  // Don't select regions with an internal tool
-	}
-
 	layer_t min_layer = 0;
 	layer_t max_layer = 0;
 
@@ -587,17 +614,27 @@ StreamView::get_selectables (samplepos_t start, samplepos_t end, double top, dou
 			layer_t const l = (*i)->region()->layer ();
 			layer_ok = (min_layer <= l && l <= max_layer);
 		}
-
-		if (within) {
-			if ((*i)->region()->coverage (start, end) == Evoral::OverlapExternal && layer_ok) {
-				results.push_back (*i);
-			}
-		} else {
-			if ((*i)->region()->coverage (start, end) != Evoral::OverlapNone && layer_ok) {
+		if (!layer_ok) {
+			continue;
+		}
+		if ((within && (*i)->region()->coverage (start, end) == Temporal::OverlapExternal)
+		    || (!within && (*i)->region()->coverage (start, end) != Temporal::OverlapNone)) {
+			if (_trackview.editor().internal_editing()) {
+				AudioRegionView* arv = dynamic_cast<AudioRegionView*> (*i);
+				if (arv && arv->fx_line ()) {
+					/* Note: EditorAutomationLine::get_selectables() uses trackview.current_height (),
+					 * disregarding Stacked layer display height
+					 */
+					double const c = _height; // child_height (); // XXX
+					double const y = (*i)->get_canvas_group ()->position().y;
+					double t = 1.0 - std::min (1.0, std::max (0., (top - _trackview.y_position () - y) / c));
+					double b = 1.0 - std::min (1.0, std::max (0., (bottom - _trackview.y_position () - y) / c));
+					arv->fx_line()->get_selectables (start, end, b, t, results);
+				}
+			} else {
 				results.push_back (*i);
 			}
 		}
-
 	}
 }
 
@@ -611,21 +648,31 @@ StreamView::get_inverted_selectables (Selection& sel, list<Selectable*>& results
 	}
 }
 
+void
+StreamView::get_regionviews_at_or_after (timepos_t const & pos, RegionSelection& regions)
+{
+	for (list<RegionView*>::iterator i = region_views.begin(); i != region_views.end(); ++i) {
+		if ((*i)->region()->position() >= pos) {
+			regions.push_back (*i);
+		}
+	}
+}
+
 /** @return height of a child region view, depending on stacked / overlaid mode */
 double
 StreamView::child_height () const
 {
 	switch (_layer_display) {
 	case Overlaid:
-		return height;
+		return _height;
 	case Stacked:
-		return height / _layers;
+		return _height / _layers;
 	case Expanded:
-		return height / (_layers * 2 + 1);
+		return _height / (_layers * 2 + 1);
 	}
 
 	abort(); /* NOTREACHED */
-	return height;
+	return _height;
 }
 
 void
@@ -639,10 +686,10 @@ StreamView::update_contents_height ()
 			(*i)->set_y (0);
 			break;
 		case Stacked:
-			(*i)->set_y (height - ((*i)->region()->layer() + 1) * h);
+			(*i)->set_y (_height - ((*i)->region()->layer() + 1) * h);
 			break;
 		case Expanded:
-			(*i)->set_y (height - ((*i)->region()->layer() + 1) * 2 * h);
+			(*i)->set_y (_height - ((*i)->region()->layer() + 1) * 2 * h);
 			break;
 		}
 
@@ -652,7 +699,7 @@ StreamView::update_contents_height ()
 	for (vector<RecBoxInfo>::iterator i = rec_rects.begin(); i != rec_rects.end(); ++i) {
 		switch (_layer_display) {
 		case Overlaid:
-			i->rectangle->set_y1 (height);
+			i->rectangle->set_y1 (_height);
 			break;
 		case Stacked:
 		case Expanded:
@@ -676,19 +723,19 @@ StreamView::set_layer_display (LayerDisplay d)
 	}
 
 	update_contents_height ();
-	update_coverage_samples ();
+	update_coverage_frame ();
 }
 
 void
-StreamView::update_coverage_samples ()
+StreamView::update_coverage_frame ()
 {
 	for (RegionViewList::iterator i = region_views.begin (); i != region_views.end (); ++i) {
-		(*i)->update_coverage_samples (_layer_display);
+		(*i)->update_coverage_frame (_layer_display);
 	}
 }
 
 void
-StreamView::check_record_layers (boost::shared_ptr<Region> region, samplepos_t to)
+StreamView::check_record_layers (std::shared_ptr<Region> region, samplepos_t to)
 {
 	if (_new_rec_layer_time < to) {
 		/* The region being recorded has overlapped the start of a top-layered region, so
@@ -712,15 +759,43 @@ StreamView::check_record_layers (boost::shared_ptr<Region> region, samplepos_t t
 }
 
 void
-StreamView::setup_new_rec_layer_time (boost::shared_ptr<Region> region)
+StreamView::setup_new_rec_layer_time (std::shared_ptr<Region> region)
 {
 	/* If we are in Stacked mode, we may need to (visually) create a new layer to put the
 	   recorded region in.  To work out where this needs to happen, find the start of the next
 	   top-layered region after the start of the region we are recording and make a note of it.
 	*/
 	if (_layer_display == Stacked) {
-		_new_rec_layer_time = _trackview.track()->playlist()->find_next_top_layer_position (region->start());
+		_new_rec_layer_time = _trackview.track()->playlist()->find_next_top_layer_position (region->position()).samples();
 	} else {
 		_new_rec_layer_time = max_samplepos;
 	}
+}
+
+void
+StreamView::parameter_changed (string const & what)
+{
+	if (what == "show-region-name") {
+		for (RegionViewList::iterator i = region_views.begin (); i != region_views.end (); ++i) {
+			(*i)->update_visibility ();
+		}
+	}
+}
+
+int
+StreamView::y_position () const
+{
+	return _trackview.y_position();
+}
+
+int
+StreamView::height() const
+{
+	return _height;
+}
+
+int
+StreamView::width () const
+{
+	return (int) ArdourCanvas::COORD_MAX;
 }

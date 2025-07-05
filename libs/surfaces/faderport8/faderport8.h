@@ -1,20 +1,19 @@
 /*
  * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
- * Copyright (C) 2015 Paul Davis
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef ardour_surface_faderport8_h
@@ -68,22 +67,18 @@ public:
 	FaderPort8 (ARDOUR::Session&);
 	virtual ~FaderPort8();
 
+	static bool probe (std::string&, std::string&);
+
 	int set_active (bool yn);
 
-	/* we probe for a device when our ports are connected. Before that,
-	 * there's no way to know if the device exists or not.
-	 */
-	static bool  probe() { return true; }
-	static void* request_factory (uint32_t);
-
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
 	/* configuration GUI */
 	bool  has_editor () const { return true; }
 	void* get_gui () const;
 	void  tear_down_gui ();
-	PBD::Signal0<void> ConnectionChange;
+	PBD::Signal<void()> ConnectionChange;
 
 	void set_button_action (FP8Controls::ButtonId, bool, std::string const&);
 	std::string get_button_action (FP8Controls::ButtonId, bool);
@@ -103,11 +98,13 @@ public:
 	void do_request (FaderPort8Request*);
 	void thread_init ();
 
-	boost::shared_ptr<ARDOUR::Port> input_port() const { return _input_port; }
-	boost::shared_ptr<ARDOUR::Port> output_port() const { return _output_port; }
-	std::list<boost::shared_ptr<ARDOUR::Bundle> > bundles ();
+	std::shared_ptr<ARDOUR::Port> input_port() const { return _input_port; }
+	std::shared_ptr<ARDOUR::Port> output_port() const { return _output_port; }
+	std::list<std::shared_ptr<ARDOUR::Bundle> > bundles ();
 
 	size_t tx_midi (std::vector<uint8_t> const&) const;
+
+	CONTROL_PROTOCOL_THREADS_NEED_TEMPO_MAP_DECL();
 
 private:
 	void close ();
@@ -117,12 +114,12 @@ private:
 
 	/* I/O Ports */
 	PBD::ScopedConnectionList port_connections;
-	boost::shared_ptr<ARDOUR::AsyncMIDIPort> _input_port;
-	boost::shared_ptr<ARDOUR::AsyncMIDIPort> _output_port;
-	boost::shared_ptr<ARDOUR::Bundle>        _input_bundle;
-	boost::shared_ptr<ARDOUR::Bundle>        _output_bundle;
+	std::shared_ptr<ARDOUR::AsyncMIDIPort> _input_port;
+	std::shared_ptr<ARDOUR::AsyncMIDIPort> _output_port;
+	std::shared_ptr<ARDOUR::Bundle>        _input_bundle;
+	std::shared_ptr<ARDOUR::Bundle>        _output_bundle;
 
-	bool midi_input_handler (Glib::IOCondition ioc, boost::weak_ptr<ARDOUR::AsyncMIDIPort> port);
+	bool midi_input_handler (Glib::IOCondition ioc, std::weak_ptr<ARDOUR::AsyncMIDIPort> port);
 
 	bool connection_handler (std::string name1, std::string name2);
 	void engine_reset ();
@@ -164,8 +161,8 @@ private:
 	void assign_sends ();
 	void spill_plugins ();
 	void assign_processor_ctrls ();
-	bool assign_plugin_presets (boost::shared_ptr<ARDOUR::PluginInsert>);
-	void build_well_known_processor_ctrls (boost::shared_ptr<ARDOUR::Stripable>, bool);
+	bool assign_plugin_presets (std::shared_ptr<ARDOUR::PluginInsert>);
+	void build_well_known_processor_ctrls (std::shared_ptr<ARDOUR::Stripable>, int);
 	void preset_changed ();
 	void select_plugin (int num);
 	void select_plugin_preset (size_t num);
@@ -191,31 +188,35 @@ private:
 	PBD::ScopedConnectionList processor_connections;
 
 	PBD::ScopedConnectionList assigned_stripable_connections;
-	typedef std::map<boost::shared_ptr<ARDOUR::Stripable>, uint8_t> StripAssignmentMap;
+	typedef std::map<std::shared_ptr<ARDOUR::Stripable>, uint8_t> StripAssignmentMap;
 	StripAssignmentMap _assigned_strips;
 
 	void drop_ctrl_connections ();
 
-	void select_strip (boost::weak_ptr<ARDOUR::Stripable>);
+	void select_strip (std::weak_ptr<ARDOUR::Stripable>);
 
 	void notify_pi_property_changed (const PBD::PropertyChange&);
-	void notify_stripable_property_changed (boost::weak_ptr<ARDOUR::Stripable>, const PBD::PropertyChange&);
+	void notify_stripable_property_changed (std::weak_ptr<ARDOUR::Stripable>, const PBD::PropertyChange&);
 	void stripable_selection_changed ();
+	void subscribe_to_strip_signals ();
 
 	PBD::ScopedConnection selection_connection;
-	PBD::ScopedConnectionList automation_state_connections;
+	PBD::ScopedConnectionList route_state_connections;
 	PBD::ScopedConnectionList modechange_connections;
 	/* **************************************************************************/
 	struct ProcessorCtrl {
-		ProcessorCtrl (std::string const &n, boost::shared_ptr<ARDOUR::AutomationControl> c)
+		ProcessorCtrl (std::string const &n, std::shared_ptr<ARDOUR::AutomationControl> c)
 		 : name (n)
 		 , ac (c)
 		{}
 		std::string name;
-		boost::shared_ptr<ARDOUR::AutomationControl> ac;
+		std::shared_ptr<ARDOUR::AutomationControl> ac;
+
+		inline bool operator< (const ProcessorCtrl& other) const;
 	};
+
 	std::list <ProcessorCtrl> _proc_params;
-	boost::weak_ptr<ARDOUR::PluginInsert> _plugin_insert;
+	std::weak_ptr<ARDOUR::PluginInsert> _plugin_insert;
 	bool _show_presets;
 	int _showing_well_known;
 	/* **************************************************************************/
@@ -265,7 +266,7 @@ private:
 	void notify_history_changed ();
 	void notify_solo_changed ();
 	void notify_mute_changed ();
-	void notify_automation_mode_changed ();
+	void notify_route_state_changed ();
 	void notify_plugin_active_changed ();
 
 	/* actions */
@@ -290,6 +291,9 @@ private:
 	void button_prev_next (bool);
 	void button_action (const std::string& group, const std::string& item);
 
+	void button_chanlock (); /* FP2 only */
+	void button_flip (); /* FP2 only */
+
 	void button_encoder ();
 	void button_parameter ();
 	void encoder_navigate (bool, int);
@@ -297,8 +301,8 @@ private:
 
 	/* mute undo history */
 #ifdef FP8_MUTESOLO_UNDO
-	std::vector <boost::weak_ptr<ARDOUR::AutomationControl> > _mute_state;
-	std::vector <boost::weak_ptr<ARDOUR::AutomationControl> > _solo_state;
+	std::vector <std::weak_ptr<ARDOUR::AutomationControl> > _mute_state;
+	std::vector <std::weak_ptr<ARDOUR::AutomationControl> > _solo_state;
 #endif
 
 	/* Encoder handlers */
@@ -310,12 +314,14 @@ private:
 	void start_link ();
 	void lock_link ();
 	void unlock_link (bool drop = false);
-	void nofity_focus_control (boost::weak_ptr<PBD::Controllable>);
+	void nofity_focus_control (std::weak_ptr<PBD::Controllable>);
 	PBD::ScopedConnection link_connection;
 	PBD::ScopedConnection link_locked_connection;
-	boost::weak_ptr<PBD::Controllable> _link_control;
+	std::weak_ptr<PBD::Controllable> _link_control;
 	bool _link_enabled;
 	bool _link_locked; // can only be true if _link_enabled
+
+	bool _chan_locked; /* FP2 only */
 
 	/* user prefs */
 	uint32_t _clock_mode;
@@ -337,7 +343,7 @@ private:
 
 		ActionType _type;
 		std::string _action_name;
-		//boost::function<void()> function; // unused
+		//std::function<void()> function; // unused
 
 		void clear ()
 		{

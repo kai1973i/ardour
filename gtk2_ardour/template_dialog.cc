@@ -1,22 +1,22 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Author: Johannes Mueller
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2017-2018 Johannes Mueller <github@johannes-mueller.org>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <map>
 #include <vector>
@@ -24,34 +24,36 @@
 
 #include <glib/gstdio.h>
 
-#include <gtkmm/filechooserdialog.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/progressbar.h>
-#include <gtkmm/separator.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/textview.h>
-#include <gtkmm/treeiter.h>
-#include <gtkmm/treeview.h>
+#include <ytkmm/filechooserdialog.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/progressbar.h>
+#include <ytkmm/separator.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/textview.h>
+#include <ytkmm/treeiter.h>
+#include <ytkmm/treeview.h>
 
 #include "pbd/basename.h"
 #include "pbd/error.h"
 #include "pbd/file_archive.h"
 #include "pbd/file_utils.h"
-#include "pbd/i18n.h"
 #include "pbd/xml++.h"
 
 #include "gtkmm2ext/gui_thread.h"
+#include "gtkmm2ext/utils.h"
 
+#include "ardour/directory_names.h"
 #include "ardour/filename_extensions.h"
 #include "ardour/filesystem_paths.h"
 #include "ardour/template_utils.h"
 
 #include "progress_reporter.h"
-
 #include "template_dialog.h"
+
+#include "pbd/i18n.h"
 
 using namespace std;
 using namespace Gtk;
@@ -67,7 +69,7 @@ public:
 	virtual void init () = 0;
 	void handle_dirty_description ();
 
-	PBD::Signal0<void> TemplatesImported;
+	PBD::Signal<void()> TemplatesImported;
 
 protected:
 	TemplateManager ();
@@ -121,6 +123,7 @@ private:
 	void import_template_set ();
 
 	virtual std::string templates_dir () const = 0;
+	virtual std::string templates_dir_basename () const = 0;
 	virtual std::string template_file (const Gtk::TreeModel::const_iterator& item) const = 0;
 
 	virtual bool adjust_xml_tree (XMLTree& tree, const std::string& old_name, const std::string& new_name) const = 0;
@@ -157,6 +160,7 @@ private:
 	void delete_selected_template ();
 
 	std::string templates_dir () const;
+	virtual std::string templates_dir_basename () const;
 	std::string template_file (const Gtk::TreeModel::const_iterator& item) const;
 
 	bool adjust_xml_tree (XMLTree& tree, const std::string& old_name, const std::string& new_name) const;
@@ -178,11 +182,11 @@ private:
 	void delete_selected_template ();
 
 	std::string templates_dir () const;
+	virtual std::string templates_dir_basename () const;
 	std::string template_file (const Gtk::TreeModel::const_iterator& item) const;
 
 	bool adjust_xml_tree (XMLTree& tree, const std::string& old_name, const std::string& new_name) const;
 };
-
 
 
 TemplateDialog::TemplateDialog ()
@@ -204,8 +208,8 @@ TemplateDialog::TemplateDialog ()
 	session_tm->init ();
 	route_tm->init ();
 
-	session_tm->TemplatesImported.connect (*this, invalidator (*this), boost::bind (&RouteTemplateManager::init, route_tm), gui_context ());
-	route_tm->TemplatesImported.connect (*this, invalidator (*this), boost::bind (&SessionTemplateManager::init, session_tm), gui_context ());
+	session_tm->TemplatesImported.connect (*this, invalidator (*this), std::bind (&RouteTemplateManager::init, route_tm), gui_context ());
+	route_tm->TemplatesImported.connect (*this, invalidator (*this), std::bind (&SessionTemplateManager::init, session_tm), gui_context ());
 
 	signal_hide().connect (sigc::mem_fun (session_tm, &TemplateManager::handle_dirty_description));
 	signal_hide().connect (sigc::mem_fun (route_tm, &TemplateManager::handle_dirty_description));
@@ -269,7 +273,7 @@ TemplateManager::TemplateManager ()
 	vb->pack_start (*sw);
 	vb->pack_start (_progress_bar);
 
-	Frame* desc_sample = manage (new Frame (_("Description")));
+	Frame* desc_frame = manage (new Frame (_("Description")));
 
 	_description_editor.set_wrap_mode (Gtk::WRAP_WORD);
 	_description_editor.set_size_request (300,400);
@@ -280,10 +284,10 @@ TemplateManager::TemplateManager ()
 
 	_description_editor.get_buffer()->signal_changed().connect (sigc::mem_fun (*this, &TemplateManager::set_desc_dirty));
 
-	desc_sample->add (_description_editor);
+	desc_frame->add (_description_editor);
 
 	pack_start (*vb);
-	pack_start (*desc_sample);
+	pack_start (*desc_frame);
 	pack_start (*vb_btns);
 
 	show_all_children ();
@@ -328,6 +332,7 @@ TemplateManager::handle_dirty_description ()
 		} else {
 			_description_editor.get_buffer()->set_text (_current_selection->get_value (_template_columns.description));
 		}
+		_desc_dirty = false;
 	}
 }
 
@@ -468,13 +473,6 @@ accept_all_files (string const &, void *)
 	return true;
 }
 
-static void
-_set_progress (Progress* p, size_t n, size_t t)
-{
-	p->set_progress (float (n) / float(t));
-}
-
-
 void
 TemplateManager::export_all_templates ()
 {
@@ -485,11 +483,12 @@ TemplateManager::export_all_templates ()
 		error << string_compose(_("Could not make tmpdir: %1"), err->message) << endmsg;
 		return;
 	}
-	const string tmpdir (td);
+	const string tmpdir = PBD::canonical_path (td);
 	g_free (td);
 	g_clear_error (&err);
 
 	FileChooserDialog dialog(_("Save Exported Template Archive"), FILE_CHOOSER_ACTION_SAVE);
+	Gtkmm2ext::add_volume_shortcuts (dialog);
 	dialog.set_filename (X_("templates"));
 
 	dialog.add_button(Gtk::Stock::CANCEL, Gtk::RESPONSE_CANCEL);
@@ -556,9 +555,8 @@ TemplateManager::export_all_templates ()
 
 	_current_action = _("Exporting templates");
 
-	PBD::FileArchive ar (filename);
+	PBD::FileArchive ar (filename, this);
 	PBD::ScopedConnectionList progress_connection;
-	ar.progress.connect_same_thread (progress_connection, boost::bind (&_set_progress, this, _1, _2));
 	ar.create (filemap);
 
 	PBD::remove_directory (tmpdir);
@@ -573,6 +571,7 @@ TemplateManager::import_template_set ()
 
 	FileFilter archive_filter;
 	archive_filter.add_pattern (string_compose(X_("*%1"), ARDOUR::template_archive_suffix));
+	archive_filter.add_pattern (X_("*.tar.xz")); // template archives from 5.x
 	archive_filter.set_name (_("Template archives"));
 	dialog.add_filter (archive_filter);
 
@@ -584,11 +583,17 @@ TemplateManager::import_template_set ()
 
 	_current_action = _("Importing templates");
 
-	FileArchive ar (dialog.get_filename ());
+	FileArchive ar (dialog.get_filename (), this);
 	PBD::ScopedConnectionList progress_connection;
-	ar.progress.connect_same_thread (progress_connection, boost::bind (&_set_progress, this, _1, _2));
-	ar.inflate (user_config_directory ());
 
+	for (std::string fn = ar.next_file_name(); !fn.empty(); fn = ar.next_file_name()) {
+		const size_t pos = fn.find (templates_dir_basename ());
+		if (pos == string::npos) {
+			continue;
+		}
+		const std::string dest = Glib::build_filename (user_config_directory(), fn.substr (pos));
+		ar.extract_current_file (dest);
+	}
 	vector<string> files;
 	PBD::find_files_matching_regex (files, templates_dir (), string ("\\.template$"), /* recurse = */ true);
 
@@ -778,6 +783,12 @@ SessionTemplateManager::templates_dir () const
 	return user_template_directory ();
 }
 
+string
+SessionTemplateManager::templates_dir_basename () const
+{
+	return string (templates_dir_name);
+}
+
 
 string
 SessionTemplateManager::template_file (const TreeModel::const_iterator& item) const
@@ -835,7 +846,7 @@ RouteTemplateManager::rename_template (TreeModel::iterator& item, const Glib::us
 	if (adjusted) {
 		if (g_file_test (old_state_dir.c_str(), G_FILE_TEST_EXISTS)) {
 			if (g_rename (old_state_dir.c_str(), new_state_dir.c_str()) != 0) {
-				error << string_compose (_("Could not rename state dir \"%1\" to \"%22\": %3"), old_state_dir, new_state_dir, strerror (errno)) << endmsg;
+				error << string_compose (_("Could not rename state dir \"%1\" to \"%2\": %3"), old_state_dir, new_state_dir, strerror (errno)) << endmsg;
 				return;
 			}
 		}
@@ -883,6 +894,12 @@ string
 RouteTemplateManager::templates_dir () const
 {
 	return user_route_template_directory ();
+}
+
+string
+RouteTemplateManager::templates_dir_basename () const
+{
+	return string (route_templates_dir_name);
 }
 
 

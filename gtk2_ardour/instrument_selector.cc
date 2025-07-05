@@ -1,25 +1,29 @@
 /*
-  Copyright (C) 2003-2014 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/convert.h"
 #include "pbd/enumwriter.h"
+
+#include "ardour/profile.h"
 #include "ardour/plugin_manager.h"
+
 #include "gtkmm2ext/gui_thread.h"
+
 #include "instrument_selector.h"
 
 #include "pbd/i18n.h"
@@ -27,18 +31,38 @@
 using namespace Gtk;
 using namespace ARDOUR;
 
-InstrumentSelector::InstrumentSelector()
-	: _reasonable_synth_id(0)
-	, _gmsynth_id(UINT32_MAX)
+sigc::signal<void> InstrumentSelector::DropPluginInfoPtr;
+
+InstrumentSelector::InstrumentSelector (InstrumentListDisposition disp)
+	: _reasonable_synth_id (0)
+	, _gmsynth_id (UINT32_MAX)
+	, _disposition (disp)
 {
 	refill ();
 
-	PluginManager::instance ().PluginListChanged.connect (_update_connection, invalidator (*this), boost::bind (&InstrumentSelector::refill, this), gui_context());
+	PluginManager::instance ().PluginListChanged.connect (_update_connection, invalidator (*this), std::bind (&InstrumentSelector::refill, this), gui_context());
+	DropPluginInfoPtr.connect (sigc::mem_fun (*this, &InstrumentSelector::drop_plugin_ptr));
+}
+
+void
+InstrumentSelector::drop_plugin_ptr()
+{
+	unset_model ();
+	clear ();
+	if (_instrument_list) {
+		_instrument_list->clear ();
+	}
 }
 
 void
 InstrumentSelector::refill()
 {
+	/* XXX conditional can be removed once livetrax has its own simple add
+	   tracks dialog.
+	*/
+	if (Profile->get_livetrax()) {
+		return;
+	}
 	TreeModel::iterator iter = get_active();
 	std::string selected;
 	if (iter) {
@@ -83,6 +107,12 @@ invalid_instrument (PluginInfoPtr p) {
 	if (manager.get_status(p) == PluginManager::Hidden) {
 		return true;
 	}
+	if (manager.get_status(p) == PluginManager::Concealed) {
+		return true;
+	}
+	if (p->is_internal ()) {
+		return true;
+	}
 	return !p->is_instrument();
 }
 
@@ -94,6 +124,7 @@ InstrumentSelector::build_instrument_list()
 	PluginInfoList all_plugs;
 	all_plugs.insert(all_plugs.end(), manager.ladspa_plugin_info().begin(), manager.ladspa_plugin_info().end());
 	all_plugs.insert(all_plugs.end(), manager.lua_plugin_info().begin(), manager.lua_plugin_info().end());
+	all_plugs.insert(all_plugs.end(), manager.lv2_plugin_info().begin(), manager.lv2_plugin_info().end());
 #ifdef WINDOWS_VST_SUPPORT
 	all_plugs.insert(all_plugs.end(), manager.windows_vst_plugin_info().begin(), manager.windows_vst_plugin_info().end());
 #endif
@@ -106,8 +137,8 @@ InstrumentSelector::build_instrument_list()
 #ifdef AUDIOUNIT_SUPPORT
 	all_plugs.insert(all_plugs.end(), manager.au_plugin_info().begin(), manager.au_plugin_info().end());
 #endif
-#ifdef LV2_SUPPORT
-	all_plugs.insert(all_plugs.end(), manager.lv2_plugin_info().begin(), manager.lv2_plugin_info().end());
+#ifdef VST3_SUPPORT
+	all_plugs.insert(all_plugs.end(), manager.vst3_plugin_info().begin(), manager.vst3_plugin_info().end());
 #endif
 
 	all_plugs.remove_if (invalid_instrument);
@@ -115,53 +146,78 @@ InstrumentSelector::build_instrument_list()
 
 	_instrument_list = ListStore::create(_instrument_list_columns);
 
-	TreeModel::Row row = *(_instrument_list->append());
-	row[_instrument_list_columns.info_ptr] = PluginInfoPtr();
-	row[_instrument_list_columns.name]     = _("-none-");
+	if (_disposition==ForTrackSelector) {
+		TreeModel::Row row = *(_instrument_list->append());
+		row[_instrument_list_columns.info_ptr] = PluginInfoPtr();
+		row[_instrument_list_columns.name]     = _("-none-");
+	}
 
-	uint32_t n = 1;
+	_longest_instrument_name = "";
+
+	uint32_t n = (_disposition==ForTrackSelector) ? 1 : 0;
 	std::string prev;
-	for (PluginInfoList::const_iterator i = all_plugs.begin(); i != all_plugs.end();) {
+	for (PluginInfoList::const_iterator i = all_plugs.begin(); i != all_plugs.end(); ++i, ++n) {
 		PluginInfoPtr p = *i;
-		++i;
-		bool suffix_type = prev == p->name;
-		if (!suffix_type && i != all_plugs.end() && (*i)->name == p->name) {
-			suffix_type = true;
+		
+		if (p->name.length() > _longest_instrument_name.length()) {
+			_longest_instrument_name = p->name;
 		}
 
-		row = *(_instrument_list->append());
-		if (suffix_type) {
-			std::string pt;
-			switch (p->type) {
-				case AudioUnit:
-					pt = "AU";
-					break;
-				case Windows_VST:
-				case LXVST:
-				case MacVST:
-					pt = "VST";
-					break;
-				default:
-					pt = enum_2_string (p->type);
+		std::string suffix;
+
+#ifdef MIXBUS
+		uint32_t n_outs = p->max_configurable_outputs ();
+		if (n_outs > 2) {
+			if (p->reconfigurable_io ()) {
+				suffix = string_compose(_(u8"\u2264 %1 outs"), n_outs);
+			} else {
+				suffix = string_compose(_("%1 outs"), n_outs);
 			}
-			row[_instrument_list_columns.name]   = p->name + " (" + pt + ")";
-		} else {
-			row[_instrument_list_columns.name]   = p->name;
 		}
+#else
+		if (p->multichannel_name_ambiguity) {
+			uint32_t n_outs = p->max_configurable_outputs ();
+			if (n_outs > 2) {
+				if (p->reconfigurable_io ()) {
+					suffix = string_compose(_(u8"\u2264 %1 outs"), n_outs);
+				} else {
+					suffix = string_compose(_("%1 outs"), n_outs);
+				}
+			} else if (n_outs == 2) {
+				suffix = _("stereo");
+			}
+		}
+#endif
+
+		if (p->plugintype_name_ambiguity) {
+			std::string pt = PluginManager::plugin_type_name (p->type);
+			if (!suffix.empty ()) {
+				suffix += ", ";
+			}
+			suffix += pt;
+		}
+
+		std::string name = p->name;
+		if (!suffix.empty ()) {
+			name += " (" + suffix + ")";
+		}
+
+		TreeModel::Row row = *(_instrument_list->append());
+		row[_instrument_list_columns.name] = name;
+
 		row[_instrument_list_columns.info_ptr] = p;
 		if (p->unique_id == "https://community.ardour.org/node/7596") {
 			_reasonable_synth_id = n;
 		}
 		if (p->unique_id == "http://gareus.org/oss/lv2/gmsynth") {
-			_reasonable_synth_id = n;
+			_gmsynth_id = n;
 		}
 		prev = p->name;
-		n++;
 	}
 }
 
 PluginInfoPtr
-InstrumentSelector::selected_instrument()
+InstrumentSelector::selected_instrument() const
 {
 	TreeModel::iterator iter = get_active();
 	if (!iter) {
@@ -170,4 +226,14 @@ InstrumentSelector::selected_instrument()
 
 	const TreeModel::Row& row = (*iter);
 	return row[_instrument_list_columns.info_ptr];
+}
+
+std::string
+InstrumentSelector::selected_instrument_name () const
+{
+	PluginInfoPtr pip = selected_instrument ();
+	if (!pip) {
+		return "";
+	}
+	return pip->name;
 }

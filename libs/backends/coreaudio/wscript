@@ -1,21 +1,13 @@
 #!/usr/bin/env python
-from waflib.extras import autowaf as autowaf
 from waflib import Options
 import os
-import sys
-import re
 
 I18N_PACKAGE = 'coreaudio-backend'
 
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
-    autowaf.configure(conf)
     if Options.options.ppc:
         conf.env['build_arch'] = "ppc"
 
@@ -29,7 +21,7 @@ def build(bld):
     obj.name     = 'coreaudio_backend'
     obj.target   = 'coreaudio_backend'
     obj.use      = 'libardour libpbd'
-    obj.uselib   = 'GLIBMM XML'
+    obj.uselib   = 'GLIBMM XML OSX'
     obj.framework = [ 'CoreAudio', 'AudioToolbox', 'CoreServices' ]
     if bld.env['build_target'] not in [ 'lion', 'el_capitan' ] and (not bld.env['build_arch'] == "ppc"):
         obj.framework += [ 'CoreMidi' ]
@@ -40,9 +32,3 @@ def build(bld):
     obj.defines = ['PACKAGE="' + I18N_PACKAGE + '"',
                    'ARDOURBACKEND_DLL_EXPORTS'
                   ]
-
-    # use new coreaudio API (the old one was deprecated in 10.6, yet still works)
-    # only use with OSX intel 10.6 or later, but for all OSX/PPC (<= 10.6)
-    if not bld.env['build_target'] in ['panther', 'tiger', 'leopard']:
-        if not (bld.env['build_target'] == 'snowleopard' and bld.env['build_arch'] == "ppc"):
-            obj.defines += ['COREAUDIO_108']

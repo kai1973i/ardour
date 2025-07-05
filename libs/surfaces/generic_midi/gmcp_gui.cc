@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2009-2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <list>
@@ -23,13 +24,13 @@
 #include <vector>
 #include <algorithm>
 
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/label.h>
-#include <gtkmm/box.h>
-#include <gtkmm/adjustment.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/liststore.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/label.h>
+#include <ytkmm/box.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/liststore.h>
 
 #include "pbd/unwind.h"
 
@@ -71,7 +72,7 @@ private:
 	void toggle_feedback_enable ();
 
 	void update_port_combos ();
-	PBD::ScopedConnection connection_change_connection;
+	PBD::ScopedConnectionList _port_connections;
 	void connection_handler ();
 
 	struct MidiPortColumns : public Gtk::TreeModel::ColumnRecord {
@@ -147,6 +148,7 @@ GMCPGUI::GMCPGUI (GenericMidiControlProtocol& p)
 	sort (popdowns.begin(), popdowns.end(), less<string>());
 
 	popdowns.insert (popdowns.begin(), _("Reset All"));
+	popdowns.insert (popdowns.begin(), _("Drop Bindings"));
 
 	set_popdown_strings (map_combo, popdowns);
 
@@ -239,15 +241,14 @@ GMCPGUI::GMCPGUI (GenericMidiControlProtocol& p)
 
 	pack_start (*table, false, false);
 
-	binding_changed ();
-
 	/* update the port connection combos */
 
 	update_port_combos ();
 
 	/* catch future changes to connection state */
-
-	cp.ConnectionChange.connect (connection_change_connection, invalidator (*this), boost::bind (&GMCPGUI::connection_handler, this), gui_context());
+	ARDOUR::AudioEngine::instance()->PortRegisteredOrUnregistered.connect (_port_connections, invalidator (*this), std::bind (&GMCPGUI::connection_handler, this), gui_context());
+	ARDOUR::AudioEngine::instance()->PortPrettyNameChanged.connect (_port_connections, invalidator (*this), std::bind (&GMCPGUI::connection_handler, this), gui_context());
+	cp.ConnectionChange.connect (_port_connections, invalidator (*this), std::bind (&GMCPGUI::connection_handler, this), gui_context());
 }
 
 GMCPGUI::~GMCPGUI ()
@@ -267,6 +268,8 @@ GMCPGUI::binding_changed ()
 	string str = map_combo.get_active_text ();
 
 	if (str == _("Reset All")) {
+		cp.drop_all ();
+	} else if (str == _("Drop Bindings")) {
 		cp.drop_bindings ();
 	} else {
 		for (list<GenericMidiControlProtocol::MapInfo>::iterator x = cp.map_info.begin(); x != cp.map_info.end(); ++x) {

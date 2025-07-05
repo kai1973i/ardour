@@ -1,20 +1,22 @@
 /*
-    Copyright (C) 2006-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2007-2010 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2014 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <errno.h>
 
@@ -35,7 +37,7 @@ AudioBuffer::AudioBuffer(size_t capacity)
 	if (capacity) {
 		_owns_data = true; // prevent resize() from gagging
 		resize (capacity);
-		_silent = false; // force silence on the intial buffer state
+		_silent = false; // force silence on the initial buffer state
 		clear ();
 	}
 }
@@ -73,6 +75,17 @@ AudioBuffer::check_silence (pframes_t nframes, pframes_t& n) const
 {
 	for (n = 0; n < nframes; ++n) {
 		if (_data[n] != Sample (0)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool
+AudioBuffer::silent_data () const
+{
+	for (pframes_t n = 0; n < _capacity; ++n) {
+		if (_data[n]) {
 			return false;
 		}
 	}

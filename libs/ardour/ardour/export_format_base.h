@@ -1,30 +1,29 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2010 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_export_format_base_h__
-#define __ardour_export_format_base_h__
-
+#include <memory>
 #include <set>
 #include <string>
-
-#include <boost/shared_ptr.hpp>
 
 #include <sndfile.h>
 #include <samplerate.h>
@@ -43,7 +42,8 @@ class LIBARDOUR_API ExportFormatBase {
 
 	enum Type {
 		T_None = 0,
-		T_Sndfile
+		T_Sndfile,
+		T_FFMPEG
 	};
 
 	enum FormatId {
@@ -56,7 +56,9 @@ class LIBARDOUR_API ExportFormatBase {
 		F_IRCAM = SF_FORMAT_IRCAM,
 		F_RAW = SF_FORMAT_RAW,
 		F_FLAC = SF_FORMAT_FLAC,
-		F_Ogg = SF_FORMAT_OGG
+		F_Ogg = SF_FORMAT_OGG,
+		F_MPEG = 0x230000,  /* hardcode SF_FORMAT_MPEG from libsndfile 1.1.0+ */
+		F_FFMPEG = 0xF10000
 	};
 
 	enum Endianness {
@@ -75,7 +77,9 @@ class LIBARDOUR_API ExportFormatBase {
 		SF_U8 = SF_FORMAT_PCM_U8,
 		SF_Float = SF_FORMAT_FLOAT,
 		SF_Double = SF_FORMAT_DOUBLE,
-		SF_Vorbis = SF_FORMAT_VORBIS
+		SF_Vorbis = SF_FORMAT_VORBIS,
+		SF_Opus = 0x0064, /* SF_FORMAT_OPUS */
+		SF_MPEG_LAYER_III = 0x0082  /* SF_FORMAT_MPEG_LAYER_III */
 	};
 
 	enum DitherType {
@@ -98,6 +102,7 @@ class LIBARDOUR_API ExportFormatBase {
 		SR_Session = 1,
 		SR_8 = 8000,
 		SR_22_05 = 22050,
+		SR_24 = 24000,
 		SR_44_1 = 44100,
 		SR_48 = 48000,
 		SR_88_2 = 88200,
@@ -121,8 +126,8 @@ class LIBARDOUR_API ExportFormatBase {
 			: _selected (false), _compatible (true) { }
 		~SelectableCompatible () {}
 
-		PBD::Signal1<void,bool> SelectChanged;
-		PBD::Signal1<void,bool> CompatibleChanged;
+		PBD::Signal<void(bool)> SelectChanged;
+		PBD::Signal<void(bool)> CompatibleChanged;
 
 		bool selected () const { return _selected; }
 		bool compatible () const { return _compatible; }
@@ -148,8 +153,8 @@ class LIBARDOUR_API ExportFormatBase {
 
 	virtual ~ExportFormatBase ();
 
-	boost::shared_ptr<ExportFormatBase> get_intersection (ExportFormatBase const & other) const;
-	boost::shared_ptr<ExportFormatBase> get_union (ExportFormatBase const & other) const;
+	std::shared_ptr<ExportFormatBase> get_intersection (ExportFormatBase const & other) const;
+	std::shared_ptr<ExportFormatBase> get_union (ExportFormatBase const & other) const;
 
 	bool endiannesses_empty () const { return endiannesses.empty (); }
 	bool sample_formats_empty () const { return sample_formats.empty (); }
@@ -194,9 +199,8 @@ class LIBARDOUR_API ExportFormatBase {
 		SetIntersection
 	};
 
-	boost::shared_ptr<ExportFormatBase> do_set_operation (ExportFormatBase const & other, SetOperation operation) const;
+	std::shared_ptr<ExportFormatBase> do_set_operation (ExportFormatBase const & other, SetOperation operation) const;
 };
 
 } // namespace ARDOUR
 
-#endif /* __ardour_export_format_base_h__ */

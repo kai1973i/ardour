@@ -1,24 +1,24 @@
 /*
-    Copyright (C) 2000-2009 Paul Davis
+ * Copyright (C) 2000-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __pbd_base_ui_h__
-#define __pbd_base_ui_h__
+#pragma once
 
 #include <string>
 #include <stdint.h>
@@ -52,14 +52,17 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 	BaseUI* base_instance() { return base_ui_instance; }
 
 	Glib::RefPtr<Glib::MainLoop> main_loop() const { return _main_loop; }
-        Glib::Threads::Thread* event_loop_thread() const { return run_loop_thread; }
-        bool caller_is_self () const { return Glib::Threads::Thread::self() == run_loop_thread; }
+	bool caller_is_self () const { return _run_loop_thread ? _run_loop_thread->caller_is_self () : true; }
 
 	bool ok() const { return _ok; }
 
 	static RequestType new_request_type();
 	static RequestType CallSlot;
 	static RequestType Quit;
+
+	static void set_thread_priority (int p) {
+		_thread_priority = p;
+	}
 
 	/** start up a thread to run the main loop
 	 */
@@ -75,7 +78,7 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 
 	Glib::RefPtr<Glib::MainLoop> _main_loop;
 	Glib::RefPtr<Glib::MainContext> m_context;
-	Glib::Threads::Thread*       run_loop_thread;
+	PBD::Thread*                _run_loop_thread;
 	Glib::Threads::Mutex        _run_lock;
 	Glib::Threads::Cond         _running;
 
@@ -92,7 +95,7 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 
 	virtual void thread_init () {};
 
-	int set_thread_priority (const int policy = PBD_SCHED_FIFO, int priority = 0) const;
+	int set_thread_priority () const;
 
 	/** Called when there input ready on the request_channel
 	 */
@@ -100,6 +103,8 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 
 	void signal_new_request ();
 	void attach_request_source ();
+
+	virtual void maybe_install_precall_handler (Glib::RefPtr<Glib::MainContext>) {}
 
 	/** Derived UI objects must implement this method,
 	 * which will be called whenever there are requests
@@ -113,9 +118,9 @@ class LIBPBD_API BaseUI : public sigc::trackable, public PBD::EventLoop
 	CrossThreadChannel request_channel;
 
 	static uint64_t rt_bit;
+	static int _thread_priority;
 
 	int setup_request_pipe ();
 	void main_thread ();
 };
 
-#endif /* __pbd_base_ui_h__ */

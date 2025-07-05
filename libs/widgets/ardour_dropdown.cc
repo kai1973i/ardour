@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2014 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2014 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <cmath>
@@ -25,7 +25,6 @@
 
 #include "pbd/compose.h"
 #include "pbd/error.h"
-#include "pbd/stacktrace.h"
 
 #include "gtkmm2ext/utils.h"
 #include "gtkmm2ext/menu_elems.h"
@@ -49,7 +48,6 @@ using namespace std;
 ArdourDropdown::ArdourDropdown (Element e)
 	: _scrolling_disabled(false)
 {
-//	signal_button_press_event().connect (sigc::mem_fun(*this, &ArdourDropdown::on_mouse_pressed));
 	_menu.signal_size_request().connect (sigc::mem_fun(*this, &ArdourDropdown::menu_size_request));
 
 	_menu.set_reserve_toggle_size(false);
@@ -79,6 +77,28 @@ ArdourDropdown::on_button_press_event (GdkEventButton* ev)
 	}
 
 	return true;
+}
+
+void
+ArdourDropdown::set_active (std::string const& text)
+{
+	const MenuItem* current_active = _menu.get_active();
+	if (current_active && current_active->get_label() == text) {
+		set_text (text);
+		return;
+	}
+	using namespace Menu_Helpers;
+	const MenuList& items = _menu.items ();
+	int c = 0;
+	for (MenuList::const_iterator i = items.begin(); i != items.end(); ++i, ++c) {
+		if (i->get_label() == text) {
+			_menu.set_active(c);
+			_menu.activate_item(*i);
+			break;
+		}
+	}
+	set_text (text);
+	StateChanged (); /* EMIT SIGNAL */
 }
 
 bool
@@ -174,4 +194,10 @@ void
 ArdourDropdown::default_text_handler (std::string const& text) {
 	set_text (text);
 	StateChanged (); /* EMIT SIGNAL */
+}
+
+void
+ArdourDropdown::append (Glib::RefPtr<Action> action)
+{
+	_menu.items().push_back (Menu_Helpers::MenuElem (action->get_short_label(), sigc::mem_fun (action.get(), &Action::activate)));
 }

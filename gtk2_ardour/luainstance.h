@@ -1,5 +1,22 @@
-#ifndef __gtkardour_luainstance_h__
-#define __gtkardour_luainstance_h__
+/*
+ * Copyright (C) 2016-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+#pragma once
 
 #include <bitset>
 
@@ -22,6 +39,10 @@ namespace luabridge {
 	class LuaRef;
 }
 
+namespace Gtk {
+	class Window;
+}
+
 typedef std::bitset<LuaSignal::LAST_SIGNAL> ActionHook;
 
 class LuaCallback : public ARDOUR::SessionHandlePtr, public sigc::trackable
@@ -31,14 +52,14 @@ public:
 	LuaCallback (ARDOUR::Session*, XMLNode & node);
 	~LuaCallback ();
 
-	XMLNode& get_state (void);
+	XMLNode& get_state () const;
 	void set_session (ARDOUR::Session *);
 
 	const PBD::ID& id () const { return _id; }
 	const std::string& name () const { return _name; }
 	ActionHook signals () const { return _signals; }
 	bool lua_slot (std::string&, std::string&, ActionHook&, ARDOUR::LuaScriptParamList&);
-	PBD::Signal0<void> drop_callback;
+	PBD::Signal<void()> drop_callback;
 
 protected:
 	void session_going_away ();
@@ -62,20 +83,11 @@ private:
 
 	PBD::ScopedConnectionList _connections;
 
-	template <typename T, typename S> void connect_0 (enum LuaSignal::LuaSignal, T, S*);
-	template <typename T> void proxy_0 (enum LuaSignal::LuaSignal, T);
-
-	template <typename T, typename C1> void connect_1 (enum LuaSignal::LuaSignal, T, PBD::Signal1<void, C1>*);
-	template <typename T, typename C1> void proxy_1 (enum LuaSignal::LuaSignal, T, C1);
-
-	template <typename T, typename C1, typename C2> void connect_2 (enum LuaSignal::LuaSignal, T, PBD::Signal2<void, C1, C2>*);
-	template <typename T, typename C1, typename C2> void proxy_2 (enum LuaSignal::LuaSignal, T, C1, C2);
-
-	template <typename T, typename C1, typename C2, typename C3> void connect_3 (enum LuaSignal::LuaSignal, T, PBD::Signal3<void, C1, C2, C3>*);
-	template <typename T, typename C1, typename C2, typename C3> void proxy_3 (enum LuaSignal::LuaSignal, T, C1, C2, C3);
+	template <typename T, typename... C> void connect (enum LuaSignal::LuaSignal, T, PBD::Signal<void(C...)>*);
+	template <typename T, typename... C> void proxy (enum LuaSignal::LuaSignal, T, C...);
 };
 
-typedef boost::shared_ptr<LuaCallback> LuaCallbackPtr;
+typedef std::shared_ptr<LuaCallback> LuaCallbackPtr;
 typedef std::map<PBD::ID, LuaCallbackPtr> LuaCallbackMap;
 
 
@@ -87,7 +99,7 @@ public:
 	static void destroy_instance();
 	~LuaInstance();
 
-	static void register_classes (lua_State* L);
+	static void register_classes (lua_State* L, bool sandbox);
 	static void register_hooks (lua_State* L);
 	static void bind_cairo (lua_State* L);
 	static void bind_dialog (lua_State* L);
@@ -100,7 +112,10 @@ public:
 	XMLNode& get_action_state (void);
 	XMLNode& get_hook_state (void);
 
-	bool interactive_add (ARDOUR::LuaScriptInfo::ScriptType, int);
+	int load_state ();
+	int save_state ();
+
+	bool interactive_add (Gtk::Window&, ARDOUR::LuaScriptInfo::ScriptType, int);
 
 	/* actions */
 	void call_action (const int);
@@ -123,15 +138,20 @@ public:
 	bool lua_slot (const PBD::ID&, std::string&, std::string&, ActionHook&, ARDOUR::LuaScriptParamList&);
 	sigc::signal<void,PBD::ID,std::string,ActionHook> SlotChanged;
 
-	static PBD::Signal0<void> LuaTimerDS; // deci-seconds (Timer every .1s)
-	static PBD::Signal0<void> SetSession; // emitted when a session is loaded
+	static PBD::Signal<void()> LuaTimerS; // deci-seconds (Timer every 1s)
+	static PBD::Signal<void()> LuaTimerDS; // deci-seconds (Timer every .1s)
+	static PBD::Signal<void()> SetSession; // emitted when a session is loaded
+	static PBD::Signal<void()> SelectionChanged; // emitted when editor selection changes
 
 private:
 	LuaInstance();
 	static LuaInstance* _instance;
 
 	void init ();
+	void set_dirty ();
 	void session_going_away ();
+	void pre_seed_scripts ();
+	void pre_seed_script (std::string const&, int&);
 
 	LuaState lua;
 
@@ -148,8 +168,13 @@ private:
 	LuaCallbackMap _callbacks;
 	PBD::ScopedConnectionList _slotcon;
 
+	void selection_changed ();
+
+	void every_second ();
+	sigc::connection second_connection;
+
 	void every_point_one_seconds ();
 	sigc::connection point_one_second_connection;
+
 };
 
-#endif

@@ -29,17 +29,17 @@
 using namespace ARDOUR;
 using namespace PBD;
 
-AudioRange&
+TimelineRange&
 TimeSelection::operator[] (uint32_t which)
 {
-	for (std::list<AudioRange>::iterator i = begin(); i != end(); ++i) {
+	for (std::list<TimelineRange>::iterator i = begin(); i != end(); ++i) {
 		if ((*i).id == which) {
 			return *i;
 		}
 	}
 	fatal << string_compose (_("programming error: request for non-existent audio range (%1)!"), which) << endmsg;
 	abort(); /*NOTREACHED*/
-	return *(new AudioRange(0,0,0)); /* keep the compiler happy; never called */
+	return *(new ARDOUR::TimelineRange(timepos_t(),timepos_t(), 0)); /* keep the compiler happy; never called */
 }
 
 bool
@@ -48,16 +48,16 @@ TimeSelection::consolidate ()
 	bool changed = false;
 
   restart:
-	for (std::list<AudioRange>::iterator a = begin(); a != end(); ++a) {
-		for (std::list<AudioRange>::iterator b = begin(); b != end(); ++b) {
+	for (std::list<TimelineRange>::iterator a = begin(); a != end(); ++a) {
+		for (std::list<TimelineRange>::iterator b = begin(); b != end(); ++b) {
 
 			if (&(*a) == &(*b)) {
 				continue;
 			}
 
-			if (a->coverage (b->start, b->end) != Evoral::OverlapNone) {
-				a->start = std::min (a->start, b->start);
-				a->end = std::max (a->end, b->end);
+			if (a->coverage (b->start(), b->end()) != Temporal::OverlapNone) {
+				a->set_start (std::min (a->start(), b->start()));
+				a->set_end (std::max (a->end(), b->end()));
 				erase (b);
 				changed = true;
 				goto restart;
@@ -69,43 +69,59 @@ TimeSelection::consolidate ()
 }
 
 samplepos_t
-TimeSelection::start ()
+TimeSelection::start_sample () const
+{
+	return start_time().samples ();
+}
+
+samplepos_t
+TimeSelection::end_sample () const
+{
+	return end_time().samples ();
+}
+
+samplecnt_t
+TimeSelection::length_samples() const
+{
+	return length().samples();
+}
+
+timepos_t
+TimeSelection::start_time () const
 {
 	if (empty()) {
-		return 0;
+		return timepos_t();
 	}
 
-	samplepos_t first = max_samplepos;
+	timepos_t first = timepos_t::max (front().start().time_domain());
 
-	for (std::list<AudioRange>::iterator i = begin(); i != end(); ++i) {
-		if ((*i).start < first) {
-			first = (*i).start;
+	for (std::list<TimelineRange>::const_iterator i = begin(); i != end(); ++i) {
+		if ((*i).start() < first) {
+			first = (*i).start();
 		}
 	}
 	return first;
 }
 
-samplepos_t
-TimeSelection::end_sample ()
+timepos_t
+TimeSelection::end_time() const
 {
-	samplepos_t last = 0;
+	timepos_t last;
 
-	/* XXX make this work like RegionSelection: no linear search needed */
-
-	for (std::list<AudioRange>::iterator i = begin(); i != end(); ++i) {
-		if ((*i).end > last) {
-			last = (*i).end;
+	for (std::list<TimelineRange>::const_iterator i = begin(); i != end(); ++i) {
+		if ((*i).end() > last) {
+			last = (*i).end();
 		}
 	}
 	return last;
 }
 
-samplecnt_t
-TimeSelection::length()
+timecnt_t
+TimeSelection::length() const
 {
 	if (empty()) {
-		return 0;
+		return timecnt_t();
 	}
 
-	return end_sample() - start() + 1;
+	return start_time().distance (end_time());
 }

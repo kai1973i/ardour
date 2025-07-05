@@ -1,21 +1,20 @@
 /*
-    Copyright (C) 2009 John Emmas
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2016 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef COMPILER_MSVC
 
@@ -241,6 +240,24 @@ LIBPBD_API double PBD_APICALLTYPE
 expm1(double x)
 {
 	return (exp(x) - (double)1.0);
+}
+
+//***************************************************************
+//
+//	exp2f()
+//
+// Emulates C99 exp2f() using powf().
+//
+//	Returns:
+//
+//    On Success: 2 raised to the power of 'x'
+//    On Failure: None, except that calling powf(x) should generate
+//                an appropriate error for us (such as INF etc).
+//
+LIBPBD_API float PBD_APICALLTYPE
+exp2f(float x)
+{
+	return (powf(2.0f, x));
 }
 
 //***************************************************************
@@ -754,7 +771,7 @@ bool bValidPath = false;
 #if (_WIN32_WINNT >= 0x0500)
 				if (0 == strRootFileSystemType.compare("NTFS"))
 				{
-					if (TestForMinimumSpecOS()) // Hard links were only available from Win2K onwards
+					if (TestForMinimumSpecOS(NULL)) // Hard links were only available from Win2K onwards
 						if (0 == CreateHardLinkA(link_filepath, existing_filepath, NULL))
 						{	// Note that the above API call cannot create a link to a directory, so
 							// should we also be checking that the supplied path was actually a file?
@@ -883,7 +900,7 @@ bool bValidPath = false;
 				std::transform(strRootFileSystemType.begin(), strRootFileSystemType.end(), strRootFileSystemType.begin(), ::toupper);
 #if (_WIN32_WINNT >= 0x0500)
 				if (0 == strRootFileSystemType.compare("NTFS"))
-					if (TestForMinimumSpecOS()) // Hard links were only available from Win2K onwards
+					if (TestForMinimumSpecOS(NULL)) // Hard links were only available from Win2K onwards
 						if (0 == DeleteFileA(link_filepath))
 							ret = GetLastError();
 						else

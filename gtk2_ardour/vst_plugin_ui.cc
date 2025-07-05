@@ -1,56 +1,49 @@
 /*
-    Copyright (C) 2000-2010 Paul Davis
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2013 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm.h>
+#include <ytkmm/ytkmm.h>
+#include "ardour/auditioner.h"
+#include "ardour/session.h"
 #include "ardour/vst_plugin.h"
 #include "ardour/vst_types.h"
 #include "ardour/plugin_insert.h"
 #include "vst_plugin_ui.h"
 
 #ifdef PLATFORM_WINDOWS
-#include <gdk/gdkwin32.h>
+#include <ydk/gdkwin32.h>
 #elif defined __APPLE__
 // TODO
 #else
-#include <gdk/gdkx.h>
+#include <ydk/gdkx.h>
 #endif
 
-VSTPluginUI::VSTPluginUI (boost::shared_ptr<ARDOUR::PluginInsert> insert, boost::shared_ptr<ARDOUR::VSTPlugin> plugin)
-	: PlugUIBase (insert)
+VSTPluginUI::VSTPluginUI (std::shared_ptr<ARDOUR::PlugInsertBase> pib, std::shared_ptr<ARDOUR::VSTPlugin> plugin)
+	: PlugUIBase (pib)
 	, _vst (plugin)
 {
 	Gtk::HBox* box = manage (new Gtk::HBox);
 	box->set_spacing (6);
 	box->set_border_width (6);
-	box->pack_end (focus_button, false, false);
-	box->pack_end (bypass_button, false, false, 4);
-	if (insert->controls().size() > 0) {
-		box->pack_end (reset_button, false, false, 4);
-	}
-	box->pack_end (delete_button, false, false);
-	box->pack_end (save_button, false, false);
-	box->pack_end (add_button, false, false);
-	box->pack_end (_preset_combo, false, false);
-	box->pack_end (_preset_modified, false, false);
-	box->pack_end (pin_management_button, false, false);
 
-	bypass_button.set_active (!insert->active ());
+	add_common_widgets (box);
 
 	pack_start (*box, false, false);
 	box->signal_size_allocate().connect (sigc::mem_fun (*this, &VSTPluginUI::top_box_allocated));
@@ -168,5 +161,123 @@ VSTPluginUI::configure_handler (GdkEventConfigure*)
 	gdk_error_trap_pop ();
 #endif
 
+	return false;
+}
+
+bool
+VSTPluginUI::dispatch_effeditkey (GdkEventKey* gdk_key)
+{
+	int effopcode;
+	switch (gdk_key->type) {
+		case GDK_KEY_PRESS:
+			effopcode = 59; // effEditKeyDown
+			break;
+		case GDK_KEY_RELEASE:
+			effopcode = 60; // effEditKeyUp
+			break;
+		default:
+			return false;
+	}
+
+	/* see https://github.com/DISTRHO/DPF/blob/master/distrho/src/DistrhoPluginVST.cpp
+	 * and https://github.com/steinbergmedia/vstgui/blob/develop/vstgui/lib/vstkeycode.h#L19
+	 */
+	int special_key = 0;
+	int ascii_key = 0;
+
+	switch (gdk_key->keyval) {
+		case GDK_BackSpace:
+			special_key = 1;
+			break;
+		case GDK_Tab:
+		case GDK_KP_Tab:
+			special_key = 2;
+			break;
+		case GDK_Return:
+			special_key = 4;
+			break;
+		case GDK_KP_Enter:
+			special_key = 19;
+			break;
+		case GDK_Escape:
+			special_key = 6;
+			break;
+		case GDK_KP_Space:
+			special_key = 7;
+			break;
+
+		case GDK_End:
+		case GDK_KP_End:
+			special_key = 9;
+			break;
+		case GDK_Home:
+		case GDK_KP_Home:
+			special_key = 10;
+			break;
+		case GDK_Left:
+			special_key = 11;
+			break;
+		case GDK_Up:
+			special_key = 12;
+			break;
+		case GDK_Right:
+			special_key = 13;
+			break;
+		case GDK_Down:
+			special_key = 14;
+			break;
+		case GDK_Page_Up:
+		case GDK_KP_Page_Up:
+			special_key = 15;
+			break;
+		case GDK_Page_Down:
+			/* fallthrough */
+		case GDK_KP_Page_Down:
+			special_key = 16;
+			break;
+		case GDK_Insert:
+			special_key = 21;
+			break;
+		case GDK_Delete:
+		case GDK_KP_Delete:
+			special_key = 22;
+			break;
+
+		case GDK_Shift_L:
+		case GDK_Shift_R:
+			special_key = 54;
+			break;
+		case GDK_Control_L:
+		case GDK_Control_R:
+			special_key = 55;
+			break;
+		case GDK_Alt_L:
+		case GDK_Alt_R:
+			special_key = 56;
+			break;
+
+		case GDK_F1:  special_key = 40; break;
+		case GDK_F2:  special_key = 41; break;
+		case GDK_F3:  special_key = 42; break;
+		case GDK_F4:  special_key = 43; break;
+		case GDK_F5:  special_key = 44; break;
+		case GDK_F6:  special_key = 45; break;
+		case GDK_F7:  special_key = 46; break;
+		case GDK_F8:  special_key = 47; break;
+		case GDK_F9:  special_key = 48; break;
+		case GDK_F10: special_key = 49; break;
+		case GDK_F11: special_key = 50; break;
+		case GDK_F12: special_key = 51; break;
+
+		default:
+			ascii_key = gdk_key->keyval;
+			break;
+	}
+
+	if (special_key > 0 || ascii_key > 0) {
+		VSTState* vstfx = _vst->state();
+		/* expect non-zero return if key was handled */
+		return 0 != vstfx->plugin->dispatcher (vstfx->plugin, effopcode, (int)ascii_key, (intptr_t)special_key, NULL, 0);
+	}
 	return false;
 }

@@ -1,26 +1,28 @@
 /*
-    Copyright (C) 2017 Tim Mayberry
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2017 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include "ardour/lmath.h"
 
+#include "pbd/assert.h"
 #include "pbd/cpus.h"
+#include "pbd/pthread_utils.h"
 
 #include "ardour/audioregion.h"
 #include "ardour/audiosource.h"
@@ -29,9 +31,9 @@
 
 namespace ArdourWaveView {
 
-WaveViewProperties::WaveViewProperties (boost::shared_ptr<ARDOUR::AudioRegion> region)
-    : region_start (region->start ())
-    , region_end (region->start () + region->length ())
+WaveViewProperties::WaveViewProperties (std::shared_ptr<ARDOUR::AudioRegion> region)
+    : region_start (region->start_sample ())
+    , region_end (region->start_sample () + region->length_samples ())
     , channel (0)
     , height (64)
     , samples_per_pixel (0)
@@ -54,7 +56,7 @@ WaveViewProperties::WaveViewProperties (boost::shared_ptr<ARDOUR::AudioRegion> r
 
 /*-------------------------------------------------*/
 
-WaveViewImage::WaveViewImage (boost::shared_ptr<const ARDOUR::AudioRegion> const& region_ptr,
+WaveViewImage::WaveViewImage (std::shared_ptr<const ARDOUR::AudioRegion> const& region_ptr,
                               WaveViewProperties const& properties)
 	: region (region_ptr)
 	, props (properties)
@@ -82,7 +84,7 @@ WaveViewCacheGroup::~WaveViewCacheGroup ()
 }
 
 void
-WaveViewCacheGroup::add_image (boost::shared_ptr<WaveViewImage> image)
+WaveViewCacheGroup::add_image (std::shared_ptr<WaveViewImage> image)
 {
 	if (!image) {
 		// Not adding invalid image to cache
@@ -139,7 +141,7 @@ WaveViewCacheGroup::add_image (boost::shared_ptr<WaveViewImage> image)
 	_parent_cache.increase_size (image->size_in_bytes ());
 }
 
-boost::shared_ptr<WaveViewImage>
+std::shared_ptr<WaveViewImage>
 WaveViewCacheGroup::lookup_image (WaveViewProperties const& props)
 {
 	for (ImageCache::iterator i = _cached_images.begin (); i != _cached_images.end (); ++i) {
@@ -147,7 +149,7 @@ WaveViewCacheGroup::lookup_image (WaveViewProperties const& props)
 			return (*i);
 		}
 	}
-	return boost::shared_ptr<WaveViewImage>();
+	return std::shared_ptr<WaveViewImage>();
 }
 
 void
@@ -189,12 +191,13 @@ WaveViewCache::increase_size (uint64_t bytes)
 void
 WaveViewCache::decrease_size (uint64_t bytes)
 {
-	assert (image_cache_size - bytes < image_cache_size);
+	assert (bytes > 0);
+	assert (bytes <= image_cache_size);
 	image_cache_size -= bytes;
 }
 
-boost::shared_ptr<WaveViewCacheGroup>
-WaveViewCache::get_cache_group (boost::shared_ptr<ARDOUR::AudioSource> source)
+std::shared_ptr<WaveViewCacheGroup>
+WaveViewCache::get_cache_group (std::shared_ptr<ARDOUR::AudioSource> source)
 {
 	CacheGroups::iterator it = cache_group_map.find (source);
 
@@ -203,17 +206,16 @@ WaveViewCache::get_cache_group (boost::shared_ptr<ARDOUR::AudioSource> source)
 		return it->second;
 	}
 
-	boost::shared_ptr<WaveViewCacheGroup> new_group (new WaveViewCacheGroup (*this));
+	std::shared_ptr<WaveViewCacheGroup> new_group (new WaveViewCacheGroup (*this));
 
 	bool inserted = cache_group_map.insert (std::make_pair (source, new_group)).second;
-
-	assert (inserted);
+	x_assert (inserted, inserted);
 
 	return new_group;
 }
 
 void
-WaveViewCache::reset_cache_group (boost::shared_ptr<WaveViewCacheGroup>& group)
+WaveViewCache::reset_cache_group (std::shared_ptr<WaveViewCacheGroup>& group)
 {
 	if (!group) {
 		return;
@@ -253,79 +255,13 @@ WaveViewCache::set_image_cache_threshold (uint64_t sz)
 
 /*-------------------------------------------------*/
 
-WaveViewDrawRequest::WaveViewDrawRequest () : stop (0)
-{
-
-}
-
-WaveViewDrawRequest::~WaveViewDrawRequest ()
-{
-
-}
-
-void
-WaveViewDrawRequestQueue::enqueue (boost::shared_ptr<WaveViewDrawRequest>& request)
-{
-	Glib::Threads::Mutex::Lock lm (_queue_mutex);
-
-	_queue.push_back (request);
-	_cond.broadcast ();
-}
-
-void
-WaveViewDrawRequestQueue::wake_up ()
-{
-	boost::shared_ptr<WaveViewDrawRequest> null_ptr;
-	// hack!?...wake up the drawing thread
-	enqueue (null_ptr);
-}
-
-boost::shared_ptr<WaveViewDrawRequest>
-WaveViewDrawRequestQueue::dequeue (bool block)
-{
-	if (block) {
-		_queue_mutex.lock();
-	} else {
-		if (!_queue_mutex.trylock()) {
-			return boost::shared_ptr<WaveViewDrawRequest>();
-		}
-	}
-
-	// _queue_mutex is always held at this point
-
-	if (_queue.empty()) {
-		if (block) {
-			_cond.wait (_queue_mutex);
-		} else {
-			_queue_mutex.unlock();
-			return boost::shared_ptr<WaveViewDrawRequest>();
-		}
-	}
-
-	boost::shared_ptr<WaveViewDrawRequest> req;
-
-	if (!_queue.empty()) {
-		req = _queue.front ();
-		_queue.pop_front ();
-	} else {
-		// Queue empty, returning empty DrawRequest
-	}
-
-	_queue_mutex.unlock();
-
-	return req;
-}
-
-/*-------------------------------------------------*/
-
 WaveViewThreads::WaveViewThreads ()
+	: _quit (false)
 {
-
 }
 
 WaveViewThreads::~WaveViewThreads ()
 {
-
 }
 
 uint32_t WaveViewThreads::init_count = 0;
@@ -354,24 +290,51 @@ WaveViewThreads::deinitialize ()
 }
 
 void
-WaveViewThreads::enqueue_draw_request (boost::shared_ptr<WaveViewDrawRequest>& request)
+WaveViewThreads::enqueue_draw_request (std::shared_ptr<WaveViewDrawRequest>& request)
 {
 	assert (instance);
-	instance->_request_queue.enqueue (request);
-}
-
-boost::shared_ptr<WaveViewDrawRequest>
-WaveViewThreads::dequeue_draw_request ()
-{
-	assert (instance);
-	return instance->_request_queue.dequeue (true);
+	instance->_enqueue_draw_request (request);
 }
 
 void
-WaveViewThreads::wake_up ()
+WaveViewThreads::_enqueue_draw_request (std::shared_ptr<WaveViewDrawRequest>& request)
+{
+	Glib::Threads::Mutex::Lock lm (_queue_mutex);
+	_queue.push_back (request);
+	/* wake one (random) thread */
+	_cond.signal ();
+}
+
+std::shared_ptr<WaveViewDrawRequest>
+WaveViewThreads::dequeue_draw_request ()
 {
 	assert (instance);
-	return instance->_request_queue.wake_up ();
+	return instance->_dequeue_draw_request ();
+}
+
+std::shared_ptr<WaveViewDrawRequest>
+WaveViewThreads::_dequeue_draw_request ()
+{
+	/* _queue_mutex must be held at this point */
+
+	assert (!_queue_mutex.trylock());
+
+	if (_queue.empty()) {
+		_cond.wait (_queue_mutex);
+	}
+
+	std::shared_ptr<WaveViewDrawRequest> req;
+
+	/* queue could be empty at this point because an already running thread
+	 * pulled the request before we were fully awake and reacquired the mutex.
+	 */
+
+	if (!_queue.empty()) {
+		req = _queue.front ();
+		_queue.pop_front ();
+	}
+
+	return req;
 }
 
 void
@@ -379,12 +342,17 @@ WaveViewThreads::start_threads ()
 {
 	assert (!_threads.size());
 
-	int num_cpus = hardware_concurrency ();
+	const int num_cpus = hardware_concurrency ();
 
-	uint32_t num_threads = std::max (1, num_cpus - 1);
+	/* the upper limit of 8 here is entirely arbitrary. It just doesn't
+	 * seem worthwhile having "ncpus" of low priority threads for
+	 * rendering waveforms into the cache.
+	 */
+
+	uint32_t num_threads = std::min (8, std::max (1, num_cpus - 1));
 
 	for (uint32_t i = 0; i != num_threads; ++i) {
-		boost::shared_ptr<WaveViewDrawingThread> new_thread (new WaveViewDrawingThread ());
+		std::shared_ptr<WaveViewDrawingThread> new_thread (new WaveViewDrawingThread ());
 		_threads.push_back(new_thread);
 	}
 }
@@ -394,21 +362,42 @@ WaveViewThreads::stop_threads ()
 {
 	assert (_threads.size());
 
+	{
+		Glib::Threads::Mutex::Lock lm (_queue_mutex);
+		_quit = true;
+		_cond.broadcast ();
+	}
+
+	/* Deleting the WaveViewThread objects will force them to join() with
+	 * their underlying (p)threads, and thus cleanup. The threads will
+	 * all be woken by the condition broadcast above.
+	 */
+
 	_threads.clear ();
+}
+
+/*-------------------------------------------------*/
+WaveViewDrawRequest::WaveViewDrawRequest ()
+{
+	_stop.store (0);
+}
+
+WaveViewDrawRequest::~WaveViewDrawRequest ()
+{
+
 }
 
 /*-------------------------------------------------*/
 
 WaveViewDrawingThread::WaveViewDrawingThread ()
 		: _thread(0)
-		, _quit(0)
 {
 	start ();
 }
 
 WaveViewDrawingThread::~WaveViewDrawingThread ()
 {
-	quit ();
+	_thread->join ();
 }
 
 void
@@ -416,31 +405,100 @@ WaveViewDrawingThread::start ()
 {
 	assert (!_thread);
 
-	_thread = Glib::Threads::Thread::create (sigc::mem_fun (*this, &WaveViewDrawingThread::run));
+	_thread = PBD::Thread::create (&WaveViewThreads::thread_proc, "WaveViewDrawing");
 }
 
 void
-WaveViewDrawingThread::quit ()
+WaveViewThreads::thread_proc ()
 {
-	assert (_thread);
-
-	g_atomic_int_set (&_quit, 1);
-	WaveViewThreads::wake_up ();
-	_thread->join();
-	_thread = 0;
+	assert (instance);
+	instance->_thread_proc ();
 }
 
+/* Notes on thread/sync design:
+ *
+ *
+ * the worker threads do not hold the _queue_mutex while doing work. This means
+ * that an attempt to signal them using a condition variable and the
+ * _queue_mutex is not guaranteed to work - they may not be either (a) holding
+ * the lock or (b) waiting on condition variable (having gone to sleep on the
+ * mutex).
+ *
+ * Instead, when the signalling thread takes the mutex, they may be busy
+ * working, and will therefore miss the signal.
+ *
+ * This is fine for handling requests - worker threads will just loop around,
+ * check the request queue again, and behave appropriately (i.e. do more more
+ * work, or go to sleep waiting on condition variable.
+ *
+ * But it's not fine when we need to tell the threads to quit. We can't do this
+ * with requests, because there's no way to ensure that each thread will pick
+ * up a request. So we have a bool member, _quit, which we set to indicate
+ * that threads should exit. This integer is protected by the _queue_mutex. If
+ * it was not (and was instead just an atomic integer), we would get a race
+ * condition where a worker thread checks _quit, finds it is still false, then
+ * takes the mutex in order to check the request queue, gets blocked there
+ * because a signalling thread has acquired the mutex (and broadcasts the
+ * condition), then the worker continues (now holding the mutex), finds no
+ * requests, and goes to sleep, never to be woken again.
+ *
+ *      Signalling Thread                 Worker Thread
+ *      =================                 =============
+ *                                        _quit == true ? => false
+ *      _quit = true
+ *      acquire _queue_mutex
+ *      cond.broadcast()                  acquire _queue_mutex => sleep
+ *      release _queue_mutex              sleep
+ *                                        wake
+ *                                        check request queue => empty
+ *                                        sleep on cond, FOREVER
+ *
+ * This was the design until 166ac63924c2b. Now we acquire the mutex in the
+ * classic thread synchronization manner, and there is no race:
+ *
+ *      Signalling Thread                 Worker Thread
+ *      =================                 =============
+ *
+ *      acquire _queue_mutex              acquire _queue_mutex => sleep
+ *      _quit = true
+ *      release _queue_mutex
+ *      cond.broadcast()
+ *      release _queue_mutex
+ *                                        wake
+ *                                        _quit == true ? => true
+ *                                        exit
+ *
+ * If worker threads held the mutex while working, a slightly different design
+ * would be correct, but because there is a single queue protected by the
+ * mutex, that would effectively serialize all worker threads which would be
+ * pointless.
+ */
+
 void
-WaveViewDrawingThread::run ()
+WaveViewThreads::_thread_proc ()
 {
 	while (true) {
 
-		if (g_atomic_int_get (&_quit)) {
+		_queue_mutex.lock ();
+
+		if (_quit) {
+			/* time to die */
+			_queue_mutex.unlock ();
 			break;
 		}
 
-		// block until a request is available.
-		boost::shared_ptr<WaveViewDrawRequest> req = WaveViewThreads::dequeue_draw_request ();
+		/* try to fetch a request from the queue. If none are
+		 * immediately available, we will block until woken by a
+		 * new request, but that request might be handled by an already
+		 * running thread, so the return here may be null (that is not
+		 * an error). We may also be woken by cond.broadcast(), in
+		 * which case there will be no request in the queue, but we are
+		 * supposed to loop around and check _quit.
+		 */
+
+		std::shared_ptr<WaveViewDrawRequest> req = WaveViewThreads::dequeue_draw_request ();
+
+		_queue_mutex.unlock ();
 
 		if (req && !req->stopped()) {
 			try {
@@ -449,10 +507,8 @@ WaveViewDrawingThread::run ()
 				/* just in case it was set before the exception, whatever it was */
 				req->image->cairo_image.clear ();
 			}
-		} else {
-			// null or stopped Request, processing skipped
 		}
 	}
 }
 
-}
+} /* namespace */

@@ -1,36 +1,35 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2014 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2010 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libpbd_property_basics_h__
-#define __libpbd_property_basics_h__
+#pragma once
 
 #include <glib.h>
 #include <set>
 #include <vector>
+#include <ostream>
 
 #include "pbd/libpbd_visibility.h"
 #include "pbd/xml++.h"
 
-class Command;
-
 namespace PBD {
-
+class LIBPBD_API Command;
 class LIBPBD_API PropertyList;
 class LIBPBD_API StatefulDiffCommand;
 
@@ -78,6 +77,8 @@ public:
 	void add (PropertyID id)               { insert (id); }
 	void add (const PropertyChange& other) { insert (other.begin (), other.end ()); }
 	template<typename T> void add (PropertyDescriptor<T> p);
+
+	void dump (std::ostream& out) const { int n = 0; for (auto const & what_changed : *this) { if (n > 0) { out << ',' ; } out << g_quark_to_string (what_changed); ++n; } }
 };
 
 /** Base (non template) part of Property
@@ -136,7 +137,7 @@ public:
 	virtual void get_changes_as_properties (PropertyList& changes, Command *) const = 0;
 
 	/** Collect StatefulDiffCommands for changes to anything that we own */
-	virtual void rdiff (std::vector<Command*> &) const {}
+	virtual void rdiff (std::vector<PBD::Command*> &) const {}
 
 	/** Look in an XML node written by get_changes_as_xml and, if XML from this property
 	 *  is found, create a property with the changes from the XML.
@@ -149,7 +150,7 @@ public:
 	virtual PropertyBase* clone () const = 0;
 
 	/** Set this property's current state from another */
-	virtual void apply_changes (PropertyBase const *) = 0;
+	virtual void apply_change (PropertyBase const *) = 0;
 
 	const gchar* property_name () const { return g_quark_to_string (_property_id); }
 	PropertyID   property_id () const   { return _property_id; }
@@ -171,4 +172,7 @@ private:
 
 }
 
-#endif /* __libpbd_property_basics_h__ */
+namespace std {
+	LIBPBD_API ostream& operator<< (std::ostream& os, PBD::PropertyChange const & pc);
+}
+

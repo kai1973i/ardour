@@ -1,26 +1,25 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
- * Copyright (C) 2011 Paul Davis
+ * Copyright (C) 2016-2023 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/frame.h>
-#include <gtkmm/label.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/label.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "plugin_setup_dialog.h"
 #include "pbd/i18n.h"
@@ -29,7 +28,7 @@ using namespace ARDOUR;
 using namespace ArdourWidgets;
 using namespace Gtk;
 
-PluginSetupDialog::PluginSetupDialog (boost::shared_ptr<ARDOUR::Route> r, boost::shared_ptr<ARDOUR::PluginInsert> pi, ARDOUR::Route::PluginSetupOptions flags)
+PluginSetupDialog::PluginSetupDialog (std::shared_ptr<ARDOUR::Route> r, std::shared_ptr<ARDOUR::PluginInsert> pi, ARDOUR::Route::PluginSetupOptions flags)
 	: ArdourDialog (_("Plugin Setup"), true, false)
 	, _route (r)
 	, _pi (pi)
@@ -44,8 +43,8 @@ PluginSetupDialog::PluginSetupDialog (boost::shared_ptr<ARDOUR::Route> r, boost:
 	int row = 0;
 
 	if (flags & Route::CanReplace) {
-		boost::shared_ptr<Processor> old = _route->the_instrument ();
-		boost::shared_ptr<PluginInsert> opi = boost::dynamic_pointer_cast<PluginInsert> (old);
+		std::shared_ptr<Processor> old = _route->the_instrument ();
+		std::shared_ptr<PluginInsert> opi = std::dynamic_pointer_cast<PluginInsert> (old);
 		assert (opi);
 
 		opi->configured_io (_cur_inputs, _cur_outputs);
@@ -76,7 +75,7 @@ PluginSetupDialog::PluginSetupDialog (boost::shared_ptr<ARDOUR::Route> r, boost:
 		tbl->attach (*f, 0, 1, row, row + 1, EXPAND|FILL, SHRINK, 0, 8);
 
 		_keep_mapping.signal_clicked.connect (sigc::mem_fun (*this, &PluginSetupDialog::apply_mapping));
-		add_button ("Replace", 2);
+		add_button (_("Replace"), 2);
 	} else {
 
 		Gtk::Label *l = manage (new Label (string_compose (
@@ -96,13 +95,14 @@ PluginSetupDialog::PluginSetupDialog (boost::shared_ptr<ARDOUR::Route> r, boost:
 		f->add (*box);
 		tbl->attach (*f, 1, 2, row, row + 1, EXPAND|FILL, SHRINK, 0, 8);
 		_fan_out.signal_clicked.connect (sigc::mem_fun (*this, &PluginSetupDialog::toggle_fan_out));
+		_fan_out.set_active (true);
 	} else {
 		_pi->set_preset_out (_pi->natural_output_streams ());
 		update_sensitivity (_pi->natural_output_streams ().n_audio ());
+		_fan_out.set_active (false);
 	}
 
 	_keep_mapping.set_active (false);
-	_fan_out.set_active (false);
 	apply_mapping ();
 
 	add_button (Stock::ADD, 0);
@@ -122,7 +122,7 @@ PluginSetupDialog::setup_output_presets ()
 	_out_presets.AddMenuElem (MenuElem (_("Automatic"), sigc::bind (sigc::mem_fun (*this, &PluginSetupDialog::select_output_preset), 0)));
 
 	if (ppc.find (0) != ppc.end ()) {
-		// anyting goes
+		// anything goes
 		ppc.clear ();
 		ppc.insert (1);
 		ppc.insert (2);
@@ -135,18 +135,35 @@ PluginSetupDialog::setup_output_presets ()
 		}
 	}
 
-	bool have_matching_io = false;
+	const uint32_t n_audio = _cur_outputs.n_audio ();
+
+	bool have_matching_io = ppc.find (n_audio) != ppc.end ();
+	if (have_matching_io) {
+		_out_presets.AddMenuElem (MenuElem (preset_label (n_audio), sigc::bind (sigc::mem_fun (*this, &PluginSetupDialog::select_output_preset), n_audio)));
+	}
+
+	if (ppc.size() > 6 && *ppc.rbegin () != n_audio) {
+		uint32_t all = *ppc.rbegin ();
+		_out_presets.AddMenuElem (MenuElem (string_compose (_("All (%1)"), preset_label (all)), sigc::bind (sigc::mem_fun (*this, &PluginSetupDialog::select_output_preset), all)));
+		ppc.erase (all);
+	}
 
 	for (PluginOutputConfiguration::const_iterator i = ppc.begin () ; i != ppc.end (); ++i) {
 		assert (*i > 0);
+		if (*i == n_audio) {
+			assert (have_matching_io);
+			continue;
+		}
 		_out_presets.AddMenuElem (MenuElem (preset_label (*i), sigc::bind (sigc::mem_fun (*this, &PluginSetupDialog::select_output_preset), *i)));
-		if (*i == _cur_outputs.n_audio ()) {
-			have_matching_io = true;
+		if (_out_presets.items ().size () > 6) {
+			break;
 		}
 	}
 
 	if (have_matching_io) {
 		select_output_preset (_cur_outputs.n_audio ());
+	} else if (ppc.size() == 1 && _pi->strict_io ()) {
+		select_output_preset (*ppc.begin ());
 	} else {
 		select_output_preset (0);
 	}
@@ -188,8 +205,8 @@ PluginSetupDialog::apply_mapping ()
 	// toggle button
 	_keep_mapping.set_active (!_keep_mapping.get_active ());
 
-	boost::shared_ptr<Processor> old = _route->the_instrument ();
-	boost::shared_ptr<PluginInsert> opi = boost::dynamic_pointer_cast<PluginInsert> (old);
+	std::shared_ptr<Processor> old = _route->the_instrument ();
+	std::shared_ptr<PluginInsert> opi = std::dynamic_pointer_cast<PluginInsert> (old);
 
 	if (_keep_mapping.get_active () && opi && io_match ()) {
 		_pi->pre_seed (_cur_inputs, _cur_outputs, opi->input_map (0), opi->output_map (0), opi->thru_map ());
@@ -205,7 +222,7 @@ PluginSetupDialog::toggle_fan_out ()
 }
 
 std::string
-PluginSetupDialog::preset_label (uint32_t n_audio) const
+PluginSetupDialog::preset_label (uint32_t n_audio)
 {
 		std::string rv;
 		switch (n_audio) {

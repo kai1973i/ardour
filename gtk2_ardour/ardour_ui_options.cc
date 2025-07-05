@@ -1,36 +1,46 @@
 /*
-    Copyright (C) 2005 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2006-2007 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2007-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2008-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
 #endif
 
 #include "pbd/convert.h"
-#include "pbd/stacktrace.h"
 #include "pbd/unwind.h"
 
+#include "ardour/lv2_plugin.h"
 #include "ardour/rc_configuration.h"
 #include "ardour/session.h"
+#include "ardour/transport_master_manager.h"
 
 #include "gtkmm2ext/utils.h"
 #include "waveview/wave_view.h"
 
+#include "ardour_message.h"
 #include "audio_clock.h"
 #include "ardour_ui.h"
 #include "actions.h"
@@ -39,6 +49,10 @@
 #include "main_clock.h"
 
 #include "pbd/i18n.h"
+
+#ifdef __APPLE__
+extern void use_cocoa_invalidation (int); // cocoacarbon.mm
+#endif
 
 using namespace Gtk;
 using namespace Gtkmm2ext;
@@ -50,14 +64,15 @@ void
 ARDOUR_UI::toggle_external_sync()
 {
 	if (_session) {
-		if (_session->config.get_video_pullup() != 0.0f) {
-			if (Config->get_sync_source() == Engine) {
-				MessageDialog msg (
-					_("It is not possible to use JACK as the the sync source\n\
-when the pull up/down setting is non-zero."));
-				msg.run ();
-				return;
-			}
+		if (_session->config.get_video_pullup() != 0.0f && (TransportMasterManager::instance().current()->type() == Engine)) {
+			ArdourMessageDialog msg (_("It is not possible to use JACK as the sync source\n when the pull up/down setting is non-zero."));
+			msg.run ();
+			return;
+		}
+		if (_session->default_play_speed() != 1.0f && (TransportMasterManager::instance().current()->type() == Engine)) {
+			ArdourMessageDialog msg (_("It is not possible to use JACK as the sync source\n when the vari-speed is enabled."));
+			msg.run ();
+			return;
 		}
 
 		ActionManager::toggle_config_state_foo ("Transport", "ToggleExternalSync", sigc::mem_fun (_session->config, &SessionConfiguration::set_external_sync), sigc::mem_fun (_session->config, &SessionConfiguration::get_external_sync));
@@ -68,7 +83,7 @@ when the pull up/down setting is non-zero."));
 		 * This is a UI limitation, imposed by audio-clock and
 		 * status displays which combine RC-config & session-properties.
 		 *
-		 * Notficy RCOptionEditor by emitting a signal if the active
+		 * Notify RCOptionEditor by emitting a signal if the active
 		 * status changed:
 		 */
 		Config->ParameterChanged("sync-source");
@@ -132,66 +147,46 @@ ARDOUR_UI::toggle_click ()
 void
 ARDOUR_UI::toggle_session_monitoring_in ()
 {
-	Glib::RefPtr<Action> act = ActionManager::get_action (X_("Transport"), X_("SessionMonitorIn"));
-	if (!act) {
-		return;
-	}
-	Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic (act);
-	if (!tact) {
-		return;
-	}
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action (X_("Transport"), X_("SessionMonitorIn"));
+	MonitorChoice mc = _session->config.get_session_monitoring ();
 
-	if (tact->get_active() && _session->config.get_session_monitoring () == MonitorInput) {
-		return;
-	}
-	if (!tact->get_active() && _session->config.get_session_monitoring () != MonitorInput) {
+	if (tact->get_active() == (0 != (mc & MonitorInput))) {
 		return;
 	}
 
 	if (tact->get_active()) {
-		_session->config.set_session_monitoring (MonitorInput);
+		mc = MonitorChoice (mc | MonitorInput);
 	} else {
-		_session->config.set_session_monitoring (MonitorAuto);
+		mc = MonitorChoice (mc & ~MonitorInput);
 	}
+	_session->config.set_session_monitoring (mc);
 }
 
 void
 ARDOUR_UI::toggle_session_monitoring_disk ()
 {
-	Glib::RefPtr<Action> act = ActionManager::get_action (X_("Transport"), X_("SessionMonitorDisk"));
-	if (!act) {
-		return;
-	}
-	Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic (act);
-	if (!tact) {
-		return;
-	}
-	if (tact->get_active() && _session->config.get_session_monitoring () == MonitorDisk) {
-		return;
-	}
-	if (!tact->get_active() && _session->config.get_session_monitoring () != MonitorDisk) {
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action (X_("Transport"), X_("SessionMonitorDisk"));
+	MonitorChoice mc = _session->config.get_session_monitoring ();
+	if (tact->get_active() == (0 != (mc & MonitorDisk))) {
 		return;
 	}
 
 	if (tact->get_active()) {
-		_session->config.set_session_monitoring (MonitorDisk);
+		mc = MonitorChoice (mc | MonitorDisk);
 	} else {
-		_session->config.set_session_monitoring (MonitorAuto);
+		mc = MonitorChoice (mc & ~MonitorDisk);
 	}
+	_session->config.set_session_monitoring (mc);
 }
 
 void
 ARDOUR_UI::unset_dual_punch ()
 {
-	Glib::RefPtr<Action> action = ActionManager::get_action ("Transport", "TogglePunch");
-
-	if (action) {
-		Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic(action);
-		if (tact) {
-			ignore_dual_punch = true;
-			tact->set_active (false);
-			ignore_dual_punch = false;
-		}
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action ("Transport", "TogglePunch");
+	if (tact) {
+		ignore_dual_punch = true;
+		tact->set_active (false);
+		ignore_dual_punch = false;
 	}
 }
 
@@ -202,42 +197,20 @@ ARDOUR_UI::toggle_punch ()
 		return;
 	}
 
-	Glib::RefPtr<Action> action = ActionManager::get_action ("Transport", "TogglePunch");
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action ("Transport", "TogglePunch");
 
-	if (action) {
+	/* drive the other two actions from this one */
+	Glib::RefPtr<ToggleAction> in_action = ActionManager::get_toggle_action ("Transport", "TogglePunchIn");
+	Glib::RefPtr<ToggleAction> out_action = ActionManager::get_toggle_action ("Transport", "TogglePunchOut");
 
-		Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic(action);
-
-		if (!tact) {
-			return;
-		}
-
-		/* drive the other two actions from this one */
-
-		Glib::RefPtr<Action> in_action = ActionManager::get_action ("Transport", "TogglePunchIn");
-		Glib::RefPtr<Action> out_action = ActionManager::get_action ("Transport", "TogglePunchOut");
-
-		if (in_action && out_action) {
-			Glib::RefPtr<ToggleAction> tiact = Glib::RefPtr<ToggleAction>::cast_dynamic(in_action);
-			Glib::RefPtr<ToggleAction> toact = Glib::RefPtr<ToggleAction>::cast_dynamic(out_action);
-			tiact->set_active (tact->get_active());
-			toact->set_active (tact->get_active());
-		}
-	}
+	in_action->set_active (tact->get_active());
+	out_action->set_active (tact->get_active());
 }
 
 void
 ARDOUR_UI::toggle_punch_in ()
 {
-	Glib::RefPtr<Action> act = ActionManager::get_action (X_("Transport"), X_("TogglePunchIn"));
-	if (!act) {
-		return;
-	}
-
-	Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic (act);
-	if (!tact) {
-		return;
-	}
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action (X_("Transport"), X_("TogglePunchIn"));
 
 	if (tact->get_active() != _session->config.get_punch_in()) {
 		_session->config.set_punch_in (tact->get_active ());
@@ -255,15 +228,7 @@ ARDOUR_UI::toggle_punch_in ()
 void
 ARDOUR_UI::toggle_punch_out ()
 {
-	Glib::RefPtr<Action> act = ActionManager::get_action (X_("Transport"), X_("TogglePunchOut"));
-	if (!act) {
-		return;
-	}
-
-	Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic (act);
-	if (!tact) {
-		return;
-	}
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action (X_("Transport"), X_("TogglePunchOut"));
 
 	if (tact->get_active() != _session->config.get_punch_out()) {
 		_session->config.set_punch_out (tact->get_active ());
@@ -281,17 +246,15 @@ ARDOUR_UI::toggle_punch_out ()
 void
 ARDOUR_UI::show_loop_punch_ruler_and_disallow_hide ()
 {
-	Glib::RefPtr<Action> act = ActionManager::get_action (X_("Rulers"), "toggle-loop-punch-ruler");
-	if (!act) {
-		return;
-	}
+	return;
 
-	act->set_sensitive (false);
+	/* This is what this method used to do  but after ruler consolidation
+	 * it is not clear what the correct semantics are/should be.
+	 */
 
-	Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic (act);
-	if (!tact) {
-		return;
-	}
+	Glib::RefPtr<ToggleAction> tact; //  = ActionManager::get_toggle_action (X_("Rulers"), "toggle-loop-punch-ruler");
+
+	tact->set_sensitive (false);
 
 	if (!tact->get_active()) {
 		tact->set_active ();
@@ -302,9 +265,15 @@ ARDOUR_UI::show_loop_punch_ruler_and_disallow_hide ()
 void
 ARDOUR_UI::reenable_hide_loop_punch_ruler_if_appropriate ()
 {
+	return;
+
+	/* This is what this method used to do  but after ruler consolidation
+	 * it is not clear what the correct semantics are/should be.
+	 */
+
 	if (!_session->config.get_punch_in() && !_session->config.get_punch_out()) {
 		/* if punch in/out are now both off, reallow hiding of the loop/punch ruler */
-		Glib::RefPtr<Action> act = ActionManager::get_action (X_("Rulers"), "toggle-loop-punch-ruler");
+		Glib::RefPtr<Action> act; // = ActionManager::get_action (X_("Rulers"), "toggle-loop-punch-ruler");
 		if (act) {
 			act->set_sensitive (true);
 		}
@@ -314,33 +283,33 @@ ARDOUR_UI::reenable_hide_loop_punch_ruler_if_appropriate ()
 void
 ARDOUR_UI::toggle_video_sync()
 {
-	Glib::RefPtr<Action> act = ActionManager::get_action ("Transport", "ToggleVideoSync");
-	if (act) {
-		Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic(act);
-		_session->config.set_use_video_sync (tact->get_active());
-	}
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action ("Transport", "ToggleVideoSync");
+	_session->config.set_use_video_sync (tact->get_active());
 }
 
 void
 ARDOUR_UI::toggle_editing_space()
 {
-	Glib::RefPtr<Action> act = ActionManager::get_action ("Common", "ToggleMaximalEditor");
-
-	if (act) {
-		Glib::RefPtr<ToggleAction> tact = Glib::RefPtr<ToggleAction>::cast_dynamic(act);
-		if (tact->get_active()) {
-			maximise_editing_space ();
-		} else {
-			restore_editing_space ();
-		}
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action ("Common", "ToggleMaximalEditor");
+	if (tact->get_active()) {
+		maximise_editing_space ();
+	} else {
+		restore_editing_space ();
 	}
+}
+
+void
+ARDOUR_UI::toggle_latency_switch ()
+{
+	Glib::RefPtr<ToggleAction> tact = ActionManager::get_toggle_action ("Main", "ToggleLatencyCompensation");
+	ARDOUR::Latent::force_zero_latency (tact->get_active());
 }
 
 void
 ARDOUR_UI::setup_session_options ()
 {
-	_session->config.ParameterChanged.connect (_session_connections, MISSING_INVALIDATOR, boost::bind (&ARDOUR_UI::parameter_changed, this, _1), gui_context());
-	boost::function<void (std::string)> pc (boost::bind (&ARDOUR_UI::parameter_changed, this, _1));
+	_session->config.ParameterChanged.connect (_session_connections, MISSING_INVALIDATOR, std::bind (&ARDOUR_UI::parameter_changed, this, _1), gui_context());
+	std::function<void (std::string)> pc (std::bind (&ARDOUR_UI::parameter_changed, this, _1));
 	_session->config.map_parameters (pc);
 }
 
@@ -349,26 +318,28 @@ ARDOUR_UI::parameter_changed (std::string p)
 {
 	if (p == "external-sync") {
 
+		/* session parameter */
+
 		ActionManager::map_some_state ("Transport", "ToggleExternalSync", sigc::mem_fun (_session->config, &SessionConfiguration::get_external_sync));
 
 		if (!_session->config.get_external_sync()) {
-			sync_button.set_text (S_("SyncSource|Int."));
 			ActionManager::get_action ("Transport", "ToggleAutoPlay")->set_sensitive (true);
 			ActionManager::get_action ("Transport", "ToggleAutoReturn")->set_sensitive (true);
 			ActionManager::get_action ("Transport", "ToggleFollowEdits")->set_sensitive (true);
 		} else {
-			sync_button.set_text (sync_source_to_string (Config->get_sync_source(), true));
-			if (_session && _session->locations()->auto_loop_location()) {
-				// disable looping with external sync.
-				// This is not necessary because session-transport ignores the loop-state,
-				// but makes it clear to the user that it's disabled.
-				_session->request_play_loop (false, false);
-			}
 			/* XXX we need to make sure that auto-play is off as well as insensitive */
 			ActionManager::get_action ("Transport", "ToggleAutoPlay")->set_sensitive (false);
-			ActionManager::get_action ("Transport", "ToggleAutoReturn")->set_sensitive (false);
 			ActionManager::get_action ("Transport", "ToggleFollowEdits")->set_sensitive (false);
+			if (!_session->synced_to_engine()) {
+				/* JACK transport allows auto-return */
+				ActionManager::get_action ("Transport", "ToggleAutoReturn")->set_sensitive (false);
+			}
 		}
+
+	} else if (p == "sync-source") {
+
+		synchronize_sync_source_and_video_pullup ();
+		set_fps_timeout_connection ();
 
 	} else if (p == "follow-edits") {
 
@@ -391,28 +362,11 @@ ARDOUR_UI::parameter_changed (std::string p)
 	} else if (p == "auto-input") {
 		ActionManager::map_some_state ("Transport", "ToggleAutoInput", sigc::mem_fun (_session->config, &SessionConfiguration::get_auto_input));
 	} else if (p == "session-monitoring") {
-		Glib::RefPtr<Action> iact = ActionManager::get_action (X_("Transport"), X_("SessionMonitorIn"));
-		Glib::RefPtr<Action> dact = ActionManager::get_action (X_("Transport"), X_("SessionMonitorDisk"));
-		if (iact && dact) {
-			Glib::RefPtr<ToggleAction> tdact = Glib::RefPtr<ToggleAction>::cast_dynamic(dact);
-			Glib::RefPtr<ToggleAction> tiact = Glib::RefPtr<ToggleAction>::cast_dynamic(iact);
-			if (tdact && tiact) {
-				switch (_session->config.get_session_monitoring ()) {
-					case MonitorDisk:
-						tdact->set_active (true);
-						tiact->set_active (false);
-						break;
-					case MonitorInput:
-						tiact->set_active (true);
-						tdact->set_active (false);
-						break;
-					default:
-						tdact->set_active (false);
-						tiact->set_active (false);
-						break;
-				}
-			}
-		}
+		Glib::RefPtr<ToggleAction> tiact = ActionManager::get_toggle_action (X_("Transport"), X_("SessionMonitorIn"));
+		Glib::RefPtr<ToggleAction> tdact = ActionManager::get_toggle_action (X_("Transport"), X_("SessionMonitorDisk"));
+		MonitorChoice mc = _session->config.get_session_monitoring ();
+		tiact->set_active (0 != (mc & MonitorInput));
+		tdact->set_active (0 != (mc & MonitorDisk));
 	} else if (p == "punch-out") {
 		ActionManager::map_some_state ("Transport", "TogglePunchOut", sigc::mem_fun (_session->config, &SessionConfiguration::get_punch_out));
 		if (!_session->config.get_punch_out()) {
@@ -427,33 +381,9 @@ ARDOUR_UI::parameter_changed (std::string p)
 		ActionManager::map_some_state ("Transport", "ToggleClick", &RCConfiguration::get_clicking);
 	} else if (p == "use-video-sync") {
 		ActionManager::map_some_state ("Transport",  "ToggleVideoSync", sigc::mem_fun (_session->config, &SessionConfiguration::get_use_video_sync));
-	} else if (p == "sync-source") {
-
-		synchronize_sync_source_and_video_pullup ();
-		set_fps_timeout_connection ();
 
 	} else if (p == "show-track-meters") {
 		if (editor) editor->toggle_meter_updating();
-	} else if (p == "primary-clock-delta-mode") {
-		if (UIConfiguration::instance().get_primary_clock_delta_mode() != NoDelta) {
-			primary_clock->set_is_duration (true);
-			primary_clock->set_editable (false);
-			primary_clock->set_widget_name ("transport delta");
-		} else {
-			primary_clock->set_is_duration (false);
-			primary_clock->set_editable (true);
-			primary_clock->set_widget_name ("transport");
-		}
-	} else if (p == "secondary-clock-delta-mode") {
-		if (UIConfiguration::instance().get_secondary_clock_delta_mode() != NoDelta) {
-			secondary_clock->set_is_duration (true);
-			secondary_clock->set_editable (false);
-			secondary_clock->set_widget_name ("secondary delta");
-		} else {
-			secondary_clock->set_is_duration (false);
-			secondary_clock->set_editable (true);
-			secondary_clock->set_widget_name ("secondary");
-		}
 	} else if (p == "super-rapid-clock-update") {
 		if (_session) {
 			stop_clocking ();
@@ -468,22 +398,6 @@ ARDOUR_UI::parameter_changed (std::string p)
 		}
 	} else if (p == "waveform-gradient-depth") {
 		ArdourWaveView::WaveView::set_global_gradient_depth (UIConfiguration::instance().get_waveform_gradient_depth());
-	} else if (p == "show-mini-timeline") {
-		repack_transport_hbox ();
-	} else if (p == "show-dsp-load-info") {
-		repack_transport_hbox ();
-	} else if (p == "show-disk-space-info") {
-		repack_transport_hbox ();
-	} else if (p == "show-toolbar-recpunch") {
-		repack_transport_hbox ();
-	} else if (p == "show-toolbar-monitoring") {
-		repack_transport_hbox ();
-	} else if (p == "show-toolbar-selclock") {
-		repack_transport_hbox ();
-	} else if (p == "show-editor-meter") {
-		repack_transport_hbox ();
-	} else if (p == "show-secondary-clock") {
-		update_clock_visibility ();
 	} else if (p == "waveform-scale") {
 		ArdourWaveView::WaveView::set_global_logscaled (UIConfiguration::instance().get_waveform_scale() == Logarithmic);
 	} else if (p == "widget-prelight") {
@@ -498,29 +412,53 @@ ARDOUR_UI::parameter_changed (std::string p)
 		ArdourWaveView::WaveView::set_image_cache_size (UIConfiguration::instance().get_waveform_cache_size() * 1048576);
 	} else if (p == "use-wm-visibility") {
 		VisibilityTracker::set_use_window_manager_visibility (UIConfiguration::instance().get_use_wm_visibility());
-	} else if (p == "action-table-columns") {
-		const uint32_t cols = UIConfiguration::instance().get_action_table_columns ();
-		for (int i = 0; i < 9; ++i) {
-			const int col = i / 2;
-			if (cols & (1<<col)) {
-				action_script_call_btn[i].show();
-			} else {
-				action_script_call_btn[i].hide();
-			}
-		}
-	} else if (p == "layered-record-mode") {
-		layered_button.set_active (_session->config.get_layered_record_mode ());
 	} else if (p == "flat-buttons") {
 		bool flat = UIConfiguration::instance().get_flat_buttons();
 		if (ArdourButton::flat_buttons () != flat) {
 			ArdourButton::set_flat_buttons (flat);
 			/* force a redraw */
 			gtk_rc_reset_styles (gtk_settings_get_default());
+			LV2Plugin::set_global_ui_style_flat (flat);
+		}
+	} else if (p == "boxy-buttons") {
+		bool boxy = UIConfiguration::instance().get_boxy_buttons();
+		if (ArdourButton::boxy_buttons () != boxy) {
+			ArdourButton::set_boxy_buttons (boxy);
+			/* force a redraw */
+			gtk_rc_reset_styles (gtk_settings_get_default());
+			LV2Plugin::set_global_ui_style_boxy (boxy);
 		}
 	} else if ( (p == "snap-to-region-sync") || (p == "snap-to-region-start") || (p == "snap-to-region-end") ) {
 		if (editor) editor->mark_region_boundary_cache_dirty();
-	}
+	} else if (p == "screen-saver-mode") {
+		switch (UIConfiguration::instance().get_screen_saver_mode ()) {
+			using namespace ARDOUR_UI_UTILS;
+			case InhibitWhileRecording:
+				inhibit_screensaver (_session && _session->actively_recording ());
+				break;
+			case InhibitAlways:
+				inhibit_screensaver (true);
+				break;
+			case InhibitNever:
+				inhibit_screensaver (false);
+				break;
+		}
+	} else if (p == "clock-display-limit") {
+		/* limit upper value to 99:59:59 (HH:MM:SS) */
+		using namespace Temporal;
+		const samplecnt_t limit = (99*60*60) + (59*60) + (59); /* seconds */
 
+		if (UIConfiguration::instance().get_clock_display_limit() > limit) {
+			UIConfiguration::instance().set_clock_display_limit (limit);
+		}
+	} else if (p == "no-strobe") {
+		stop_clocking ();
+		start_clocking ();
+	} else if (p == "use-cocoa-invalidation") {
+#ifdef __APPLE__
+		use_cocoa_invalidation (UIConfiguration::instance().get_use_cocoa_invalidation());
+#endif
+	}
 }
 
 void
@@ -552,11 +490,11 @@ ARDOUR_UI::reset_main_clocks ()
 	ENSURE_GUI_THREAD (*this, &ARDOUR_UI::reset_main_clocks)
 
 	if (_session) {
-		primary_clock->set (_session->audible_sample(), true);
-		secondary_clock->set (_session->audible_sample(), true);
+		primary_clock->set (timepos_t (_session->audible_sample()), true);
+		secondary_clock->set (timepos_t (_session->audible_sample()), true);
 	} else {
-		primary_clock->set (0, true);
-		secondary_clock->set (0, true);
+		primary_clock->set (timepos_t(), true);
+		secondary_clock->set (timepos_t(), true);
 	}
 }
 
@@ -565,12 +503,8 @@ ARDOUR_UI::synchronize_sync_source_and_video_pullup ()
 {
 	Glib::RefPtr<Action> act = ActionManager::get_action (X_("Transport"), X_("ToggleExternalSync"));
 
-	if (!act) {
+	if (!act || !_session) {
 		return;
-	}
-
-	if (!_session) {
-		goto just_label;
 	}
 
 	if (_session->config.get_video_pullup() == 0.0f) {
@@ -578,24 +512,10 @@ ARDOUR_UI::synchronize_sync_source_and_video_pullup ()
 		act->set_sensitive (true);
 	} else {
 		/* can't sync to JACK if video pullup != 0.0 */
-		if (Config->get_sync_source() == Engine) {
+		if (TransportMasterManager::instance().current()->type() == Engine) {
 			act->set_sensitive (false);
 		} else {
 			act->set_sensitive (true);
 		}
 	}
-
-	/* XXX should really be able to set the video pull up
-	   action to insensitive/sensitive, but there is no action.
-	   FIXME
-	*/
-
-  just_label:
-	if (act->get_sensitive ()) {
-		set_tip (sync_button, _("Enable/Disable external positional sync"));
-	} else {
-		set_tip (sync_button, _("Sync to JACK is not possible: video pull up/down is set"));
-	}
-
 }
-

@@ -1,24 +1,26 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_monitor_processor_h__
-#define __ardour_monitor_processor_h__
+#pragma once
 
 #include <algorithm>
 #include <iostream>
@@ -116,6 +118,8 @@ protected:
 	T _normal;
 };
 
+template<> void MPControl<bool>::set_value (double v, PBD::Controllable::GroupControlDisposition gcd);
+
 class LIBARDOUR_API MonitorProcessor : public Processor
 {
 public:
@@ -126,7 +130,7 @@ public:
 
 	void run (BufferSet& /*bufs*/, samplepos_t /*start_sample*/, samplepos_t /*end_sample*/, double /*speed*/, pframes_t /*nframes*/, bool /*result_required*/);
 
-	XMLNode& state ();
+	XMLNode& state () const;
 	int set_state (const XMLNode&, int /* version */);
 
 	bool configure_io (ChanCount in, ChanCount out);
@@ -153,24 +157,24 @@ public:
 
 	bool monitor_active () const { return _monitor_active; }
 
-	PBD::Signal0<void> Changed;
+	PBD::Signal<void()> Changed;
 
-	boost::shared_ptr<PBD::Controllable> channel_cut_control (uint32_t) const;
-	boost::shared_ptr<PBD::Controllable> channel_dim_control (uint32_t) const;
-	boost::shared_ptr<PBD::Controllable> channel_polarity_control (uint32_t) const;
-	boost::shared_ptr<PBD::Controllable> channel_solo_control (uint32_t) const;
+	std::shared_ptr<PBD::Controllable> channel_cut_control (uint32_t) const;
+	std::shared_ptr<PBD::Controllable> channel_dim_control (uint32_t) const;
+	std::shared_ptr<PBD::Controllable> channel_polarity_control (uint32_t) const;
+	std::shared_ptr<PBD::Controllable> channel_solo_control (uint32_t) const;
 
-	boost::shared_ptr<PBD::Controllable> dim_control () const { return _dim_all_control; }
-	boost::shared_ptr<PBD::Controllable> cut_control () const { return _cut_all_control; }
-	boost::shared_ptr<PBD::Controllable> mono_control () const { return _mono_control; }
-	boost::shared_ptr<PBD::Controllable> dim_level_control () const { return _dim_level_control; }
-	boost::shared_ptr<PBD::Controllable> solo_boost_control () const { return _solo_boost_level_control; }
+	std::shared_ptr<PBD::Controllable> dim_control () const { return _dim_all_control; }
+	std::shared_ptr<PBD::Controllable> cut_control () const { return _cut_all_control; }
+	std::shared_ptr<PBD::Controllable> mono_control () const { return _mono_control; }
+	std::shared_ptr<PBD::Controllable> dim_level_control () const { return _dim_level_control; }
+	std::shared_ptr<PBD::Controllable> solo_boost_control () const { return _solo_boost_level_control; }
 
 private:
 	struct ChannelRecord {
 		gain_t current_gain;
 
-		/* pointers - created first, but managed by boost::shared_ptr<> */
+		/* pointers - created first, but managed by std::shared_ptr<> */
 
 		MPControl<gain_t>* cut_ptr;
 		MPControl<bool>*   dim_ptr;
@@ -179,10 +183,10 @@ private:
 
 		/* shared ptr access and lifetime management, for external users */
 
-		boost::shared_ptr<PBD::Controllable> cut_control;
-		boost::shared_ptr<PBD::Controllable> dim_control;
-		boost::shared_ptr<PBD::Controllable> polarity_control;
-		boost::shared_ptr<PBD::Controllable> soloed_control;
+		std::shared_ptr<PBD::Controllable> cut_control;
+		std::shared_ptr<PBD::Controllable> dim_control;
+		std::shared_ptr<PBD::Controllable> polarity_control;
+		std::shared_ptr<PBD::Controllable> soloed_control;
 
 		/* typed controllables for internal use */
 
@@ -192,6 +196,7 @@ private:
 		MPControl<bool>&   soloed;
 
 		ChannelRecord (uint32_t);
+		~ChannelRecord ();
 	};
 
 	std::vector<ChannelRecord*> _channels;
@@ -200,7 +205,7 @@ private:
 	bool                 _monitor_active;
 
 
-	/* pointers - created first, but managed by boost::shared_ptr<> */
+	/* pointers - created first, but managed by std::shared_ptr<> */
 
 	MPControl<bool>*            _dim_all_ptr;
 	MPControl<bool>*            _cut_all_ptr;
@@ -210,11 +215,11 @@ private:
 
 	/* shared ptr access and lifetime management, for external users */
 
-	boost::shared_ptr<PBD::Controllable> _dim_all_control;
-	boost::shared_ptr<PBD::Controllable> _cut_all_control;
-	boost::shared_ptr<PBD::Controllable> _mono_control;
-	boost::shared_ptr<PBD::Controllable> _dim_level_control;
-	boost::shared_ptr<PBD::Controllable> _solo_boost_level_control;
+	std::shared_ptr<PBD::Controllable> _dim_all_control;
+	std::shared_ptr<PBD::Controllable> _cut_all_control;
+	std::shared_ptr<PBD::Controllable> _mono_control;
+	std::shared_ptr<PBD::Controllable> _dim_level_control;
+	std::shared_ptr<PBD::Controllable> _solo_boost_level_control;
 
 	/* typed controllables for internal use */
 
@@ -230,4 +235,3 @@ private:
 
 } /* namespace */
 
-#endif /* __ardour_monitor_processor_h__ */

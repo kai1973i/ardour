@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <boost/algorithm/string.hpp>
 
@@ -36,7 +36,9 @@ using std::string;
 
 Stripable::Stripable (Session& s, string const & name, PresentationInfo const & pi)
 	: SessionObject (s, name)
-	, Automatable (s)
+	, Automatable (s, s.config.get_tracks_follow_session_time() ?
+	               Temporal::TimeDomainProvider (s.time_domain(), s) : 
+	               Temporal::TimeDomainProvider ((pi.flags() & PresentationInfo::MidiIndicatingFlags) ? Temporal::BeatTime : Temporal::AudioTime))
 	, _presentation_info (pi)
 	, _active_color_picker (0)
 {
@@ -118,7 +120,7 @@ bool
 Stripable::is_selected() const
 {
 	try {
-		boost::shared_ptr<const Stripable> s (shared_from_this());
+		std::shared_ptr<const Stripable> s (shared_from_this());
 	} catch (...) {
 		std::cerr << "cannot shared-from-this for " << this << std::endl;
 		abort ();
@@ -127,19 +129,24 @@ Stripable::is_selected() const
 }
 
 bool
-Stripable::Sorter::operator() (boost::shared_ptr<ARDOUR::Stripable> a, boost::shared_ptr<ARDOUR::Stripable> b)
+Stripable::Sorter::operator() (std::shared_ptr<ARDOUR::Stripable> a, std::shared_ptr<ARDOUR::Stripable> b) const
 {
-	if (a->presentation_info().flags () == b->presentation_info().flags ()) {
+	const PresentationInfo::Flag a_flag = a->presentation_info().flags ();
+	const PresentationInfo::Flag b_flag = b->presentation_info().flags ();
+
+	if (a_flag == b_flag) {
 		return a->presentation_info().order() < b->presentation_info().order();
 	}
 
 	int cmp_a = 0;
 	int cmp_b = 0;
 
-	if (a->is_auditioner ()) { cmp_a = -2; }
-	if (b->is_auditioner ()) { cmp_b = -2; }
-	if (a->is_monitor ())    { cmp_a = -1; }
-	if (b->is_monitor ())    { cmp_b = -1; }
+	if (a->is_auditioner ())      { cmp_a = -3; }
+	if (b->is_auditioner ())      { cmp_b = -3; }
+	if (a->is_monitor ())         { cmp_a = -2; }
+	if (b->is_monitor ())         { cmp_b = -2; }
+	if (a->is_surround_master ()) { cmp_a = -1; }
+	if (b->is_surround_master ()) { cmp_b = -1; }
 
 	/* ARDOUR-Editor: [Track|Bus|Master] (0) < VCA (3)
 	 * ARDOUR-Mixer : [Track|Bus] (0) < VCA (3) < Master (4)
@@ -148,34 +155,34 @@ Stripable::Sorter::operator() (boost::shared_ptr<ARDOUR::Stripable> a, boost::sh
 	 * Mixbus-Mixer : [Track|Bus] (0) < Mixbus (1) < Master (2) < VCA (3)
 	 */
 
-	if (a->presentation_info().flags () & ARDOUR::PresentationInfo::VCA) {
+	if (a_flag & ARDOUR::PresentationInfo::VCA) {
 		cmp_a = 3;
 	}
 #ifdef MIXBUS
-	else if (a->presentation_info().flags () & ARDOUR::PresentationInfo::MasterOut) {
+	else if (a_flag & ARDOUR::PresentationInfo::MasterOut) {
 		cmp_a = _mixer_order ? 2 : 4;
 	}
-	else if ((a->presentation_info().flags () & ARDOUR::PresentationInfo::Mixbus) || a->mixbus()) {
+	else if (a_flag & ARDOUR::PresentationInfo::Mixbus) {
 		cmp_a = 1;
 	}
 #endif
-	else if (_mixer_order && (a->presentation_info().flags () & ARDOUR::PresentationInfo::MasterOut)) {
+	else if (_mixer_order && (a_flag & ARDOUR::PresentationInfo::MasterOut)) {
 		cmp_a = 4;
 	}
 
 
-	if (b->presentation_info().flags () & ARDOUR::PresentationInfo::VCA) {
+	if (b_flag & ARDOUR::PresentationInfo::VCA) {
 		cmp_b = 3;
 	}
 #ifdef MIXBUS
-	else if (b->presentation_info().flags () & ARDOUR::PresentationInfo::MasterOut) {
+	else if (b_flag & ARDOUR::PresentationInfo::MasterOut) {
 		cmp_b = _mixer_order ? 2 : 4;
 	}
-	else if ((b->presentation_info().flags () & ARDOUR::PresentationInfo::Mixbus) || b->mixbus()) {
+	else if (b_flag & ARDOUR::PresentationInfo::Mixbus) {
 		cmp_b = 1;
 	}
 #endif
-	else if (_mixer_order && (b->presentation_info().flags () & ARDOUR::PresentationInfo::MasterOut)) {
+	else if (_mixer_order && (b_flag & ARDOUR::PresentationInfo::MasterOut)) {
 		cmp_b = 4;
 	}
 

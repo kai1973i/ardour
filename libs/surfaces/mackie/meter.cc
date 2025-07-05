@@ -1,21 +1,21 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-	Copyright (C) 2012 Paul Davis
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2012-2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 
@@ -30,7 +30,7 @@
 
 using namespace PBD;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 Control*
 Meter::factory (Surface& surface, int id, const char* name, Group& group)
@@ -69,9 +69,41 @@ Meter::notify_metering_state_changed(Surface& surface, bool transport_is_rolling
 void
 Meter::send_update (Surface& surface, float dB)
 {
-	float def = 0.0f; /* Meter deflection %age */
+	std::pair<bool,float> result = calculate_meter_over_and_deflection(dB);
 
-	// DEBUG_TRACE (DEBUG::MackieControl, string_compose ("Meter ID %1 dB %2\n", id(), dB));
+	MidiByteArray msg;
+
+	if (result.first) {
+		if (!overload_on) {
+			overload_on = true;
+			surface.write (MidiByteArray (2, 0xd0, (id() << 4) | 0xe));
+
+		}
+	} else {
+		if (overload_on) {
+			overload_on = false;
+			surface.write (MidiByteArray (2, 0xd0, (id() << 4) | 0xf));
+		}
+	}
+
+	/* we can use up to 13 segments */
+
+	int segment = lrintf ((result.second/115.0) * 13.0);
+
+	surface.write (MidiByteArray (2, 0xd0, (id()<<4) | segment));
+}
+
+MidiByteArray
+Meter::zero ()
+{
+	return MidiByteArray (2, 0xD0, (id()<<4 | 0));
+}
+
+std::pair<bool, float>
+Meter::calculate_meter_over_and_deflection (float dB) 
+{
+	float def = 0.0f; /* Meter deflection %age */
+	bool over = false;
 
 	if (dB < -70.0f) {
 		def = 0.0f;
@@ -96,30 +128,8 @@ Meter::send_update (Surface& surface, float dB)
 	   endpoint for our scaling.
 	*/
 
-	MidiByteArray msg;
-
 	if (def > 100.0f) {
-		if (!overload_on) {
-			overload_on = true;
-			surface.write (MidiByteArray (2, 0xd0, (id() << 4) | 0xe));
-
-		}
-	} else {
-		if (overload_on) {
-			overload_on = false;
-			surface.write (MidiByteArray (2, 0xd0, (id() << 4) | 0xf));
-		}
+			over = true;
 	}
-
-	/* we can use up to 13 segments */
-
-	int segment = lrintf ((def/115.0) * 13.0);
-
-	surface.write (MidiByteArray (2, 0xd0, (id()<<4) | segment));
-}
-
-MidiByteArray
-Meter::zero ()
-{
-	return MidiByteArray (2, 0xD0, (id()<<4 | 0));
+	return std::make_pair (over, def);
 }

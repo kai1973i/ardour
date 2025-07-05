@@ -7,12 +7,8 @@ import re
 
 I18N_PACKAGE = 'jack-backend'
 
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     autowaf.check_pkg(conf, 'jack', uselib_store='JACK', atleast_version='0.121.0')
@@ -25,7 +21,6 @@ def configure(conf):
     if Options.options.dist_target == 'mingw':
         autowaf.check_pkg(conf, 'portaudio-2.0', uselib_store='PORTAUDIO',
                           atleast_version='19')
-    autowaf.configure(conf)
 
     if Options.options.libjack_link == 'auto':
         if Options.options.dist_target == 'mingw' or sys.platform == 'darwin':
@@ -50,15 +45,15 @@ def configure(conf):
 
     # Check to see if jack_port_rename() is available and working
     if conf.env['libjack_link'] == 'link':
-            conf.check_cxx(fragment = "#include <jack/jack.h>\nint main(void) { jack_client_t* c; jack_port_t* p; jack_port_rename (c, p, \"foo\"); return 0; }\n",
-                   mandatory = False,
-                   execute = False,
-                   features = ['cxx'],
-                   msg = 'Checking for jack_port_rename()',
-                   okmsg = 'ok',
-                   errmsg = 'not found (or broken). jack_port_rename() will not be used, and jack_port_set_name() will be used instead',
-                   define_name = 'HAVE_JACK_PORT_RENAME',
-                   uselib = 'JACK')
+        conf.check_cxx(fragment = "#include <jack/jack.h>\nint main(void) { jack_client_t* c; jack_port_t* p; jack_port_rename (c, p, \"foo\"); return 0; }\n",
+                       mandatory = False,
+                       execute = False,
+                       features = ['cxx'],
+                       msg = 'Checking for jack_port_rename()',
+                       okmsg = 'ok',
+                       errmsg = 'not found (or broken). jack_port_rename() will not be used, and jack_port_set_name() will be used instead',
+                       define_name = 'HAVE_JACK_PORT_RENAME',
+                       uselib = 'JACK')
 
 def build(bld):
     obj = bld(features = 'c cxx cxxshlib')
@@ -80,8 +75,8 @@ def build(bld):
     obj.use      = 'libardour libpbd ardouralsautil'
     obj.install_path  = os.path.join(bld.env['LIBDIR'], 'backends')
     if bld.env['build_target'] != 'mingw':
-        obj.cxxflags = [ '-fPIC' ]
-        obj.cflags   = [ '-fPIC' ]
+        obj.cxxflags = [ bld.env['compiler_flags_dict']['pic'] ]
+        obj.cflags   = [ bld.env['compiler_flags_dict']['pic'] ]
     else:
         obj.cxxflags = [ ]
         obj.cflags   = [ ]
@@ -108,7 +103,7 @@ def build(bld):
         obj.defines += [ 'USE_WEAK_JACK', 'HAVE_JACK_PORT_RENAME' ]
         obj.deps = [ 'weak_libjack.def' ]
 
-    obj.uselib   += [ 'GLIBMM', 'XML' ];
+    obj.uselib   += [ 'GLIBMM', 'XML', 'OSX']
 
     #
     # device discovery code in the jack backend needs ALSA
@@ -116,5 +111,4 @@ def build(bld):
     #
 
     if re.search ("linux", sys.platform) != None:
-       obj.uselib += [ 'ALSA' ]
-
+        obj.uselib += [ 'ALSA' ]

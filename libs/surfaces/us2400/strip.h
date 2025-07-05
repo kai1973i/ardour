@@ -1,10 +1,28 @@
+/*
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
 #ifndef __ardour_us2400_control_protocol_strip_h__
 #define __ardour_us2400_control_protocol_strip_h__
 
 #include <string>
 #include <iostream>
 
-#include "evoral/Parameter.hpp"
+#include "evoral/Parameter.h"
 
 #include "pbd/property_basics.h"
 #include "pbd/ringbuffer.h"
@@ -53,13 +71,13 @@ public:
 	Strip (Surface&, const std::string & name, int index, const std::map<Button::ID,StripButtonInfo>&);
 	~Strip();
 
-	boost::shared_ptr<ARDOUR::Stripable> stripable() const { return _stripable; }
+	std::shared_ptr<ARDOUR::Stripable> stripable() const { return _stripable; }
 
 	void add (Control & control);
 	int index() const { return _index; } // zero based
 	Surface* surface() const { return _surface; }
 
-	void set_stripable (boost::shared_ptr<ARDOUR::Stripable>, bool with_messages = true);
+	void set_stripable (std::shared_ptr<ARDOUR::Stripable>, bool with_messages = true);
 	void reset_stripable ();
 
 	// call all signal handlers manually
@@ -70,8 +88,8 @@ public:
 	void handle_fader_touch (Fader&, bool touch_on);
 	void handle_pot (Pot&, float delta);
 
-	void periodic (ARDOUR::microseconds_t now_usecs);
-	void redisplay (ARDOUR::microseconds_t now_usecs, bool force = true);
+	void periodic (PBD::microseconds_t now_usecs);
+	void redisplay (PBD::microseconds_t now_usecs, bool force = true);
 
 	void zero ();
 
@@ -107,14 +125,13 @@ private:
 	bool     _controls_locked;
 	bool     _transport_is_rolling;
 	bool     _metering_active;
-	boost::shared_ptr<ARDOUR::Stripable> _stripable;
+	std::shared_ptr<ARDOUR::Stripable> _stripable;
 	PBD::ScopedConnectionList stripable_connections;
 	PBD::ScopedConnectionList subview_connections;
 	PBD::ScopedConnectionList send_connections;
-	int       eq_band;
-	
-	int		_trickle_counter;
-	
+
+	int      _trickle_counter;
+
 	ARDOUR::AutomationType  _pan_mode;
 
 	void notify_solo_changed ();
@@ -147,11 +164,11 @@ private:
 
 	void notify_vpot_change ();
 
-	void setup_eq_vpot (boost::shared_ptr<ARDOUR::Stripable>);//
-	void setup_dyn_vpot (boost::shared_ptr<ARDOUR::Stripable>);//
-	void setup_sends_vpot (boost::shared_ptr<ARDOUR::Stripable>);//
+	void setup_eq_vpot (std::shared_ptr<ARDOUR::Stripable>);//
+	void setup_dyn_vpot (std::shared_ptr<ARDOUR::Stripable>);//
+	void setup_sends_vpot (std::shared_ptr<ARDOUR::Stripable>);//
 
-	void setup_trackview_vpot (boost::shared_ptr<ARDOUR::Stripable>);
+	void setup_trackview_vpot (std::shared_ptr<ARDOUR::Stripable>);
 };
 
 }

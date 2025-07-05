@@ -1,21 +1,23 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2012-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2015 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 
@@ -24,6 +26,9 @@
 #include "pbd/compose.h"
 #include "pbd/pthread_utils.h"
 
+#include "temporal/tempo.h"
+
+#include "ardour/audioengine.h"
 #include "ardour/automation_control.h"
 #include "ardour/automation_watch.h"
 #include "ardour/debug.h"
@@ -65,7 +70,7 @@ AutomationWatch::~AutomationWatch ()
 }
 
 void
-AutomationWatch::add_automation_watch (boost::shared_ptr<AutomationControl> ac)
+AutomationWatch::add_automation_watch (std::shared_ptr<AutomationControl> ac)
 {
 	Glib::Threads::Mutex::Lock lm (automation_watch_lock);
 	DEBUG_TRACE (DEBUG::Automation, string_compose ("now watching control %1 for automation, astate = %2\n", ac->name(), enum_2_string (ac->automation_state())));
@@ -84,7 +89,15 @@ AutomationWatch::add_automation_watch (boost::shared_ptr<AutomationControl> ac)
 		DEBUG_TRACE (DEBUG::Automation, string_compose ("\ttransport is rolling @ %1, audible = %2so enter write pass\n",
 								_session->transport_speed(), _session->audible_sample()));
 		/* add a guard point since we are already moving */
-		ac->list()->set_in_write_pass (true, true, _session->audible_sample());
+		timepos_t pos;
+
+		if (ac->list()->time_domain() == Temporal::AudioTime) {
+			pos = timepos_t (_session->audible_sample());
+		} else {
+			pos = timepos_t (Temporal::TempoMap::use()->quarters_at_sample (_session->audible_sample()));
+		}
+
+		ac->list()->set_in_write_pass (true, true, pos);
 	}
 
 	/* we can't store shared_ptr<Destructible> in connections because it
@@ -92,14 +105,14 @@ AutomationWatch::add_automation_watch (boost::shared_ptr<AutomationControl> ac)
 	 * explicit here, but it helps to remind us what is going on.
 	 */
 
-	boost::weak_ptr<AutomationControl> wac (ac);
-	ac->DropReferences.connect_same_thread (automation_connections[ac], boost::bind (&AutomationWatch::remove_weak_automation_watch, this, wac));
+	std::weak_ptr<AutomationControl> wac (ac);
+	ac->DropReferences.connect_same_thread (automation_connections[ac], std::bind (&AutomationWatch::remove_weak_automation_watch, this, wac));
 }
 
 void
-AutomationWatch::remove_weak_automation_watch (boost::weak_ptr<AutomationControl> wac)
+AutomationWatch::remove_weak_automation_watch (std::weak_ptr<AutomationControl> wac)
 {
-	boost::shared_ptr<AutomationControl> ac = wac.lock();
+	std::shared_ptr<AutomationControl> ac = wac.lock();
 
 	if (!ac) {
 		return;
@@ -109,7 +122,7 @@ AutomationWatch::remove_weak_automation_watch (boost::weak_ptr<AutomationControl
 }
 
 void
-AutomationWatch::remove_automation_watch (boost::shared_ptr<AutomationControl> ac)
+AutomationWatch::remove_automation_watch (std::shared_ptr<AutomationControl> ac)
 {
 	Glib::Threads::Mutex::Lock lm (automation_watch_lock);
 	DEBUG_TRACE (DEBUG::Automation, string_compose ("remove control %1 from automation watch\n", ac->name()));
@@ -139,7 +152,7 @@ AutomationWatch::transport_stop_automation_watches (samplepos_t when)
 	}
 
 	for (AutomationWatches::iterator i = tmp.begin(); i != tmp.end(); ++i) {
-		(*i)->stop_touch (when);
+		(*i)->stop_touch (timepos_t (when));
 	}
 }
 
@@ -150,6 +163,8 @@ AutomationWatch::timer ()
 		return TRUE;
 	}
 
+	(void) Temporal::TempoMap::fetch ();
+
 	{
 		Glib::Threads::Mutex::Lock lm (automation_watch_lock);
 
@@ -157,12 +172,12 @@ AutomationWatch::timer ()
 		if (time > _last_time) {  //we only write automation in the forward direction; this fixes automation-recording in a loop
 			for (AutomationWatches::iterator aw = automation_watches.begin(); aw != automation_watches.end(); ++aw) {
 				if ((*aw)->alist()->automation_write()) {
-					double val = (*aw)->user_double();
-					boost::shared_ptr<SlavableAutomationControl> sc = boost::dynamic_pointer_cast<SlavableAutomationControl> (*aw);
+					double val = (*aw)->get_double();
+					std::shared_ptr<SlavableAutomationControl> sc = std::dynamic_pointer_cast<SlavableAutomationControl> (*aw);
 					if (sc) {
 						val = sc->reduce_by_masters (val, true);
 					}
-					(*aw)->list()->add (time, val, true);
+					(*aw)->list()->add (timepos_t (time), val, true);
 				}
 			}
 		} else if (time != _last_time) {  //transport stopped or reversed.  stop the automation pass and start a new one (for bonus points, someday store the previous pass in an undo record)
@@ -172,7 +187,7 @@ AutomationWatch::timer ()
 										(*aw)->alist()->automation_write()));
 				(*aw)->list()->set_in_write_pass (false);
 				if ( (*aw)->alist()->automation_write() ) {
-					(*aw)->list()->set_in_write_pass (true, time);
+					(*aw)->list()->set_in_write_pass (true, true, timepos_t (time));
 				}
 			}
 		}
@@ -186,9 +201,9 @@ AutomationWatch::timer ()
 void
 AutomationWatch::thread ()
 {
-	pbd_set_thread_priority (pthread_self(), PBD_SCHED_FIFO, -25);
+	pbd_set_thread_priority (pthread_self(), PBD_SCHED_FIFO, PBD_RT_PRI_CTRL);
 	while (_run_thread) {
-		Glib::usleep ((gulong) floor (Config->get_automation_interval_msecs() * 1000));
+		Glib::usleep ((gulong) floor (Config->get_automation_interval_msecs() * 1000)); // TODO use pthread_cond_timedwait on _run_thread
 		timer ();
 	}
 }
@@ -208,9 +223,9 @@ AutomationWatch::set_session (Session* s)
 
 	if (_session) {
 		_run_thread = true;
-		_thread = Glib::Threads::Thread::create (boost::bind (&AutomationWatch::thread, this));
+		_thread = PBD::Thread::create (std::bind (&AutomationWatch::thread, this), "AutomationWatch");
 
-		_session->TransportStateChange.connect_same_thread (transport_connection, boost::bind (&AutomationWatch::transport_state_change, this));
+		_session->TransportStateChange.connect_same_thread (transport_connection, std::bind (&AutomationWatch::transport_state_change, this));
 	}
 }
 
@@ -221,7 +236,7 @@ AutomationWatch::transport_state_change ()
 		return;
 	}
 
-	bool rolling = _session->transport_rolling();
+	bool rolling = _session->transport_state_rolling ();
 
 	_last_time = _session->audible_sample ();
 

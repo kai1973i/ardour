@@ -3,17 +3,17 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef _ardour_surfaces_m2map_mikro_h_
@@ -34,7 +34,23 @@ class M2MapMikro : public M2Contols
 		M2PadInterface*     pad     (unsigned int id);
 
 	private:
+		PhysicalMap pmap[2]; // 2: Modifiers
+		SematicMap  smap;
+
+		M2Button tr[5]; // transport controlables
+		M2StatelessButton ts[6]; // transport pushbuttons
+
+		M2Button mst[4]; // master "volume", "swing", "tempo", "encoder-push"
+
+		M2Button save;
+
+		M2Button undoredo[2];
+		M2Button sm[8]; // scene, pattern, pad mode, navigate (AKA view), duplicate, select, solo, mute
+		M2StatelessButton panic;
+
 		M2Encoder enc_master;
+		M2Encoder enc_top[16];
+
 		M2Pad pads[16];
 };
 

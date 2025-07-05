@@ -1,22 +1,20 @@
 /*
-    Copyright (C) 2003-2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-    $Id$
-*/
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <cmath>
@@ -170,15 +168,9 @@ Meter::init (int clr0, int clr1, int clr2, int clr3,
 void
 Meter::compute_bounding_box () const
 {
-	if (!_canvas) {
-		_bounding_box = Rect ();
-		_bounding_box_dirty = false;
-		return;
-	}
-
 	Rect r (0, 0, pixwidth + 2, pixheight + 2);
 	_bounding_box = r;
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }
 
 
@@ -699,10 +691,12 @@ Meter::set (float lvl, float peak)
 	float old_level = current_level;
 	float old_peak = current_peak;
 
-	if (pixwidth <= 0 || pixheight <=0) return;
+	if (pixwidth <= 0 || pixheight <=0) {
+		return;
+	}
 
 	if (peak == -1) {
-		if (lvl >= current_peak) {
+		if (lvl >= current_peak && lvl > 0) {
 			current_peak = lvl;
 			hold_state = hold_cnt;
 		}
@@ -766,7 +760,7 @@ Meter::queue_vertical_redraw (float old_level)
 
 		/* rect.y (new y origin) is smaller or equal to pixrect.y (old
 		 * y origin) because the top of the meter is higher (X/Cairo:
-		 * coordinates grow down). 
+		 * coordinates grow down).
 		 *
 		 * Leave rect.y alone, and recompute the height to be just the
 		 * difference between the new bottom and the top of the previous
@@ -775,7 +769,7 @@ Meter::queue_vertical_redraw (float old_level)
 		 * The old pattern area extended DOWN from pixrect.y to
 		 * pixrect.y + pixrect.height.
 		 *
-		 * The new pattern area extends DOWN from rect.y to 
+		 * The new pattern area extends DOWN from rect.y to
 		 * rect.y + rect.height
 		 *
 		 * The area needing to be drawn is the difference between the
@@ -839,7 +833,7 @@ Meter::queue_vertical_redraw (float old_level)
 			Cairo::RectangleInt iri = region->get_extents();
 			Rect ir (iri.x, iri.y, iri.x + iri.width, iri.y + iri.height);
 			_canvas->request_redraw (item_to_window (ir));
-		}
+  		}
 	}
 }
 

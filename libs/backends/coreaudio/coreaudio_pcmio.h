@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,9 +11,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef __libbackend_coreaudio_pcmio_h__
@@ -23,8 +23,14 @@
 #include <CoreAudio/CoreAudio.h>
 #include <AudioUnit/AudioUnit.h>
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= 110000
+# include <AudioToolbox/AudioToolbox.h>
+#endif
+
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
+
+#undef nil
 
 #include <map>
 #include <vector>
@@ -33,6 +39,10 @@
 #define AUHAL_OUTPUT_ELEMENT 0
 #define AUHAL_INPUT_ELEMENT 1
 
+
+namespace PBD {
+class Timing;
+}
 
 namespace ARDOUR {
 
@@ -57,7 +67,6 @@ public:
 	uint32_t available_channels (uint32_t device_id, bool input);
 	float    current_sample_rate (uint32_t device_id, bool input = false);
 	uint32_t get_latency (uint32_t device_id, bool input);
-	uint32_t get_latency (bool input);
 
 	std::string cached_port_name (uint32_t portnum, bool input) const;
 
@@ -68,6 +77,10 @@ public:
 
 	void     launch_control_app (uint32_t device_id);
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= 110000
+	bool workgroup (os_workgroup_t&);
+#endif
+
 	void     pcm_stop (void);
 	int      pcm_start (
 			uint32_t input_device,
@@ -75,8 +88,9 @@ public:
 			uint32_t sample_rate,
 			uint32_t samples_per_period,
 			int (process_callback (void*, const uint32_t, const uint64_t)),
-			void * process_arg
-			);
+			void * process_arg,
+			PBD::TimingStats& dsp_timer
+		);
 
 	void     set_error_callback (
 			void ( error_callback (void*)),
@@ -84,6 +98,14 @@ public:
 			) {
 		_error_callback = error_callback;
 		_error_arg = error_arg;
+	}
+
+	void set_halted_callback (
+			void ( halted_callback (void*)),
+			void * halted_arg
+			) {
+		_halted_callback = halted_callback;
+		_halted_arg = halted_arg;
 	}
 
 	void     set_hw_changed_callback (
@@ -133,6 +155,7 @@ public:
 	void buffer_size_callback ();
 	void sample_rate_callback ();
 	void hw_changed_callback ();
+	void halted_callback ();
 
 private:
 	float    current_sample_rate_id (AudioDeviceID id, bool input);
@@ -172,8 +195,13 @@ private:
 	int (* _process_callback) (void*, const uint32_t, const uint64_t);
 	void * _process_arg;
 
+	PBD::TimingStats* _dsp_timer;
+
 	void (* _error_callback) (void*);
 	void  * _error_arg;
+
+	void (* _halted_callback) (void*);
+	void  * _halted_arg;
 
 	void (* _hw_changed_callback) (void*);
 	void  * _hw_changed_arg;

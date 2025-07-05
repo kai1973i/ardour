@@ -1,30 +1,32 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017-2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_vca_master_strip__
 #define __ardour_vca_master_strip__
 
-#include <boost/shared_ptr.hpp>
+#include <memory>
 
-#include <gtkmm/box.h>
-#include <gtkmm/colorselection.h>
-#include <gtkmm/menuitem.h>
-#include <gtkmm/messagedialog.h>
+#include <ytkmm/box.h>
+#include <ytkmm/colorselection.h>
+#include <ytkmm/menuitem.h>
+#include <ytkmm/messagedialog.h>
 
 #include "widgets/ardour_button.h"
 
@@ -43,24 +45,24 @@ class FloatingTextEntry;
 class VCAMasterStrip : public AxisView, public Gtk::EventBox
 {
 public:
-	VCAMasterStrip (ARDOUR::Session*, boost::shared_ptr<ARDOUR::VCA>);
+	VCAMasterStrip (ARDOUR::Session*, std::shared_ptr<ARDOUR::VCA>);
 	~VCAMasterStrip ();
 
-	boost::shared_ptr<ARDOUR::Stripable> stripable() const;
+	std::shared_ptr<ARDOUR::Stripable> stripable() const;
 	ARDOUR::PresentationInfo const & presentation_info () const;
 
 	std::string name() const;
 	Gdk::Color color () const;
 	std::string state_id() const;
-	boost::shared_ptr<ARDOUR::VCA> vca() const { return _vca; }
+	std::shared_ptr<ARDOUR::VCA> vca() const { return _vca; }
 
-	static PBD::Signal1<void,VCAMasterStrip*> CatchDeletion;
+	static PBD::Signal<void(VCAMasterStrip*)> CatchDeletion;
 
 	bool marked_for_display () const;
 	bool set_marked_for_display (bool);
 
 private:
-	boost::shared_ptr<ARDOUR::VCA> _vca;
+	std::shared_ptr<ARDOUR::VCA> _vca;
 	GainMeter    gain_meter;
 
 	Gtk::Frame                  global_frame;
@@ -80,7 +82,7 @@ private:
 	PBD::ScopedConnectionList   vca_connections;
 
 	void spill ();
-	void spill_change (boost::shared_ptr<ARDOUR::Stripable>);
+	void spill_change (std::shared_ptr<ARDOUR::Stripable>);
 	void hide_clicked();
 	bool width_button_pressed (GdkEventButton *);
 	void set_selected (bool);
@@ -94,6 +96,7 @@ private:
 	void start_name_edit ();
 	void finish_name_edit (std::string, int);
 	bool vertical_button_press (GdkEventButton*);
+	bool vertical_button_release (GdkEventButton*);
 	bool number_button_press (GdkEventButton*);
 	void vca_property_changed (PBD::PropertyChange const & what_changed);
 	void update_vca_name ();

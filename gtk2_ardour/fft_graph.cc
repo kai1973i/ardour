@@ -1,37 +1,35 @@
 /*
-    Copyright (C) 2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifdef COMPILER_MSVC
-#include <algorithm>
-using std::min; using std::max;
-#endif
+ * Copyright (C) 2006-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 
 #include <glibmm.h>
 #include <glibmm/refptr.h>
 
-#include <gdkmm/gc.h>
+#include <ydkmm/gc.h>
 
-#include <gtkmm/widget.h>
-#include <gtkmm/style.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treepath.h>
+#include <ytkmm/widget.h>
+#include <ytkmm/style.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treepath.h>
 
 #include "pbd/stl_delete.h"
 
@@ -94,6 +92,7 @@ FFTGraph::setWindowSize_internal (int windowSize)
 	_windowSize = windowSize;
 	_dataSize = windowSize / 2;
 	if (_in != 0) {
+		Glib::Threads::Mutex::Lock lk (ARDOUR::fft_planner_lock);
 		fftwf_destroy_plan (_plan);
 		free (_in);
 		_in = 0;
@@ -145,6 +144,7 @@ FFTGraph::setWindowSize_internal (int windowSize)
 	for (unsigned int i = 0; i < _dataSize; i++) {
 		_logScale[i] = 0;
 	}
+	Glib::Threads::Mutex::Lock lk (ARDOUR::fft_planner_lock);
 	_plan = fftwf_plan_r2r_1d (_windowSize, _in, _out, FFTW_R2HC, FFTW_MEASURE);
 }
 
@@ -579,7 +579,7 @@ FFTGraph::redraw ()
 
 			mpp = maxf;
 			// Draw back to the start using the minimum value
-			for (int x = res->length () - 1; x >= 0; --x) {
+			for (int x = res->length () - 2; x >= 0; --x) {
 				mpp = std::min (mpp, res->minAt (x, _show_proportional));
 
 				if (_logScale[x] == _logScale[x + 1]) {

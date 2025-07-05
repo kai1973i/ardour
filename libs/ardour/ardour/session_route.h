@@ -1,24 +1,25 @@
 /*
-    Copyright (C) 2000 Paul Davis
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2012 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_session_route_h__
-#define __ardour_session_route_h__
+#pragma once
 
 #include <iostream>
 
@@ -32,7 +33,7 @@ namespace ARDOUR {
 template<class T> void
 Session::foreach_route (T *obj, void (T::*func)(Route&), bool sort)
 {
-	boost::shared_ptr<RouteList> r = routes.reader();
+	std::shared_ptr<RouteList const> r = routes.reader();
 	RouteList public_order (*r);
 
 	if (sort) {
@@ -45,9 +46,9 @@ Session::foreach_route (T *obj, void (T::*func)(Route&), bool sort)
 }
 
 template<class T> void
-Session::foreach_route (T *obj, void (T::*func)(boost::shared_ptr<Route>), bool sort)
+Session::foreach_route (T *obj, void (T::*func)(std::shared_ptr<Route>), bool sort)
 {
-	boost::shared_ptr<RouteList> r = routes.reader();
+	std::shared_ptr<RouteList const> r = routes.reader();
 	RouteList public_order (*r);
 
 	if (sort) {
@@ -62,7 +63,7 @@ Session::foreach_route (T *obj, void (T::*func)(boost::shared_ptr<Route>), bool 
 template<class T, class A> void
 Session::foreach_route (T *obj, void (T::*func)(Route&, A), A arg1, bool sort)
 {
-	boost::shared_ptr<RouteList> r = routes.reader();
+	std::shared_ptr<RouteList const> r = routes.reader();
 	RouteList public_order (*r);
 
 	if (sort) {
@@ -74,6 +75,51 @@ Session::foreach_route (T *obj, void (T::*func)(Route&, A), A arg1, bool sort)
 	}
 }
 
+
+template<class A> void
+Session::foreach_track (void (Track::*method)(A), A arg)
+{
+	std::shared_ptr<RouteList const> r = routes.reader();
+
+	for (auto const& i : *r) {
+		std::shared_ptr<Track> tr = std::dynamic_pointer_cast<Track> (i);
+		if (tr) {
+			(tr.get()->*method) (arg);
+		}
+	}
+}
+
+template<class A1, class A2> void
+Session::foreach_track (void (Track::*method)(A1, A2), A1 arg1, A2 arg2)
+{
+	std::shared_ptr<RouteList const> r = routes.reader();
+
+	for (auto const& i : *r) {
+		std::shared_ptr<Track> tr = std::dynamic_pointer_cast<Track> (i);
+		if (tr) {
+			(tr.get()->*method) (arg1, arg2);
+		}
+	}
+}
+
+template<class A> void
+Session::foreach_route (void (Route::*method)(A), A arg)
+{
+	std::shared_ptr<RouteList const> r = routes.reader();
+	for (auto const& i : *r) {
+		(i.get()->*method) (arg);
+	}
+}
+
+template<class A1, class A2> void
+Session::foreach_route (void (Route::*method)(A1, A2), A1 arg1, A2 arg2)
+{
+	std::shared_ptr<RouteList const> r = routes.reader();
+
+	for (auto const& i : *r) {
+		(i.get()->*method) (arg1, arg2);
+	}
+}
+
 } /* namespace */
 
-#endif /* __ardour_session_route_h__ */

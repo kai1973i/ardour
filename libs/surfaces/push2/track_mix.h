@@ -1,27 +1,30 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_push2_track_mix_layout_h__
 #define __ardour_push2_track_mix_layout_h__
 
 #include <vector>
 
+#include "pbd/property_basics.h"
+
 #include "layout.h"
+#include "push2.h"
 
 namespace ARDOUR {
 	class Stripable;
@@ -29,11 +32,11 @@ namespace ARDOUR {
 }
 
 namespace ArdourCanvas {
+	struct Rect;
+
 	class Rectangle;
 	class Text;
 	class Line;
-	class VBox;
-	class Rect;
 }
 
 namespace ArdourSurface {
@@ -47,7 +50,7 @@ class TrackMixLayout : public Push2Layout
 	TrackMixLayout (Push2& p, ARDOUR::Session&, std::string const &);
 	~TrackMixLayout ();
 
-	void set_stripable (boost::shared_ptr<ARDOUR::Stripable>);
+	void set_stripable (std::shared_ptr<ARDOUR::Stripable>);
 
 	void render (ArdourCanvas::Rect const &, Cairo::RefPtr<Cairo::Context>) const;
 
@@ -64,26 +67,26 @@ class TrackMixLayout : public Push2Layout
 	void update_meters ();
 	void update_clocks ();
 
-	boost::shared_ptr<ARDOUR::Stripable> current_stripable() const { return stripable; }
+	std::shared_ptr<ARDOUR::Stripable> current_stripable() const { return _stripable; }
 
    private:
-	boost::shared_ptr<ARDOUR::Stripable> stripable;
-	PBD::ScopedConnectionList stripable_connections;
+	std::shared_ptr<ARDOUR::Stripable> _stripable;
+	PBD::ScopedConnectionList            _stripable_connections;
 
-	ArdourCanvas::Rectangle* bg;
-	ArdourCanvas::Line* upper_line;
-	std::vector<ArdourCanvas::Text*> upper_text;
-	std::vector<ArdourCanvas::Text*> lower_text;
-	ArdourCanvas::Text* name_text;
-	ArdourCanvas::Text* bbt_text;
-	ArdourCanvas::Text* minsec_text;
-	uint8_t selection_color;
+	ArdourCanvas::Rectangle*         _bg;
+	ArdourCanvas::Line*              _upper_line;
+	std::vector<ArdourCanvas::Text*> _upper_text;
+	std::vector<ArdourCanvas::Text*> _lower_text;
+	ArdourCanvas::Text*              _name_text;
+	ArdourCanvas::Text*              _bbt_text;
+	ArdourCanvas::Text*              _minsec_text;
+	uint8_t                          _selection_color;
 
-	Push2Knob* knobs[8];
-	LevelMeter* meter;
+	Push2Knob*  _knobs[8];
+	LevelMeter* _meter;
 
 	void stripable_property_change (PBD::PropertyChange const& what_changed);
-	void simple_control_change (boost::shared_ptr<ARDOUR::AutomationControl> ac, Push2::ButtonID bid);
+	void simple_control_change (std::shared_ptr<ARDOUR::AutomationControl> ac, Push2::ButtonID bid);
 
 	void show_state ();
 

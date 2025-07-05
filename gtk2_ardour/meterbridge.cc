@@ -1,22 +1,22 @@
 /*
-    Copyright (C) 2012 Paul Davis
-    Author: Robin Gareus
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2017 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2015-2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
@@ -25,8 +25,8 @@
 #include <map>
 #include <sigc++/bind.h>
 
-#include <gtkmm/accelmap.h>
-#include <gtkmm/comboboxtext.h>
+#include <ytkmm/accelmap.h>
+#include <ytkmm/comboboxtext.h>
 
 #include <glibmm/threads.h>
 
@@ -134,9 +134,10 @@ Meterbridge::Meterbridge ()
 
 	signal_delete_event().connect (sigc::mem_fun (*this, &Meterbridge::hide_window));
 	signal_configure_event().connect (sigc::mem_fun (*ARDOUR_UI::instance(), &ARDOUR_UI::configure_handler));
-	MeterStrip::CatchDeletion.connect (*this, invalidator (*this), boost::bind (&Meterbridge::remove_strip, this, _1), gui_context());
-	MeterStrip::MetricChanged.connect (*this, invalidator (*this), boost::bind(&Meterbridge::resync_order, this), gui_context());
-	MeterStrip::ConfigurationChanged.connect (*this, invalidator (*this), boost::bind(&Meterbridge::queue_resize, this), gui_context());
+	MeterStrip::CatchDeletion.connect (*this, invalidator (*this), std::bind (&Meterbridge::remove_strip, this, _1), gui_context());
+	MeterStrip::MetricChanged.connect (*this, invalidator (*this), std::bind(&Meterbridge::sync_order_keys, this), gui_context());
+	MeterStrip::ConfigurationChanged.connect (*this, invalidator (*this), std::bind(&Meterbridge::queue_resize, this), gui_context());
+	PresentationInfo::Change.connect (*this, invalidator (*this), std::bind (&Meterbridge::resync_order, this, _1), gui_context());
 
 	/* work around ScrolledWindowViewport alignment mess Part one */
 	Gtk::HBox * yspc = manage (new Gtk::HBox());
@@ -243,18 +244,10 @@ Meterbridge::set_window_pos_and_size ()
 	}
 }
 
-void
-Meterbridge::get_window_pos_and_size ()
-{
-	get_position(m_root_x, m_root_y);
-	get_size(m_width, m_height);
-}
-
 bool
 Meterbridge::hide_window (GdkEventAny *ev)
 {
 	if (!_visible) return 0;
-	get_window_pos_and_size();
 	_visible = false;
 	return just_hide_it(ev, static_cast<Gtk::Window *>(this));
 }
@@ -274,8 +267,7 @@ Meterbridge::on_key_release_event (GdkEventKey* ev)
 	if (gtk_window_propagate_key_event (GTK_WINDOW(gobj()), ev)) {
 		return true;
 	}
-	/* don't forward releases */
-	return true;
+	return relay_key_press (ev, this);
 }
 
 bool
@@ -431,15 +423,13 @@ Meterbridge::set_session (Session* s)
 	_show_master = _session->config.get_show_master_on_meterbridge();
 	_show_midi = _session->config.get_show_midi_on_meterbridge();
 
-	boost::shared_ptr<RouteList> routes = _session->get_routes();
-
-	RouteList copy (*routes);
+	RouteList copy = _session->get_routelist ();
 	copy.sort (Stripable::Sorter (true));
 	add_strips (copy);
 
-	_session->RouteAdded.connect (_session_connections, invalidator (*this), boost::bind (&Meterbridge::add_strips, this, _1), gui_context());
-	_session->DirtyChanged.connect (_session_connections, invalidator (*this), boost::bind (&Meterbridge::update_title, this), gui_context());
-	_session->StateSaved.connect (_session_connections, invalidator (*this), boost::bind (&Meterbridge::update_title, this), gui_context());
+	_session->RouteAdded.connect (_session_connections, invalidator (*this), std::bind (&Meterbridge::add_strips, this, _1), gui_context());
+	_session->DirtyChanged.connect (_session_connections, invalidator (*this), std::bind (&Meterbridge::update_title, this), gui_context());
+	_session->StateSaved.connect (_session_connections, invalidator (*this), std::bind (&Meterbridge::update_title, this), gui_context());
 	_session->config.ParameterChanged.connect (*this, invalidator (*this), ui_bind (&Meterbridge::parameter_changed, this, _1), gui_context());
 	Config->ParameterChanged.connect (*this, invalidator (*this), ui_bind (&Meterbridge::parameter_changed, this, _1), gui_context());
 
@@ -493,14 +483,9 @@ Meterbridge::set_state (const XMLNode& node)
 }
 
 XMLNode&
-Meterbridge::get_state (void)
+Meterbridge::get_state () const
 {
 	XMLNode* node = new XMLNode ("Meterbridge");
-
-	if (is_realized() && _visible) {
-		get_window_pos_and_size ();
-	}
-
 	XMLNode* geometry = new XMLNode ("geometry");
 	geometry->set_property(X_("x-size"), m_width);
 	geometry->set_property(X_("y-size"), m_height);
@@ -530,7 +515,7 @@ Meterbridge::stop_updating ()
 void
 Meterbridge::fast_update_strips ()
 {
-	if (!is_mapped () || !_session) {
+	if (!get_mapped () || !_session) {
 		return;
 	}
 	for (list<MeterBridgeStrip>::iterator i = strips.begin(); i != strips.end(); ++i) {
@@ -544,17 +529,20 @@ Meterbridge::add_strips (RouteList& routes)
 {
 	MeterStrip* strip;
 	for (RouteList::iterator x = routes.begin(); x != routes.end(); ++x) {
-		boost::shared_ptr<Route> route = (*x);
+		std::shared_ptr<Route> route = (*x);
 		if (route->is_auditioner()) {
 			continue;
 		}
 		if (route->is_monitor()) {
 			continue;
 		}
+		if (route->is_surround_master()) {
+			continue;
+		}
 
 		strip = new MeterStrip (_session, route);
 		strips.push_back (MeterBridgeStrip(strip));
-		route->active_changed.connect (*this, invalidator (*this), boost::bind (&Meterbridge::resync_order, this), gui_context ());
+		route->active_changed.connect (*this, invalidator (*this), std::bind (&Meterbridge::sync_order_keys, this), gui_context ());
 
 		meterarea.pack_start (*strip, false, false);
 		strip->show();
@@ -614,8 +602,8 @@ Meterbridge::sync_order_keys ()
 				(*i).visible = false;
 			}
 		}
-		else if (boost::dynamic_pointer_cast<AudioTrack>((*i).s->route()) == 0
-				&& boost::dynamic_pointer_cast<MidiTrack>((*i).s->route()) == 0
+		else if (std::dynamic_pointer_cast<AudioTrack>((*i).s->route()) == 0
+				&& std::dynamic_pointer_cast<MidiTrack>((*i).s->route()) == 0
 				) {
 			/* non-master bus */
 			if (_show_busses) {
@@ -627,7 +615,7 @@ Meterbridge::sync_order_keys ()
 				(*i).visible = false;
 			}
 		}
-		else if (boost::dynamic_pointer_cast<MidiTrack>((*i).s->route())) {
+		else if (std::dynamic_pointer_cast<MidiTrack>((*i).s->route())) {
 			if (_show_midi) {
 				(*i).s->show();
 				(*i).visible = true;
@@ -719,9 +707,11 @@ Meterbridge::sync_order_keys ()
 }
 
 void
-Meterbridge::resync_order()
+Meterbridge::resync_order (PropertyChange what_changed)
 {
-	sync_order_keys();
+	if (what_changed.contains (ARDOUR::Properties::order)) {
+		sync_order_keys();
+	}
 }
 
 void
@@ -760,6 +750,9 @@ Meterbridge::parameter_changed (std::string const & p)
 	else if (p == "show-monitor-on-meterbridge") {
 		scroller.queue_resize();
 	}
+	else if (p == "show-fader-on-meterbridge") {
+		scroller.queue_resize();
+	}
 	else if (p == "track-name-number") {
 		scroller.queue_resize();
 	}
@@ -769,4 +762,19 @@ void
 Meterbridge::on_theme_changed ()
 {
 	meter_clear_pattern_cache();
+}
+
+bool
+Meterbridge::on_configure_event (GdkEventConfigure* conf)
+{
+	bool ret = Gtk::Window::on_configure_event (conf);
+
+	Glib::RefPtr<const Gdk::Window> win = get_window();
+
+	if (win) {
+		win->get_size (m_width, m_height);
+		win->get_position (m_root_x, m_root_y);
+	}
+
+	return ret;
 }

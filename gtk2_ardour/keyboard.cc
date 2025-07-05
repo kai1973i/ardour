@@ -1,21 +1,27 @@
 /*
-    Copyright (C) 2001 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2008-2010 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2014-2018 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2015-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/convert.h"
 #include "pbd/error.h"
@@ -45,8 +51,8 @@ guint ArdourKeyboard::constraint_mod = Keyboard::PrimaryModifier;
 guint ArdourKeyboard::constraint_mod = Keyboard::TertiaryModifier;
 #endif
 
-/* TrimDrag::start_grab() */
-guint ArdourKeyboard::trim_contents_mod = Keyboard::PrimaryModifier;
+/* RegionSlipContentsDrag */
+guint ArdourKeyboard::slip_contents_mod = Keyboard::PrimaryModifier|Keyboard::TertiaryModifier;
 
 /* TrimDrag::motion() */
 guint ArdourKeyboard::trim_overlap_mod = Keyboard::TertiaryModifier;
@@ -104,7 +110,7 @@ ArdourKeyboard::setup_keybindings ()
 
 	string lowercase_program_name = downcase (string(PROGRAM_NAME));
 
-	/* extract and append minor vesion */
+	/* extract and append minor version */
 	std::string rev (revision);
 	std::size_t pos = rev.find_first_of("-");
 	if (pos != string::npos && pos > 0) {
@@ -223,12 +229,12 @@ ArdourKeyboard::setup_keybindings ()
 }
 
 XMLNode&
-ArdourKeyboard::get_state (void)
+ArdourKeyboard::get_state () const
 {
 	XMLNode* node = &Keyboard::get_state ();
 
 	node->set_property ("constraint-modifier", constraint_mod);
-	node->set_property ("trim-contents-modifier", trim_contents_mod);
+	node->set_property ("slip-contents-modifier", slip_contents_mod);
 	node->set_property ("trim-overlap-modifier", trim_overlap_mod);
 	node->set_property ("trim-anchored-modifier", trim_anchored_mod);
 	node->set_property ("fine-adjust-modifier", fine_adjust_mod);
@@ -242,7 +248,7 @@ int
 ArdourKeyboard::set_state (const XMLNode& node, int version)
 {
 	node.get_property ("constraint-modifier", constraint_mod);
-	node.get_property ("trim-contents-modifier", trim_contents_mod);
+	node.get_property ("slip-contents-modifier", slip_contents_mod);
 	node.get_property ("trim-overlap-modifier", trim_overlap_mod);
 	node.get_property ("trim-anchored-modifier", trim_anchored_mod);
 	node.get_property ("fine-adjust-modifier", fine_adjust_mod);
@@ -256,7 +262,7 @@ void
 ArdourKeyboard::reset_relevant_modifier_key_mask ()
 {
 	RelevantModifierKeyMask = GdkModifierType (RelevantModifierKeyMask | constraint_mod);
-	RelevantModifierKeyMask = GdkModifierType (RelevantModifierKeyMask | trim_contents_mod);
+	RelevantModifierKeyMask = GdkModifierType (RelevantModifierKeyMask | slip_contents_mod);
 	RelevantModifierKeyMask = GdkModifierType (RelevantModifierKeyMask | trim_overlap_mod);
 	RelevantModifierKeyMask = GdkModifierType (RelevantModifierKeyMask | trim_anchored_mod);
 	RelevantModifierKeyMask = GdkModifierType (RelevantModifierKeyMask | fine_adjust_mod);
@@ -314,9 +320,9 @@ ArdourKeyboard::set_constraint_modifier (guint mod)
 }
 
 void
-ArdourKeyboard::set_trim_contents_modifier (guint mod)
+ArdourKeyboard::set_slip_contents_modifier (guint mod)
 {
-	trim_contents_mod = mod;
+	slip_contents_mod = mod;
 	the_keyboard().reset_relevant_modifier_key_mask();
 }
 
@@ -355,16 +361,16 @@ ArdourKeyboard::set_note_size_relative_modifier (guint mod)
 	the_keyboard().reset_relevant_modifier_key_mask();
 }
 
-Selection::Operation
+SelectionOperation
 ArdourKeyboard::selection_type (guint state)
 {
 	/* note that there is no modifier for "Add" */
 
 	if (modifier_state_equals (state, RangeSelectModifier)) {
-		return Selection::Extend;
+		return SelectionExtend;
 	} else if (modifier_state_equals (state, PrimaryModifier)) {
-		return Selection::Toggle;
+		return SelectionToggle;
 	} else {
-		return Selection::Set;
+		return SelectionSet;
 	}
 }

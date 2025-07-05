@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 2000-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2006-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2016 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef ardour_control_protocol_manager_h
 #define ardour_control_protocol_manager_h
@@ -45,12 +48,15 @@ class LIBARDOUR_API ControlProtocolInfo {
 		std::string name;
 		std::string path;
 		bool requested;
-		bool mandatory;
-		bool supports_feedback;
+		bool automatic;
 		XMLNode* state;
 
-		ControlProtocolInfo() : descriptor (0), protocol (0), requested(false),
-		mandatory(false), supports_feedback(false), state (0)
+		ControlProtocolInfo()
+			: descriptor (0)
+			, protocol (0)
+			, requested (false)
+			, automatic (false)
+			, state (0)
 	{}
 		~ControlProtocolInfo();
 
@@ -65,11 +71,11 @@ class LIBARDOUR_API ControlProtocolManager : public PBD::Stateful, public ARDOUR
 
 	void set_session (Session*);
 	void discover_control_protocols ();
-	void foreach_known_protocol (boost::function<void(const ControlProtocolInfo*)>);
-	void load_mandatory_protocols ();
-	void midi_connectivity_established ();
+	void foreach_known_protocol (std::function<void(const ControlProtocolInfo*)>);
+	void midi_connectivity_established (bool);
 	void drop_protocols ();
-	void register_request_buffer_factories ();
+	void probe_midi_control_protocols ();
+	void probe_usb_control_protocols (bool, uint16_t, uint16_t);
 
 	int activate (ControlProtocolInfo&);
         int deactivate (ControlProtocolInfo&);
@@ -79,18 +85,18 @@ class LIBARDOUR_API ControlProtocolManager : public PBD::Stateful, public ARDOUR
 	static const std::string state_node_name;
 
 	int set_state (const XMLNode&, int version);
-	XMLNode& get_state (void);
+	XMLNode& get_state () const;
 
-        PBD::Signal1<void,ControlProtocolInfo*> ProtocolStatusChange;
+        PBD::Signal<void(ControlProtocolInfo*)> ProtocolStatusChange;
 
         void stripable_selection_changed (ARDOUR::StripableNotificationListPtr);
-        static PBD::Signal1<void,ARDOUR::StripableNotificationListPtr> StripableSelectionChanged;
+        static PBD::Signal<void(ARDOUR::StripableNotificationListPtr)> StripableSelectionChanged;
 
   private:
 	ControlProtocolManager ();
 	static ControlProtocolManager* _instance;
 
-	Glib::Threads::RWLock protocols_lock;
+	mutable Glib::Threads::RWLock protocols_lock;
 	std::list<ControlProtocol*>    control_protocols;
 
 	void session_going_away ();

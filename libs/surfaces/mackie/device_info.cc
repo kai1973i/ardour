@@ -1,21 +1,24 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-	Copyright (C) 2012 Paul Davis
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2012-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2012-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Len Ovens <len@ovenwerks.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +30,7 @@
 #include "pbd/convert.h"
 #include "pbd/stl_delete.h"
 
+#include "ardour/debug.h"
 #include "ardour/filesystem_paths.h"
 
 #include "device_info.h"
@@ -36,12 +40,12 @@
 using namespace PBD;
 using namespace ARDOUR;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 using std::string;
 using std::vector;
 
-std::map<std::string,DeviceInfo> DeviceInfo::device_info;
+std::map<std::string,DeviceInfo> MACKIE_NAMESPACE::DeviceInfo::device_info;
 
 DeviceInfo::DeviceInfo()
 	: _strip_cnt (8)
@@ -57,10 +61,20 @@ DeviceInfo::DeviceInfo()
 	, _uses_ipmidi (false)
 	, _no_handshake (false)
 	, _is_qcon(false)
+	, _is_platformMp(false)
+	, _is_proG2(false)
+	, _is_xtouch(false)
+	, _has_qcon_second_lcd(false)
+	, _has_qcon_master_meters(false)
 	, _has_meters (true)
 	, _has_separate_meters (false)
+	, _single_fader_follows_selection (false)
 	, _device_type (MCU)
+#ifdef UF8
+	, _name (X_("UF8/UF1"))
+#else
 	, _name (X_("Mackie Control Universal Pro"))
+#endif
 {
 	mackie_control_buttons ();
 }
@@ -255,6 +269,12 @@ DeviceInfo::set_state (const XMLNode& node, int /* version */)
 		return -1;
 	}
 
+	if ((child = node.child ("SingleFaderFollowsSelection")) != 0) {
+		child->get_property ("value", _single_fader_follows_selection);
+	} else {
+		_single_fader_follows_selection = false;
+	}
+
 	if ((child = node.child ("Extenders")) != 0) {
 		if (!child->get_property ("value", _extenders)) {
 			_extenders = 0;
@@ -325,6 +345,36 @@ DeviceInfo::set_state (const XMLNode& node, int /* version */)
 		child->get_property ("value", _is_qcon);
 	} else {
 		_is_qcon = false;
+	}
+	
+	if ((child = node.child ("IsXTouch")) != 0) {
+		child->get_property ("value", _is_xtouch);
+	} else {
+		_is_xtouch = false;
+	}
+
+	if ((child = node.child ("IsPlatformMp")) != 0) {
+		child->get_property ("value", _is_platformMp);
+	} else {
+		_is_platformMp = false;
+	}
+
+	if ((child = node.child ("IsProG2")) != 0) {
+		child->get_property ("value", _is_proG2);
+	} else {
+		_is_proG2 = false;
+	}
+
+	if ((child = node.child ("HasQConSecondLCD")) != 0) {
+		child->get_property ("value", _has_qcon_second_lcd);
+	} else {
+		_has_qcon_second_lcd = false;
+	}
+
+	if ((child = node.child ("HasQConMasterMeters")) != 0) {
+		child->get_property ("value", _has_qcon_master_meters);
+	} else {
+		_has_qcon_master_meters = false;
 	}
 
 	if ((child = node.child ("HasSeparateMeters")) != 0) {
@@ -422,6 +472,12 @@ DeviceInfo::has_meters() const
 }
 
 bool
+DeviceInfo::single_fader_follows_selection() const
+{
+	return _single_fader_follows_selection;
+}
+
+bool
 DeviceInfo::has_separate_meters() const
 {
 	return _has_separate_meters;
@@ -469,6 +525,33 @@ DeviceInfo::is_qcon () const
 	return _is_qcon;
 }
 
+bool DeviceInfo::is_platformMp () const
+{
+	return _is_platformMp;
+}
+
+bool DeviceInfo::is_proG2 () const
+{
+	return _is_proG2;
+}
+
+bool DeviceInfo::is_xtouch () const
+{
+	return _is_xtouch;
+}
+
+bool
+DeviceInfo::has_qcon_second_lcd () const
+{
+	return _has_qcon_second_lcd;
+}
+
+bool
+DeviceInfo::has_qcon_master_meters () const
+{
+	return _has_qcon_master_meters;
+}
+
 bool
 DeviceInfo::has_touch_sense_faders () const
 {
@@ -498,8 +581,16 @@ devinfo_search_path ()
 static bool
 devinfo_filter (const string &str, void* /*arg*/)
 {
+#ifdef UF8
 	return (str.length() > strlen(devinfo_suffix) &&
+		str.find ("ssl-uf") != string::npos &&
+		str.find (devinfo_suffix) == (str.length() - strlen (devinfo_suffix))
+		);
+#else
+	return (str.length() > strlen(devinfo_suffix) &&
+		str.find ("ssl-uf") == string::npos &&
 		str.find (devinfo_suffix) == (str.length() - strlen (devinfo_suffix)));
+#endif
 }
 
 void
@@ -511,6 +602,8 @@ DeviceInfo::reload_device_info ()
 
 	find_files_matching_filter (devinfos, spath, devinfo_filter, 0, false, true);
 	device_info.clear ();
+
+	DEBUG_TRACE (DEBUG::MackieControl, "DeviceProfile::reload_device_info\n");
 
 	if (devinfos.empty()) {
 		error << "No MCP device info files found using " << spath.to_string() << endmsg;
@@ -534,12 +627,13 @@ DeviceInfo::reload_device_info ()
 		}
 
 		if (di.set_state (*root, 3000) == 0) { /* version is ignored for now */
+			DEBUG_TRACE (DEBUG::MackieControl, string_compose ("Found profile '%1'\n", di.name ()));
 			device_info[di.name()] = di;
 		}
 	}
 }
 
-std::ostream& operator<< (std::ostream& os, const Mackie::DeviceInfo& di)
+std::ostream& operator<< (std::ostream& os, const MACKIE_NAMESPACE::DeviceInfo& di)
 {
 	os << di.name() << ' '
 	   << di.strip_cnt() << ' '

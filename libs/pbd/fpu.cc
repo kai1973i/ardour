@@ -1,21 +1,23 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2015 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "libpbd-config.h"
 
@@ -25,8 +27,21 @@
 #include <stdint.h>
 #include <assert.h>
 
-#ifdef PLATFORM_WINDOWS
-#include <intrin.h>
+#ifdef ARM_NEON_SUPPORT
+/* Needed for ARM NEON detection */
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
+
+/* x86 CPU  - need __cpuid to query flags */
+#if (defined __x86_64__) || (defined __i386__) || (defined _M_X64) || (defined _M_IX86)
+# ifdef PLATFORM_WINDOWS
+#  include <intrin.h>
+# elif defined(__GNUC__) || defined(__clang__)
+#  include <cpuid.h>
+# else
+#  error "Unsupported compiler: need __cpuid and __cpuidex for CPU detection"
+# endif
 #endif
 
 #include "pbd/compose.h"
@@ -40,36 +55,30 @@ using namespace std;
 
 FPU* FPU::_instance (0);
 
-#if ( (defined __x86_64__) || (defined __i386__) || (defined _M_X64) || (defined _M_IX86) ) // ARCH_X86
-#ifndef PLATFORM_WINDOWS
-
-/* use __cpuid() as the name to match the MSVC/mingw intrinsic */
-
-static void
-__cpuid(int regs[4], int cpuid_leaf)
+#if (defined __x86_64__) || (defined __i386__) || (defined _M_X64) || (defined _M_IX86)
+#ifdef PLATFORM_WINDOWS
+/* Use MSVC/mingw intrinsic to get CPUID */
+static void cpuid(int reg[4], int cpuid_leaf)
 {
-        asm volatile (
-#if defined(__i386__)
-	        "pushl %%ebx;\n\t"
-#endif
-	        "cpuid;\n\t"
-	        "movl %%eax, (%1);\n\t"
-	        "movl %%ebx, 4(%1);\n\t"
-	        "movl %%ecx, 8(%1);\n\t"
-	        "movl %%edx, 12(%1);\n\t"
-#if defined(__i386__)
-	        "popl %%ebx;\n\t"
-#endif
-	        :"=a" (cpuid_leaf) /* %eax clobbered by CPUID */
-	        :"S" (regs), "a" (cpuid_leaf)
-	        :
-#if !defined(__i386__)
-	         "%ebx",
-#endif
-	         "%ecx", "%edx", "memory");
+	__cpuid(reg, cpuid_leaf);
 }
-
-#endif /* !PLATFORM_WINDOWS */
+/* Get extended features of CPUID */
+static void cpuidex(int reg[4], int cpuid_leaf, int cpuid_level)
+{
+	__cpuidex(reg, cpuid_leaf, cpuid_level);
+}
+#else
+/* use __cpuid() with the same API to match the MSVC/mingw intrinsic */
+static void cpuid(int reg[4], int cpuid_leaf)
+{
+	__cpuid_count(cpuid_leaf, 0, reg[0], reg[1], reg[2], reg[3]);
+}
+/* Get extended features of CPUID */
+static void cpuidex(int reg[4], int cpuid_leaf, int cpuid_level)
+{
+	__cpuid_count(cpuid_leaf, cpuid_level, reg[0], reg[1], reg[2], reg[3]);
+}
+#endif // PLATFORM_WINDOWS
 
 #ifndef HAVE_XGETBV // Allow definition by build system
 	#if defined(__MINGW32__) && defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR >= 5
@@ -153,45 +162,71 @@ FPU::FPU ()
 		return;
 	}
 
+#ifdef ARM_NEON_SUPPORT
+# ifdef __aarch64__
+	/* all armv8+ features NEON used in arm_neon_functions.cc */
+	_flags = Flags(_flags | HasNEON);
+# elif defined __arm__
+	if (getauxval(AT_HWCAP) & HWCAP_NEON) {
+		_flags = Flags(_flags | HasNEON);
+	}
+# endif
+#endif
+
 #if !( (defined __x86_64__) || (defined __i386__) || (defined _M_X64) || (defined _M_IX86) ) // !ARCH_X86
 	/* Non-Intel architecture, nothing to do here */
 	return;
 #else
 
-	/* Get the CPU vendor just for kicks */
-
-	// __cpuid with an InfoType argument of 0 returns the number of
- 	// valid Ids in CPUInfo[0] and the CPU identification string in
- 	// the other three array elements. The CPU identification string is
- 	// not in linear order. The code below arranges the information
- 	// in a human readable form. The human readable order is CPUInfo[1] |
- 	// CPUInfo[3] | CPUInfo[2]. CPUInfo[2] and CPUInfo[3] are swapped
- 	// before using memcpy to copy these three array elements to cpu_string.
+	/* Get the CPU vendor just for kicks
+	 *
+	 * __cpuid with an InfoType argument of 0 returns the number of
+	 * valid Ids in CPUInfo[0] and the CPU identification string in
+	 * the other three array elements. The CPU identification string is
+	 * not in linear order. The code below arranges the information
+	 * in a human readable form. The human readable order is CPUInfo[1] |
+	 * CPUInfo[3] | CPUInfo[2]. CPUInfo[2] and CPUInfo[3] are swapped
+	 * before using memcpy to copy these three array elements to cpu_string.
+	 */
 
 	int cpu_info[4];
 	char cpu_string[48];
 	string cpu_vendor;
 
-	__cpuid (cpu_info, 0);
+	cpuid(cpu_info, 0);
 
 	int num_ids = cpu_info[0];
- 	std::swap(cpu_info[2], cpu_info[3]);
+	std::swap(cpu_info[2], cpu_info[3]);
 	memcpy(cpu_string, &cpu_info[1], 3 * sizeof(cpu_info[1]));
- 	cpu_vendor.assign(cpu_string, 3 * sizeof(cpu_info[1]));
+	cpu_vendor.assign(cpu_string, 3 * sizeof(cpu_info[1]));
 
 	info << string_compose (_("CPU vendor: %1"), cpu_vendor) << endmsg;
 
 	if (num_ids > 0) {
 
-		/* Now get CPU/FPU flags */
+		int cpu_info_ex[4];
 
-		__cpuid (cpu_info, 1);
+		/* Now get CPU/FPU flags */
+		cpuid(cpu_info, 1);
+
+		/* Get CPU extended features: Like AVX512F */
+		cpuidex(cpu_info_ex, 7, 0);
 
 		if ((cpu_info[2] & (1<<27)) /* OSXSAVE */ &&
 		    (cpu_info[2] & (1<<28) /* AVX */) &&
 		    ((_xgetbv (_XCR_XFEATURE_ENABLED_MASK) & 0x6) == 0x6)) { /* OS really supports XSAVE */
-			info << _("AVX-capable processor") << endmsg;
-			_flags = Flags (_flags | (HasAVX) );
+			info << _("AVX capable processor") << endmsg;
+			_flags = Flags (_flags | (HasAVX));
+		}
+
+		if (cpu_info[2] & (1<<12) /* FMA */) {
+			info << _("AVX with FMA capable processor") << endmsg;
+			_flags = Flags (_flags | (HasFMA));
+		}
+
+		if (cpu_info_ex[1] & (1<<16) /* AVX512F */) {
+			info << _("AVX512F capable processor") << endmsg;
+			_flags = Flags (_flags | (HasAVX512F));
 		}
 
 		if (cpu_info[3] & (1<<25)) {
@@ -241,11 +276,21 @@ FPU::FPU ()
 			memset (*fxbuf, 0, 512);
 
 #ifdef COMPILER_MSVC
-			char *buf = *fxbuf;
+			char* buf = *fxbuf;
+#ifdef _WIN64
+			/* For 64-bit compilation, MSVC doesn't support inline assembly !!
+			   ( https://docs.microsoft.com/en-us/cpp/assembler/inline/inline-assembler?view=msvc-160 ) */
+
+			/* but instead, it uses something called 'x64 intrinsics'
+			   1: ( https://docs.microsoft.com/en-us/cpp/intrinsics/x64-amd64-intrinsics-list?view=msvc-160 )
+			   2: ( https://software.intel.com/sites/landingpage/IntrinsicsGuide/#text=_fxsave ) */
+			_fxsave (buf);
+#else
 			__asm {
 				mov eax, buf
 					fxsave   [eax]
 					};
+#endif
 #else
 			asm volatile (
 				"fxsave (%0)"
@@ -277,8 +322,7 @@ FPU::FPU ()
 		}
 
 		/* finally get the CPU brand */
-
-		__cpuid (cpu_info, 0x80000000);
+		cpuid(cpu_info, 0x80000000);
 
 		const int parameter_end = 0x80000004;
 		string cpu_brand;
@@ -288,7 +332,7 @@ FPU::FPU ()
 
 			for (int parameter = 0x80000002; parameter <= parameter_end &&
 				     cpu_string_ptr < &cpu_string[sizeof(cpu_string)]; parameter++) {
-				__cpuid(cpu_info, parameter);
+				cpuid(cpu_info, parameter);
 				memcpy(cpu_string_ptr, cpu_info, sizeof(cpu_info));
 				cpu_string_ptr += sizeof(cpu_info);
 			}

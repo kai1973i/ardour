@@ -1,22 +1,20 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-	Copyright (C) 2012 Paul Davis
-	Copyright (C) 2017 Ben Loftis
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <glib.h>
 
@@ -43,7 +41,7 @@ Button::factory (Surface& surface, Button::ID bid, int id, const std::string& na
 void
 Button::pressed ()
 {
-	press_time = ARDOUR::get_microseconds ();
+	press_time = PBD::get_microseconds ();
 }
 
 void
@@ -59,7 +57,7 @@ Button::long_press_count ()
 		return -1; /* button is not pressed */
 	}
 
-	const ARDOUR::microseconds_t delta = ARDOUR::get_microseconds () - press_time;
+	const PBD::microseconds_t delta = PBD::get_microseconds () - press_time;
 
 	if (delta < 500000) {
 		return 0;

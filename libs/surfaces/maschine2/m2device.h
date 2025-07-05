@@ -3,17 +3,17 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef _ardour_surfaces_maschine2hardware_h_
@@ -23,6 +23,8 @@
 #include <cairomm/refptr.h>
 #include <cairomm/surface.h>
 #include "pbd/signals.h"
+
+#include <cmath>
 
 namespace ArdourSurface {
 
@@ -58,12 +60,12 @@ class M2Device
 		virtual void write (hid_device*, M2Contols*) = 0;
 		virtual Cairo::RefPtr<Cairo::ImageSurface> surface () = 0;
 
-		PBD::Signal0<bool> vblank;
+		PBD::Signal<bool()> vblank;
 
 	protected:
 		void bump_blink () {
 			_blink_counter = (_blink_counter + 1) % 12;
-			_blink_shade = fabsf (1.f - _blink_counter / 6.f);
+			_blink_shade = std::fabsf (1.f - _blink_counter / 6.f);
 		}
 
 		uint32_t _splashcnt;

@@ -1,40 +1,43 @@
 /*
-    Copyright (C) 2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 
 #include "ardour/route_group.h"
 #include "ardour/session.h"
 
-#include <gtkmm/table.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/messagedialog.h>
+#include <ytkmm/table.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/messagedialog.h>
 
+#include "gtkmm2ext/colors.h"
+
+#include "gui_thread.h"
 #include "route_group_dialog.h"
 #include "group_tabs.h"
-#include "utils.h"
 
 #include "pbd/i18n.h"
 
 using namespace Gtk;
 using namespace ARDOUR;
-using namespace ARDOUR_UI_UTILS;
 using namespace std;
 using namespace PBD;
 
@@ -48,6 +51,7 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	, _mute (_("Muting"))
 	, _solo (_("Soloing"))
 	, _rec_enable (_("Record enable"))
+	, _sursend_enable (_("Surround Send enable"))
 	, _select (_("Selection"))
 	, _route_active (_("Active state"))
 	, _share_color (_("Color"))
@@ -67,7 +71,7 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 
 	HBox* hbox = manage (new HBox);
 	hbox->set_spacing (6);
-	l = manage (new Label (_("Name:"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false ));
+	l = manage (new Label (_("Name:"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false ));
 
 	hbox->pack_start (*l, false, true);
 	hbox->pack_start (_name, true, true);
@@ -78,7 +82,7 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	top_vbox->pack_start (*hbox, false, true);
 	top_vbox->pack_start (_active);
 
-	l = manage (new Label (_("Color"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("Color"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	hbox = manage (new HBox);
 	hbox->set_spacing (12);
 	hbox->pack_start (*l, false, false);
@@ -90,13 +94,13 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	_active.set_active (_group->is_active ());
 
 	Gdk::Color c;
-	set_color_from_rgba (c, GroupTabs::group_color (_group));
+	Gtkmm2ext::set_color_from_rgba (c, GroupTabs::group_color (_group));
 	_color.set_color (c);
 
 	VBox* options_box = manage (new VBox);
 	options_box->set_spacing (6);
 
-	l = manage (new Label (_("<b>Sharing</b>"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false ));
+	l = manage (new Label (_("<b>Sharing</b>"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false ));
 	l->set_use_markup ();
 	options_box->pack_start (*l, false, true);
 
@@ -105,15 +109,16 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	_mute.set_active (_group->is_mute());
 	_solo.set_active (_group->is_solo());
 	_rec_enable.set_active (_group->is_recenable());
+	_sursend_enable.set_active (_group->is_sursend_enable());
 	_select.set_active (_group->is_select());
 	_route_active.set_active (_group->is_route_active());
 	_share_color.set_active (_group->is_color());
 	_share_monitoring.set_active (_group->is_monitoring());
 
 	if (_group->name ().empty()) {
-		_initial_name = "1";
+		_initial_name = bump_name_abc ("");
 		while (!unique_name (_initial_name)) {
-			_initial_name = bump_name_number (_initial_name);
+			_initial_name = bump_name_abc (_initial_name);
 		}
 		_name.set_text (_initial_name);
 		update();
@@ -130,6 +135,7 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	_mute.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_solo.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_rec_enable.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
+	_sursend_enable.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_select.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_route_active.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
 	_share_color.signal_toggled().connect (sigc::mem_fun (*this, &RouteGroupDialog::update));
@@ -140,24 +146,28 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 	Table* table = manage (new Table (11, 4, false));
 	table->set_row_spacings	(6);
 
-	l = manage (new Label ("", Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label ("", Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	l->set_padding (8, 0);
 	table->attach (*l, 0, 1, 0, 8, Gtk::FILL, Gtk::FILL, 0, 0);
 
 	table->attach (_gain, 1, 3, 1, 2, Gtk::FILL, Gtk::FILL, 0, 0);
 
-	l = manage (new Label ("", Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label ("", Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	l->set_padding (0, 0);
 	table->attach (*l, 1, 2, 2, 3, Gtk::FILL, Gtk::FILL, 0, 0);
 	table->attach (_relative, 2, 3, 2, 3, Gtk::FILL, Gtk::FILL, 0, 0);
 
-	table->attach (_mute, 1, 3, 3, 4, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_solo, 1, 3, 4, 5, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_rec_enable, 1, 3, 5, 6, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_select, 1, 3, 6, 7, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_route_active, 1, 3, 7, 8, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_share_color, 1, 3, 8, 9, Gtk::FILL, Gtk::FILL, 0, 0);
-	table->attach (_share_monitoring, 1, 3, 9, 10, Gtk::FILL, Gtk::FILL, 0, 0);
+	int r = 3;
+	table->attach (_mute,             1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_solo,             1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_rec_enable,       1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+#ifdef VAPOR
+	table->attach (_sursend_enable,   1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+#endif
+	table->attach (_select,           1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_route_active,     1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_share_color,      1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
+	table->attach (_share_monitoring, 1, 3, r, r + 1, Gtk::FILL, Gtk::FILL, 0, 0); ++r;
 
 	options_box->pack_start (*table, false, true);
 	main_vbox->pack_start (*options_box, false, true);
@@ -170,6 +180,8 @@ RouteGroupDialog::RouteGroupDialog (RouteGroup* g, bool creating_new)
 		add_button (Stock::CANCEL, RESPONSE_CANCEL);
 		add_button (Stock::NEW, RESPONSE_OK);
 		set_default_response (RESPONSE_OK);
+	} else {
+		_group->Destroyed.connect (_group_connection, invalidator (*this), std::bind (&Dialog::response, this, RESPONSE_CANCEL), gui_context());
 	}
 
 	show_all_children ();
@@ -206,6 +218,7 @@ RouteGroupDialog::update ()
 
 	plist.add (Properties::group_gain, _gain.get_active());
 	plist.add (Properties::group_recenable, _rec_enable.get_active());
+	plist.add (Properties::group_sursend_enable, _sursend_enable.get_active());
 	plist.add (Properties::group_mute, _mute.get_active());
 	plist.add (Properties::group_solo, _solo.get_active ());
 	plist.add (Properties::group_select, _select.get_active());
@@ -218,7 +231,7 @@ RouteGroupDialog::update ()
 
 	_group->apply_changes (plist);
 
-	GroupTabs::set_group_color (_group, gdk_color_to_rgba (_color.get_color ()));
+	GroupTabs::set_group_color (_group, Gtkmm2ext::gdk_color_to_rgba (_color.get_color ()));
 }
 
 void
@@ -227,7 +240,7 @@ RouteGroupDialog::gain_toggled ()
 	_relative.set_sensitive (_gain.get_active ());
 }
 
-/** @return true if the current group's name is unique accross the session */
+/** @return true if the current group's name is unique across the session */
 bool
 RouteGroupDialog::unique_name (std::string const name) const
 {

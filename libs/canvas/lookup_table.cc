@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2011-2013 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "canvas/item.h"
 #include "canvas/lookup_table.h"
@@ -43,15 +44,14 @@ DumbLookupTable::DumbLookupTable (Item const & item)
 vector<Item *>
 DumbLookupTable::get (Rect const &area)
 {
-	list<Item *> const & items = _item.items ();
 	vector<Item *> vitems;
 #if 1
-	for (list<Item *>::const_iterator i = items.begin(); i != items.end(); ++i) {
-		Rect item_bbox = (*i)->bounding_box ();
+	for (auto const & item : _item.items()) {
+		Rect item_bbox = item->bounding_box ();
 		if (!item_bbox) continue;
-		Rect item = (*i)->item_to_window (item_bbox);
-		if (item.intersection (area)) {
-			vitems.push_back (*i);
+		Rect item_rect = item->item_to_window (item_bbox);
+		if (item_rect.intersection (area)) {
+			vitems.push_back (item);
 		}
 	}
 #else
@@ -65,14 +65,12 @@ DumbLookupTable::items_at_point (Duple const & point) const
 {
 	/* Point is in window coordinate system */
 
-	list<Item *> const & items (_item.items ());
 	vector<Item *> vitems;
 
-	for (list<Item *>::const_iterator i = items.begin(); i != items.end(); ++i) {
+	for (auto const & item : _item.items()) {
 
-		if ((*i)->covers (point)) {
-			// std::cerr << "\t\t" << (*i)->whatami() << '/' << (*i)->name << " covers " << point << std::endl;
-			vitems.push_back (*i);
+		if (item->covers (point)) {
+			vitems.push_back (item);
 		}
 	}
 
@@ -84,16 +82,15 @@ DumbLookupTable::has_item_at_point (Duple const & point) const
 {
 	/* Point is in window coordinate system */
 
-	list<Item *> const & items (_item.items ());
 	vector<Item *> vitems;
 
-	for (list<Item *>::const_iterator i = items.begin(); i != items.end(); ++i) {
+	for (auto const & item : _item.items()) {
 
-		if (!(*i)->visible()) {
+		if (!item->visible()) {
 			continue;
 		}
 
-		if ((*i)->covers (point)) {
+		if (item->covers (point)) {
 			// std::cerr << "\t\t" << (*i)->whatami() << '/' << (*i)->name << " covers " << point << std::endl;
 			return true;
 
@@ -133,16 +130,15 @@ OptimizingLookupTable::OptimizingLookupTable (Item const & item, int items_per_c
 
 //	cout << "BUILD bbox=" << bbox << ", cellsize=" << _cell_size << ", offset=" << _offset << ", dimension=" << _dimension << "\n";
 
-	for (list<Item*>::const_iterator i = items.begin(); i != items.end(); ++i) {
-
+	for (auto const & our_item : _item.items()) {
 		/* item bbox in its own coordinates */
-		Rect item_bbox = (*i)->bounding_box ();
+		Rect item_bbox = our_item->bounding_box ();
 		if (!item_bbox) {
 			continue;
 		}
 
 		/* and in the item's coordinates */
-		Rect const item_bbox_in_item = (*i)->item_to_parent (item_bbox);
+		Rect const item_bbox_in_item = our_item->item_to_parent (item_bbox);
 
 		int x0, y0, x1, y1;
 		area_to_indices (item_bbox_in_item, x0, y0, x1, y1);
@@ -176,7 +172,7 @@ OptimizingLookupTable::OptimizingLookupTable (Item const & item, int items_per_c
 
 		for (int x = x0; x < x1; ++x) {
 			for (int y = y0; y < y1; ++y) {
-				_cells[x][y].push_back (*i);
+				_cells[x][y].push_back (our_item);
 			}
 		}
 	}

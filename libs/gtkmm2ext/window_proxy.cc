@@ -1,27 +1,26 @@
 /*
-    Copyright (C) 2015 Paul Davis
+ * Copyright (C) 2015-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/action.h>
-#include <gtkmm/window.h>
+#include <ytkmm/action.h>
+#include <ytkmm/window.h>
 
 #include "pbd/xml++.h"
-#include "pbd/stacktrace.h"
 
 #include "gtkmm2ext/window_proxy.h"
 #include "gtkmm2ext/visibility_tracker.h"
@@ -31,19 +30,6 @@
 using namespace Gtk;
 using namespace Gtkmm2ext;
 using namespace PBD;
-
-WindowProxy::WindowProxy (const std::string& name)
-	: _name (name)
-	, _window (0)
-	, _visible (false)
-	, _x_off (-1)
-	, _y_off (-1)
-	, _width (-1)
-	, _height (-1)
-	, vistracker (0)
-	, _state_mask (StateMask (Position|Size))
-{
-}
 
 WindowProxy::WindowProxy (const std::string& name, const std::string& menu_name)
 	: _name (name)
@@ -69,6 +55,7 @@ WindowProxy::WindowProxy (const std::string& name, const std::string& menu_name,
 	, _width (-1)
 	, _height (-1)
 	, vistracker (0)
+	, _state_mask (StateMask (Position|Size))
 {
 	set_state (node, 0);
 }
@@ -141,13 +128,19 @@ WindowProxy::toggle()
 		/* we'd like to just call this and nothing else */
 		_window->present ();
 	} else {
-		if (_window->is_mapped()) {
+		if (_window->get_mapped()) {
 			save_pos_and_size();
 		}
 
-		vistracker->cycle_visibility ();
+		if (vistracker) {
+			vistracker->cycle_visibility ();
+		} else if (fully_visible ()) {
+			_window->hide ();
+		} else {
+			_window->present ();
+		}
 
-		if (_window->is_mapped()) {
+		if (_window->get_mapped()) {
 			if (_width != -1 && _height != -1) {
 				_window->set_default_size (_width, _height);
 			}
@@ -165,7 +158,7 @@ WindowProxy::xml_node_name()
 }
 
 XMLNode&
-WindowProxy::get_state ()
+WindowProxy::get_state () const
 {
 	XMLNode* node = new XMLNode (xml_node_name());
 
@@ -211,15 +204,16 @@ void
 WindowProxy::drop_window ()
 {
 	if (_window) {
+		unmap_connection.disconnect ();
+		_window->hide ();
 		delete_connection.disconnect ();
 		configure_connection.disconnect ();
 		map_connection.disconnect ();
-		unmap_connection.disconnect ();
-		_window->hide ();
 		delete _window;
 		_window = 0;
 		delete vistracker;
 		vistracker = 0;
+		_visible = false;
 	}
 }
 
@@ -236,7 +230,10 @@ WindowProxy::setup ()
 {
 	assert (_window);
 
-	vistracker = new Gtkmm2ext::VisibilityTracker (*_window);
+	delete_connection.disconnect ();
+	configure_connection.disconnect ();
+	map_connection.disconnect ();
+	unmap_connection.disconnect ();
 
 	delete_connection = _window->signal_delete_event().connect (sigc::mem_fun (*this, &WindowProxy::delete_event_handler));
 	configure_connection = _window->signal_configure_event().connect (sigc::mem_fun (*this, &WindowProxy::configure_handler), false);
@@ -249,6 +246,7 @@ WindowProxy::setup ()
 void
 WindowProxy::map_handler ()
 {
+	vistracker = new Gtkmm2ext::VisibilityTracker (*_window);
 	/* emit our own signal */
 	signal_map ();
 }
@@ -269,7 +267,7 @@ WindowProxy::configure_handler (GdkEventConfigure* ev)
 
 	   the difference is generally down to window manager framing.
 	*/
-	if (!visible() || !_window->is_mapped()) {
+	if (!visible() || !_window->get_mapped()) {
 		return false;
 	}
 	save_pos_and_size ();
@@ -410,4 +408,27 @@ void
 WindowProxy::set_state_mask (StateMask sm)
 {
 	_state_mask = sm;
+}
+
+void
+WindowProxy::set_transient_for (Gtk::Window& win)
+{
+	/* on macOS set_transient() calls _gdk_quartz_window_attach_to_parent()
+	 * which attaches the windows as child window to the parent. As side-effect
+	 * the child becomes the same window-level as the parent.
+	 *
+	 * This makes it hard to re-order siblings of the parent without explicit call to
+	 * re-order those (gdk_window_restack gdk_window_quartz_restack_toplevel).
+	 *
+	 * macOS has a rich concept of z-axis stacking per application, explict transient parents
+	 * are not required.
+	 *
+	 * https://developer.apple.com/documentation/appkit/nswindow/1419152-addchildwindow?language=objc
+	 * https://developer.apple.com/documentation/appkit/nswindowlevel?language=objc
+	 */
+#ifndef __APPLE__
+	if (_window) {
+		_window->set_transient_for (win);
+	}
+#endif
 }

@@ -1,3 +1,4 @@
+#include "test_ui.h"
 #include "test_util.h"
 #include "ardour/ardour.h"
 #include "ardour/midi_track.h"
@@ -15,27 +16,32 @@ static const char* localedir = LOCALEDIR;
 int
 main (int argc, char* argv[])
 {
-	ARDOUR::init (false, true, localedir);
+	ARDOUR::init (true, localedir);
+	TestUI* test_ui = new TestUI();
+	create_and_start_dummy_backend ();
 	Session* session = load_session ("../libs/ardour/test/profiling/sessions/1region", "1region");
 
 	assert (session->get_routes()->size() == 2);
 
+	{
+
 	/* Find the track */
-	boost::shared_ptr<MidiTrack> track = boost::dynamic_pointer_cast<MidiTrack> (session->get_routes()->back());
+	std::shared_ptr<MidiTrack> track = std::dynamic_pointer_cast<MidiTrack> (session->get_routes()->back());
 	assert (track);
 
 	/* And the playlist */
-	boost::shared_ptr<Playlist> playlist = track->playlist ();
+	std::shared_ptr<Playlist> playlist = track->playlist ();
 	assert (playlist);
 
 	/* And the region */
-	boost::shared_ptr<MidiRegion> region = boost::dynamic_pointer_cast<MidiRegion> (playlist->region_list_property().rlist().front());
+	std::shared_ptr<MidiRegion> region = std::dynamic_pointer_cast<MidiRegion> (playlist->region_list_property().rlist().front());
 	assert (region);
 
 	/* Duplicate it a lot */
 	session->begin_reversible_command ("foo");
 	playlist->clear_changes ();
-	playlist->duplicate (region, region->last_sample() + 1, 1000);
+	timepos_t pos (region->last_sample() + 1);
+	playlist->duplicate (region, pos, 1000);
 	session->add_command (new StatefulDiffCommand (playlist));
 	session->commit_reversible_command ();
 
@@ -45,7 +51,16 @@ main (int argc, char* argv[])
 	/* And do it again */
 	session->begin_reversible_command ("foo");
 	playlist->clear_changes ();
-	playlist->duplicate (region, region->last_sample() + 1, 1000);
+	timepos_t pos2 (region->last_sample() + 1);
+	playlist->duplicate (region, pos2, 1000);
 	session->add_command (new StatefulDiffCommand (playlist));
 	session->commit_reversible_command ();
+
+	}
+
+	delete session;
+	stop_and_destroy_backend ();
+	delete test_ui;
+	ARDOUR::cleanup ();
+	return 0;
 }

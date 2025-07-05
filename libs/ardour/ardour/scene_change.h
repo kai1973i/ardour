@@ -1,24 +1,22 @@
 /*
-    Copyright (C) 2014 Paul Davis
+ * Copyright (C) 2014-2015 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libardour_scene_change_h__
-#define __libardour_scene_change_h__
+#pragma once
 
 #include "pbd/stateful.h"
 
@@ -33,7 +31,7 @@ class SceneChange : public PBD::Stateful
 	SceneChange ();
 	virtual ~SceneChange () {};
 
-	static boost::shared_ptr<SceneChange> factory (const XMLNode&, int version);
+	static std::shared_ptr<SceneChange> factory (const XMLNode&, int version);
 	static std::string xml_node_name;
 
         uint32_t color() const;
@@ -44,8 +42,8 @@ class SceneChange : public PBD::Stateful
         bool active () const { return _active; }
         void set_active (bool);
 
-        PBD::Signal0<void> ColorChanged;
-        PBD::Signal0<void> ActiveChanged;
+        PBD::Signal<void()> ColorChanged;
+        PBD::Signal<void()> ActiveChanged;
 
     protected:
         /* derived classes are responsible for serializing & deserializing this value */
@@ -56,4 +54,3 @@ class SceneChange : public PBD::Stateful
 } /* namespace */
 
 
-#endif /* __libardour_scene_change_h__ */

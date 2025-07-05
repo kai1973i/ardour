@@ -1,21 +1,23 @@
 /*
-    Copyright (C) 2000-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2006-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <string>
 
@@ -30,7 +32,7 @@
 #include "ardour/session_playlists.h"
 #include "ardour/source.h"
 #include "ardour/tempo.h"
-#include "evoral/Curve.hpp"
+#include "evoral/Curve.h"
 #include "pbd/error.h"
 #include "pbd/failed_constructor.h"
 #include "pbd/id.h"
@@ -39,10 +41,13 @@
 #include "pbd/statefuldestructible.h"
 #include "pbd/types_convert.h"
 
+namespace PBD {
 class Command;
+}
 
 using namespace PBD;
 using namespace ARDOUR;
+using namespace Temporal;
 
 #include "pbd/i18n.h"
 
@@ -51,7 +56,7 @@ void Session::register_with_memento_command_factory(PBD::ID id, PBD::StatefulDes
     registry[id] = ptr;
 }
 
-Command *
+PBD::Command *
 Session::memento_command_factory(XMLNode *n)
 {
     PBD::ID id;
@@ -89,7 +94,7 @@ Session::memento_command_factory(XMLNode *n)
     n->get_property ("type-name", type_name);
 
     if (type_name == "ARDOUR::AudioRegion" || type_name == "ARDOUR::MidiRegion" || type_name == "ARDOUR::Region") {
-	    boost::shared_ptr<Region> r = RegionFactory::region_by_id (id);
+	    std::shared_ptr<Region> r = RegionFactory::region_by_id (id);
 	    if (r) {
 		    return new MementoCommand<Region>(*r, before, after);
 	    }
@@ -107,16 +112,14 @@ Session::memento_command_factory(XMLNode *n)
     } else if (type_name == "ARDOUR::Locations") {
 	    return new MementoCommand<Locations>(*_locations, before, after);
 
-    } else if (type_name == "ARDOUR::TempoMap") {
-	    return new MementoCommand<TempoMap>(*_tempo_map, before, after);
-
     } else if (type_name == "ARDOUR::Playlist" || type_name == "ARDOUR::AudioPlaylist" || type_name == "ARDOUR::MidiPlaylist") {
-	    if (boost::shared_ptr<Playlist> pl = playlists->by_name(child->property("name")->value())) {
+
+	    if (std::shared_ptr<Playlist> pl = _playlists->by_name(child->property("name")->value())) {
 		    return new MementoCommand<Playlist>(*(pl.get()), before, after);
 	    }
 
     } else if (type_name == "ARDOUR::Route" || type_name == "ARDOUR::AudioTrack" || type_name == "ARDOUR::MidiTrack") {
-		if (boost::shared_ptr<Route> r = route_by_id(id)) {
+		if (std::shared_ptr<Route> r = route_by_id(id)) {
 			return new MementoCommand<Route>(*r, before, after);
 		} else {
 			error << string_compose (X_("Route %1 not found in session"), id) << endmsg;
@@ -144,10 +147,13 @@ Session::memento_command_factory(XMLNode *n)
     /* we failed */
     info << string_compose (_("Could not reconstitute MementoCommand from XMLNode. object type = %1 id = %2"), type_name, id.to_s()) << endmsg;
 
+    delete after;
+    delete before;
+
     return 0 ;
 }
 
-Command *
+PBD::Command *
 Session::stateful_diff_command_factory (XMLNode* n)
 {
 	PBD::ID id;
@@ -159,13 +165,13 @@ Session::stateful_diff_command_factory (XMLNode* n)
 	}
 
 	if ((type_name == "ARDOUR::AudioRegion" || type_name == "ARDOUR::MidiRegion")) {
-		boost::shared_ptr<Region> r = RegionFactory::region_by_id (id);
+		std::shared_ptr<Region> r = RegionFactory::region_by_id (id);
 		if (r) {
 			return new StatefulDiffCommand (r, *n);
 		}
 
 	} else if (type_name == "ARDOUR::AudioPlaylist" ||  type_name == "ARDOUR::MidiPlaylist") {
-		boost::shared_ptr<Playlist> p = playlists->by_id (id);
+		std::shared_ptr<Playlist> p = _playlists->by_id (id);
 		if (p) {
 			return new StatefulDiffCommand (p, *n);
 		} else {

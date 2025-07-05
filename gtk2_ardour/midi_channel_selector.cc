@@ -1,30 +1,33 @@
 /*
-    Copyright (C) 2008-2013 Paul Davis
-    Original Author: Hans Baier
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2008-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 #include <sstream>
-#include <gtkmm/separator.h>
-#include <gtkmm/box.h>
-#include <gtkmm/label.h>
-#include <gtkmm/togglebutton.h>
-#include <gtkmm/radiobutton.h>
-#include <gtkmm/table.h>
+#include <ytkmm/separator.h>
+#include <ytkmm/box.h>
+#include <ytkmm/label.h>
+#include <ytkmm/togglebutton.h>
+#include <ytkmm/radiobutton.h>
+#include <ytkmm/table.h>
 
 #include "pbd/compose.h"
 #include "pbd/ffs.h"
@@ -324,7 +327,7 @@ MidiMultipleChannelSelector::invert_selection(void)
 
 /*-----------------------------------------*/
 
-MidiChannelSelectorWindow::MidiChannelSelectorWindow (boost::shared_ptr<MidiTrack> mt)
+MidiChannelSelectorWindow::MidiChannelSelectorWindow (std::shared_ptr<MidiTrack> mt)
 	: ArdourWindow (_("MIDI Channel Control"))
 	, track (mt)
 	, playback_all_button (playback_button_group, _("Playback all channels"))
@@ -344,10 +347,10 @@ MidiChannelSelectorWindow::MidiChannelSelectorWindow (boost::shared_ptr<MidiTrac
 	playback_mask_changed ();
 	capture_mask_changed ();
 
-	track->playback_filter().ChannelMaskChanged.connect (*this, MISSING_INVALIDATOR, boost::bind (&MidiChannelSelectorWindow::playback_mask_changed, this), gui_context());
-	track->playback_filter().ChannelModeChanged.connect (*this, MISSING_INVALIDATOR, boost::bind (&MidiChannelSelectorWindow::playback_mode_changed, this), gui_context());
-	track->capture_filter().ChannelMaskChanged.connect (*this, MISSING_INVALIDATOR, boost::bind (&MidiChannelSelectorWindow::capture_mask_changed, this), gui_context());
-	track->capture_filter().ChannelModeChanged.connect (*this, MISSING_INVALIDATOR, boost::bind (&MidiChannelSelectorWindow::capture_mode_changed, this), gui_context());
+	track->playback_filter().ChannelMaskChanged.connect (*this, MISSING_INVALIDATOR, std::bind (&MidiChannelSelectorWindow::playback_mask_changed, this), gui_context());
+	track->playback_filter().ChannelModeChanged.connect (*this, MISSING_INVALIDATOR, std::bind (&MidiChannelSelectorWindow::playback_mode_changed, this), gui_context());
+	track->capture_filter().ChannelMaskChanged.connect (*this, MISSING_INVALIDATOR, std::bind (&MidiChannelSelectorWindow::capture_mask_changed, this), gui_context());
+	track->capture_filter().ChannelModeChanged.connect (*this, MISSING_INVALIDATOR, std::bind (&MidiChannelSelectorWindow::capture_mode_changed, this), gui_context());
 }
 
 MidiChannelSelectorWindow::~MidiChannelSelectorWindow()
@@ -746,7 +749,7 @@ MidiChannelSelectorWindow::capture_mode_changed ()
 		}
 	}
 
-	capture_mask_changed (); // udpate buttons
+	capture_mask_changed (); // update buttons
 
 	last_drawn_capture_mode = mode;
 }

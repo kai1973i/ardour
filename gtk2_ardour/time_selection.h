@@ -1,5 +1,5 @@
 /*
-    Copyright (C) 2000-2007 Paul Davis
+    Copyright (C) 2000-2020 Paul Davis
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -17,8 +17,7 @@
 
 */
 
-#ifndef __ardour_gtk_time_selection_h__
-#define __ardour_gtk_time_selection_h__
+#pragma once
 
 #include <list>
 #include "ardour/types.h"
@@ -27,17 +26,22 @@ namespace ARDOUR {
 	class RouteGroup;
 }
 
-class TimeSelection : public std::list<ARDOUR::AudioRange>
+class TimeSelection : public std::list<ARDOUR::TimelineRange>
 {
 public:
-	ARDOUR::AudioRange& operator[](uint32_t);
+	ARDOUR::TimelineRange & operator[](uint32_t);
 
-	ARDOUR::samplepos_t start();
-	ARDOUR::samplepos_t end_sample();
-	ARDOUR::samplepos_t length();
+	ARDOUR::samplepos_t start_sample() const;
+	ARDOUR::samplepos_t end_sample() const;
+	ARDOUR::samplepos_t length_samples() const;
+
+	Temporal::timepos_t start_time() const;
+	Temporal::timepos_t end_time() const;
+	Temporal::timecnt_t length() const;
+
+	void set (Temporal::timepos_t const &, Temporal::timepos_t const &);
 
 	bool consolidate ();
 };
 
 
-#endif /* __ardour_gtk_time_selection_h__ */

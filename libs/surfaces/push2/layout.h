@@ -1,20 +1,20 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_push2_layout_h__
 #define __ardour_push2_layout_h__
@@ -27,16 +27,8 @@
 
 #include "canvas/container.h"
 
-namespace Cairo {
-	class Region;
-}
-
 namespace ARDOUR {
 	class Session;
-}
-
-namespace Cairo {
-	class Context;
 }
 
 namespace ArdourSurface {
@@ -64,9 +56,20 @@ class Push2Layout : public sigc::trackable, public ArdourCanvas::Container
 	virtual void button_select_release () {}
 	virtual void button_solo () {}
 	virtual void button_mute () {}
+	virtual void button_rhs (int) {} /* scene/notelength buttons aka Right Hand Side */
+	virtual void button_octave_up() {}
+	virtual void button_octave_down() {}
+	virtual void button_page_left() {}
+	virtual void button_page_right() {}
+	virtual void button_stop_press () {}
+	virtual void button_stop_release () {}
+	virtual void button_stop_long_press () {}
 
 	virtual void strip_vpot (int, int) = 0;
 	virtual void strip_vpot_touch (int, bool) = 0;
+
+	virtual void pad_press (int x, int y, int velocity) {}
+	virtual void pad_release (int x, int y) {}
 
 	virtual void update_meters () {}
 	virtual void update_clocks () {}
@@ -74,9 +77,9 @@ class Push2Layout : public sigc::trackable, public ArdourCanvas::Container
 	std::string name() const { return _name; }
 
   protected:
-	Push2& p2;
-	ARDOUR::Session& session;
-	std::string _name;
+	Push2&           _p2;
+	ARDOUR::Session& _session;
+	std::string      _name;
 };
 
 } /* namespace */

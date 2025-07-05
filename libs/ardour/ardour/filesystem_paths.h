@@ -1,21 +1,23 @@
 /*
-    Copyright (C) 2007 Tim Mayberry
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2008-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef ARDOUR_FILESYSTEM_PATHS_INCLUDED
 #define ARDOUR_FILESYSTEM_PATHS_INCLUDED
@@ -28,8 +30,8 @@ namespace ARDOUR {
 
 	/**
 	 * @return the path to the directory used to store user specific
-	 * configuration files for the given @param version of the program.
-	 * If @param version is negative, the build-time string PROGRAM_VERSION
+	 * configuration files for the given @p version of the program.
+	 * If @p version is negative, the build-time string PROGRAM_VERSION
 	 * will be used to determine the version number.
 	 *
 	 * @post user_config_directory() exists IF version was negative.
@@ -43,7 +45,7 @@ namespace ARDOUR {
 	 * caches (e.g. plugin indices, blacklist/whitelist)
 	 * it defaults to XDG_CACHE_HOME
 	 */
-	LIBARDOUR_API std::string user_cache_directory (std::string cachename = "");
+	LIBARDOUR_API std::string user_cache_directory (int version = -1);
 
 	/**
 	 * @return the path used to store a persistent indication
@@ -86,6 +88,14 @@ namespace ARDOUR {
 	 */
 	LIBARDOUR_API std::string windows_package_directory_path ();
 #endif
+
+	namespace ArdourVideoToolPaths {
+
+		LIBARDOUR_API bool harvid_exe (std::string &harvid_exe);
+		LIBARDOUR_API bool xjadeo_exe (std::string &xjadeo_exe);
+		LIBARDOUR_API bool transcoder_exe (std::string &ffmpeg_exe, std::string &ffprobe_exe);
+	};
+
 } // namespace ARDOUR
 
 #endif

@@ -1,21 +1,27 @@
 /*
-    Copyright (C) 2006 Paul Davis
-    Author: David Robillard
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2016 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2007-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2008-2012 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2013-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015-2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include <cmath>
 
 #ifdef COMPILER_MSVC
@@ -34,7 +40,9 @@
 #include "evoral/midi_util.h"
 
 #include "ardour/amp.h"
-#include "ardour/beats_samples_converter.h"
+#ifdef HAVE_BEATBOX
+#include "ardour/beatbox.h"
+#endif
 #include "ardour/buffer_set.h"
 #include "ardour/debug.h"
 #include "ardour/delivery.h"
@@ -56,6 +64,7 @@
 #include "ardour/session_playlists.h"
 #include "ardour/types_convert.h"
 #include "ardour/utils.h"
+#include "ardour/velocity_control.h"
 
 #include "pbd/i18n.h"
 
@@ -73,17 +82,26 @@ using namespace PBD;
 MidiTrack::MidiTrack (Session& sess, string name, TrackMode mode)
 	: Track (sess, name, PresentationInfo::MidiTrack, mode, DataType::MIDI)
 	, _immediate_events(6096) // FIXME: size?
+	, _user_immediate_events(2048) // FIXME: size?
 	, _immediate_event_buffer(6096)
+	, _user_immediate_event_buffer(2048)
 	, _step_edit_ring_buffer(64) // FIXME: size?
 	, _note_mode (Sustained)
 	, _step_editing (false)
 	, _input_active (true)
+	, _restore_pgm_on_load (true)
 {
-	_session.SessionLoaded.connect_same_thread (*this, boost::bind (&MidiTrack::restore_controls, this));
+	_session.SessionLoaded.connect_same_thread (*this, std::bind (&MidiTrack::restore_controls, this));
+
+	_playback_filter.ChannelModeChanged.connect_same_thread (*this, std::bind (&Track::playlist_modified, this));
+	_playback_filter.ChannelMaskChanged.connect_same_thread (*this, std::bind (&Track::playlist_modified, this));
 }
 
 MidiTrack::~MidiTrack ()
 {
+	if (_freeze_record.playlist && !_session.deletion_in_progress()) {
+		_freeze_record.playlist->release();
+	}
 }
 
 int
@@ -93,18 +111,26 @@ MidiTrack::init ()
 		return -1;
 	}
 
-	_input->changed.connect_same_thread (*this, boost::bind (&MidiTrack::track_input_active, this, _1, _2));
+	_velocity_control.reset (new VelocityControl (_session));
+	add_control (_velocity_control);
+
+	_input->changed.connect_same_thread (*this, std::bind (&MidiTrack::track_input_active, this, _1, _2));
 
 	_disk_writer->set_note_mode (_note_mode);
 	_disk_reader->reset_tracker ();
 
-	_disk_writer->DataRecorded.connect_same_thread (*this, boost::bind (&MidiTrack::data_recorded, this, _1));
+	_disk_writer->DataRecorded.connect_same_thread (*this, std::bind (&MidiTrack::data_recorded, this, _1));
+
+#ifdef HAVE_BEATBOX
+	_beatbox.reset (new BeatBox (_session));
+	add_processor (_beatbox, PostFader);
+#endif
 
 	return 0;
 }
 
 void
-MidiTrack::data_recorded (boost::weak_ptr<MidiSource> src)
+MidiTrack::data_recorded (std::weak_ptr<MidiSource> src)
 {
 	DataRecorded (src); /* EMIT SIGNAL */
 }
@@ -129,6 +155,19 @@ MidiTrack::can_be_record_enabled ()
 	return Track::can_be_record_enabled ();
 }
 
+MonitorState
+MidiTrack::get_input_monitoring_state (bool recording, bool talkback) const
+{
+	RecordMode rmode = _session.config.get_record_mode ();
+	if (rmode == RecSoundOnSound && (recording || talkback)) {
+		return MonitoringCue;
+	} else if (rmode != RecNonLayered || recording || talkback) {
+		return MonitoringInput;
+	} else {
+		return MonitoringSilence;
+	}
+}
+
 int
 MidiTrack::set_state (const XMLNode& node, int version)
 {
@@ -150,6 +189,10 @@ MidiTrack::set_state (const XMLNode& node, int version)
 	bool yn;
 	if (node.get_property ("input-active", yn)) {
 		set_input_active (yn);
+	}
+
+	if (node.get_property ("restore-pgm", yn)) {
+		set_restore_pgm_on_load (yn);
 	}
 
 	ChannelMode playback_channel_mode = AllChannels;
@@ -184,9 +227,9 @@ MidiTrack::set_state (const XMLNode& node, int version)
 
 	pending_state = const_cast<XMLNode*> (&node);
 
-	if (_session.state_of_the_state() & Session::Loading) {
+	if (_session.loading ()) {
 		_session.StateReady.connect_same_thread (
-			*this, boost::bind (&MidiTrack::set_state_part_two, this));
+			*this, std::bind (&MidiTrack::set_state_part_two, this));
 	} else {
 		set_state_part_two ();
 	}
@@ -195,7 +238,7 @@ MidiTrack::set_state (const XMLNode& node, int version)
 }
 
 XMLNode&
-MidiTrack::state(bool save_template)
+MidiTrack::state(bool save_template) const
 {
 	XMLNode& root (Track::state (save_template));
 	XMLNode* freeze_node;
@@ -206,9 +249,10 @@ MidiTrack::state(bool save_template)
 
 		freeze_node = new XMLNode (X_("freeze-info"));
 		freeze_node->set_property ("playlist", _freeze_record.playlist->name());
+		freeze_node->set_property ("playlist-id", _freeze_record.playlist->id().to_s());
 		freeze_node->set_property ("state", _freeze_record.state);
 
-		for (vector<FreezeRecordProcessorInfo*>::iterator i = _freeze_record.processor_info.begin(); i != _freeze_record.processor_info.end(); ++i) {
+		for (vector<FreezeRecordProcessorInfo*>::const_iterator i = _freeze_record.processor_info.begin(); i != _freeze_record.processor_info.end(); ++i) {
 			inode = new XMLNode (X_("processor"));
 			inode->set_property (X_("id"), id());
 			inode->add_child_copy ((*i)->state);
@@ -229,10 +273,11 @@ MidiTrack::state(bool save_template)
 	root.set_property ("note-mode", _note_mode);
 	root.set_property ("step-editing", _step_editing);
 	root.set_property ("input-active", _input_active);
+	root.set_property ("restore-pgm", _restore_pgm_on_load);
 
 	for (Controls::const_iterator c = _controls.begin(); c != _controls.end(); ++c) {
-		if (boost::dynamic_pointer_cast<MidiTrack::MidiControl>(c->second)) {
-			boost::shared_ptr<AutomationControl> ac = boost::dynamic_pointer_cast<AutomationControl> (c->second);
+		if (std::dynamic_pointer_cast<MidiTrack::MidiControl>(c->second)) {
+			std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl> (c->second);
 			assert (ac);
 			root.add_child_nocopy (ac->get_state ());
 		}
@@ -245,6 +290,7 @@ void
 MidiTrack::set_state_part_two ()
 {
 	XMLNode* fnode;
+	XMLProperty const * prop;
 
 	/* This is called after all session state has been restored but before
 	   have been made ports and connections are established.
@@ -263,23 +309,28 @@ MidiTrack::set_state_part_two ()
 		}
 		_freeze_record.processor_info.clear ();
 
-		std::string str;
-		if (fnode->get_property (X_("playlist"), str)) {
-			boost::shared_ptr<Playlist> pl = _session.playlists->by_name (str);
-			if (pl) {
-				_freeze_record.playlist = boost::dynamic_pointer_cast<MidiPlaylist> (pl);
-			} else {
-				_freeze_record.playlist.reset();
-				_freeze_record.state = NoFreeze;
-				return;
-			}
+		std::shared_ptr<Playlist> freeze_pl;
+		if ((prop = fnode->property (X_("playlist-id"))) != 0) {
+			freeze_pl = _session.playlists()->by_id (prop->value());
+		} else if ((prop = fnode->property (X_("playlist"))) != 0) {
+			freeze_pl = _session.playlists()->by_name (prop->value());
 		}
+		if (freeze_pl) {
+			_freeze_record.playlist = std::dynamic_pointer_cast<MidiPlaylist> (freeze_pl);
+			_freeze_record.playlist->use();
+		} else {
+			_freeze_record.playlist.reset ();
+			_freeze_record.state = NoFreeze;
+			return;
+		}
+
 
 		fnode->get_property (X_("state"), _freeze_record.state);
 
 		XMLNodeConstIterator citer;
 		XMLNodeList clist = fnode->children();
 
+		std::string str;
 		for (citer = clist.begin(); citer != clist.end(); ++citer) {
 			if ((*citer)->name() != X_("processor")) {
 				continue;
@@ -290,7 +341,7 @@ MidiTrack::set_state_part_two ()
 			}
 
 			FreezeRecordProcessorInfo* frii = new FreezeRecordProcessorInfo (*((*citer)->children().front()),
-										   boost::shared_ptr<Processor>());
+										   std::shared_ptr<Processor>());
 			frii->id = str;
 			_freeze_record.processor_info.push_back (frii);
 		}
@@ -302,10 +353,22 @@ MidiTrack::set_state_part_two ()
 void
 MidiTrack::restore_controls ()
 {
-	// TODO order events (CC before PGM to set banks)
+	/* first CC (bank select) */
 	for (Controls::const_iterator c = _controls.begin(); c != _controls.end(); ++c) {
-		boost::shared_ptr<MidiTrack::MidiControl> mctrl = boost::dynamic_pointer_cast<MidiTrack::MidiControl>(c->second);
-		if (mctrl) {
+		std::shared_ptr<MidiTrack::MidiControl> mctrl = std::dynamic_pointer_cast<MidiTrack::MidiControl>(c->second);
+		if (mctrl && mctrl->parameter().type () != MidiPgmChangeAutomation) {
+			mctrl->restore_value();
+		}
+	}
+
+	if (!_restore_pgm_on_load) {
+		return;
+	}
+
+	/* then restore PGM */
+	for (Controls::const_iterator c = _controls.begin(); c != _controls.end(); ++c) {
+		std::shared_ptr<MidiTrack::MidiControl> mctrl = std::dynamic_pointer_cast<MidiTrack::MidiControl>(c->second);
+		if (mctrl && mctrl->parameter().type () == MidiPgmChangeAutomation) {
 			mctrl->restore_value();
 		}
 	}
@@ -318,10 +381,10 @@ MidiTrack::update_controls (BufferSet const& bufs)
 	for (MidiBuffer::const_iterator e = buf.begin(); e != buf.end(); ++e) {
 		const Evoral::Event<samplepos_t>&         ev     = *e;
 		const Evoral::Parameter                  param   = midi_parameter(ev.buffer(), ev.size());
-		const boost::shared_ptr<AutomationControl> control = automation_control (param);
+		const std::shared_ptr<AutomationControl> control = automation_control (param);
 		if (control) {
-			double old = control->get_double (false, 0);
-			control->set_double (ev.value(), 0, false);
+			double old = control->get_double ();
+			control->set_double (ev.value(), timepos_t::zero (false), false);
 			if (old != ev.value()) {
 				control->Changed (false, Controllable::NoGroup);
 			}
@@ -342,7 +405,7 @@ MidiTrack::no_roll_unlocked (pframes_t nframes, samplepos_t start_sample, sample
 }
 
 void
-MidiTrack::realtime_locate ()
+MidiTrack::realtime_locate (bool for_loop_end)
 {
 	Glib::Threads::RWLock::ReaderLock lm (_processor_lock, Glib::Threads::TRY_LOCK);
 
@@ -351,25 +414,25 @@ MidiTrack::realtime_locate ()
 	}
 
 	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		(*i)->realtime_locate ();
+		(*i)->realtime_locate (for_loop_end);
 	}
-
-	_disk_reader->reset_tracker ();
 }
 
 void
-MidiTrack::non_realtime_locate (samplepos_t pos)
+MidiTrack::non_realtime_locate (samplepos_t spos)
 {
-	Track::non_realtime_locate(pos);
+	timepos_t pos (spos);
 
-	boost::shared_ptr<MidiPlaylist> playlist = _disk_writer->midi_playlist();
+	Track::non_realtime_locate (spos);
+
+	std::shared_ptr<MidiPlaylist> playlist = _disk_writer->midi_playlist();
 	if (!playlist) {
 		return;
 	}
 
 	/* Get the top unmuted region at this position. */
-	boost::shared_ptr<MidiRegion> region = boost::dynamic_pointer_cast<MidiRegion>(
-		playlist->top_unmuted_region_at(pos));
+	std::shared_ptr<MidiRegion> region = std::dynamic_pointer_cast<MidiRegion> (playlist->top_unmuted_region_at (pos));
+
 	if (!region) {
 		return;
 	}
@@ -385,16 +448,25 @@ MidiTrack::non_realtime_locate (samplepos_t pos)
 	}
 
 	/* Update track controllers based on its "automation". */
-	const samplepos_t     origin = region->position() - region->start();
-	BeatsSamplesConverter bfc(_session.tempo_map(), origin);
+	const timepos_t pos_beats = timepos_t (region->source_position().distance (pos).beats ()); /* relative to source start */
+
 	for (Controls::const_iterator c = _controls.begin(); c != _controls.end(); ++c) {
-		boost::shared_ptr<MidiTrack::MidiControl> tcontrol;
-		boost::shared_ptr<Evoral::Control>        rcontrol;
-		if ((tcontrol = boost::dynamic_pointer_cast<MidiTrack::MidiControl>(c->second)) &&
+
+		std::shared_ptr<AutomationControl> ac = std::dynamic_pointer_cast<AutomationControl> (c->second);
+
+		if (!ac->automation_playback()) {
+			continue;
+		}
+
+		std::shared_ptr<MidiTrack::MidiControl> tcontrol;
+		std::shared_ptr<Evoral::Control>        rcontrol;
+
+		if ((tcontrol = std::dynamic_pointer_cast<MidiTrack::MidiControl>(c->second)) &&
+
 		    (rcontrol = region->control(tcontrol->parameter()))) {
-			const Temporal::Beats pos_beats = bfc.from(pos - origin);
+
 			if (rcontrol->list()->size() > 0) {
-				tcontrol->set_value(rcontrol->list()->eval(pos_beats.to_double()), Controllable::NoGroup);
+				tcontrol->set_value(rcontrol->list()->eval(pos_beats), Controllable::NoGroup);
 			}
 		}
 	}
@@ -403,9 +475,8 @@ MidiTrack::non_realtime_locate (samplepos_t pos)
 void
 MidiTrack::push_midi_input_to_step_edit_ringbuffer (samplecnt_t nframes)
 {
-	PortSet& ports (_input->ports());
-
-	for (PortSet::iterator p = ports.begin(DataType::MIDI); p != ports.end(DataType::MIDI); ++p) {
+	std::shared_ptr<PortSet> ports (_input->ports());
+	for (PortSet::iterator p = ports->begin (DataType::MIDI); p != ports->end (DataType::MIDI); ++p) {
 
 		Buffer& b (p->get_buffer (nframes));
 		const MidiBuffer* const mb = dynamic_cast<MidiBuffer*>(&b);
@@ -419,7 +490,7 @@ MidiTrack::push_midi_input_to_step_edit_ringbuffer (samplecnt_t nframes)
 			   elsewhere
 			*/
 
-			if (ev.is_note_on()) {
+			if (ev.is_note ()) {
 				/* we don't care about the time for this purpose */
 				_step_edit_ring_buffer.write (0, ev.event_type(), ev.size(), ev.buffer());
 			}
@@ -432,24 +503,45 @@ MidiTrack::snapshot_out_of_band_data (samplecnt_t nframes)
 {
 	_immediate_event_buffer.clear ();
 	if (0 == _immediate_events.read_space()) {
-		return;
+		goto user;
 	}
 
 	assert (nframes > 0);
 
-	DEBUG_TRACE (DEBUG::MidiIO, string_compose ("%1 has %2 of immediate events to deliver\n",
-				name(), _immediate_events.read_space()));
+	DEBUG_TRACE (DEBUG::MidiIO, string_compose ("%1 has %2 of immediate events to deliver\n", name(), _immediate_events.read_space()));
 
 	/* write as many of the immediate events as we can, but give "true" as
 	 * the last argument ("stop on overflow in destination") so that we'll
 	 * ship the rest out next time.
 	 *
-	 * the Port::port_offset() + (nframes-1) argument puts all these events at the last
+	 * the (nframes-1) argument puts all these events at the last
 	 * possible position of the output buffer, so that we do not
-	 * violate monotonicity when writing. Port::port_offset() will
-	 * be non-zero if we're in a split process cycle.
+	 * violate monotonicity when writing.
 	 */
-	_immediate_events.read (_immediate_event_buffer, 0, 1, Port::port_offset() + nframes - 1, true);
+
+	_immediate_events.read (_immediate_event_buffer, 0, 1, nframes - 1, true);
+
+  user:
+	_user_immediate_event_buffer.clear ();
+	if (0 == _user_immediate_events.read_space()) {
+		return;
+	}
+
+	assert (nframes > 0);
+
+	DEBUG_TRACE (DEBUG::MidiIO, string_compose ("%1 has %2 of user immediate events to deliver\n", name(), _user_immediate_events.read_space()));
+
+	/* write as many of the user immediate events as we can, but give "true" as
+	 * the last argument ("stop on overflow in destination") so that we'll
+	 * ship the rest out next time.
+	 *
+	 * the (nframes-1) argument puts all these events at the last
+	 * possible position of the output buffer, so that we do not
+	 * violate monotonicity when writing.
+	 */
+
+	_user_immediate_events.read (_user_immediate_event_buffer, 0, 1, nframes - 1, true);
+
 }
 
 void
@@ -457,16 +549,18 @@ MidiTrack::write_out_of_band_data (BufferSet& bufs, samplecnt_t nframes) const
 {
 	MidiBuffer& buf (bufs.get_midi (0));
 	buf.merge_from (_immediate_event_buffer, nframes);
+	buf.merge_from (_user_immediate_event_buffer, nframes);
 }
 
 int
 MidiTrack::export_stuff (BufferSet&                   buffers,
-                         samplepos_t                   start,
-                         samplecnt_t                   nframes,
-                         boost::shared_ptr<Processor> endpoint,
+                         samplepos_t                  start,
+                         samplecnt_t                  nframes,
+                         std::shared_ptr<Processor> endpoint,
                          bool                         include_endpoint,
                          bool                         for_export,
-                         bool                         for_freeze)
+                         bool                         for_freeze,
+                         MidiNoteTracker&            tracker)
 {
 	if (buffers.count().n_midi() == 0) {
 		return -1;
@@ -474,36 +568,51 @@ MidiTrack::export_stuff (BufferSet&                   buffers,
 
 	Glib::Threads::RWLock::ReaderLock rlock (_processor_lock);
 
-	boost::shared_ptr<MidiPlaylist> mpl = _disk_writer->midi_playlist();
+	std::shared_ptr<MidiPlaylist> mpl = _disk_writer->midi_playlist();
 	if (!mpl) {
 		return -2;
 	}
 
 	buffers.get_midi(0).clear();
-	if (mpl->read(buffers.get_midi(0), start, nframes, 0) != nframes) {
-		return -1;
+
+	/* Can't use a note tracker here, because the note off's might be in a
+	 * subsequent call
+	 */
+
+	MidiNoteTracker ignored;
+
+	/* XXX this doesn't fail, other than if the lock cannot be obtained */
+	mpl->rendered()->read (buffers.get_midi(0), start, start+nframes, ignored, start);
+
+	MidiBuffer& buf = buffers.get_midi(0);
+
+	if (endpoint && !for_export) {
+		for (MidiBuffer::iterator i = buf.begin(); i != buf.end(); ++i) {
+			MidiBuffer::TimeType *t = i.timeptr ();
+			*t -= start;
+		}
+		bounce_process (buffers, start, nframes, endpoint, include_endpoint, for_export, for_freeze);
 	}
 
-	//bounce_process (buffers, start, nframes, endpoint, include_endpoint, for_export, for_freeze);
+	/* Add to tracker so that we can resolve at the end of the export (in Session::write_one_track()) */
+
+	for (MidiBuffer::iterator i = buf.begin(); i != buf.end(); ++i) {
+		tracker.track (*i);
+	}
 
 	return 0;
 }
 
-boost::shared_ptr<Region>
-MidiTrack::bounce (InterThreadInfo& itt)
+bool
+MidiTrack::bounceable (std::shared_ptr<Processor> endpoint, bool include_endpoint) const
 {
-	return bounce_range (_session.current_start_sample(), _session.current_end_sample(), itt, main_outs(), false);
-}
-
-boost::shared_ptr<Region>
-MidiTrack::bounce_range (samplepos_t                   start,
-                         samplepos_t                   end,
-                         InterThreadInfo&             itt,
-                         boost::shared_ptr<Processor> endpoint,
-                         bool                         include_endpoint)
-{
-	vector<boost::shared_ptr<Source> > srcs;
-	return _session.write_one_track (*this, start, end, false, srcs, itt, endpoint, include_endpoint, false, false);
+	if (!endpoint && !include_endpoint) {
+		/* no processing - just read from the playlist and create new
+		 * files: always possible.
+		 */
+		return true;
+	}
+	return false; // a lie, Session::write_one_track can handle this.
 }
 
 void
@@ -539,24 +648,34 @@ MidiTrack::midi_panic()
 	DEBUG_TRACE (DEBUG::MidiIO, string_compose ("%1 delivers panic data\n", name()));
 	for (uint8_t channel = 0; channel <= 0xF; channel++) {
 		uint8_t ev[3] = { ((uint8_t) (MIDI_CMD_CONTROL | channel)), ((uint8_t) MIDI_CTL_SUSTAIN), 0 };
-		write_immediate_event(3, ev);
+		write_immediate_event (Evoral::MIDI_EVENT, 3, ev);
 		ev[1] = MIDI_CTL_ALL_NOTES_OFF;
-		write_immediate_event(3, ev);
+		write_immediate_event (Evoral::MIDI_EVENT, 3, ev);
 		ev[1] = MIDI_CTL_RESET_CONTROLLERS;
-		write_immediate_event(3, ev);
+		write_immediate_event (Evoral::MIDI_EVENT, 3, ev);
 	}
 }
 
 /** \return true on success, false on failure (no buffer space left)
  */
 bool
-MidiTrack::write_immediate_event(size_t size, const uint8_t* buf)
+MidiTrack::write_immediate_event(Evoral::EventType event_type, size_t size, const uint8_t* buf)
 {
 	if (!Evoral::midi_event_is_valid(buf, size)) {
 		cerr << "WARNING: Ignoring illegal immediate MIDI event" << endl;
 		return false;
 	}
-	return (_immediate_events.write (0, Evoral::MIDI_EVENT, size, buf) == size);
+	return (_immediate_events.write (0, event_type, size, buf) == size);
+}
+
+bool
+MidiTrack::write_user_immediate_event(Evoral::EventType event_type, size_t size, const uint8_t* buf)
+{
+	if (!Evoral::midi_event_is_valid(buf, size)) {
+		cerr << "WARNING: Ignoring illegal immediate MIDI event" << endl;
+		return false;
+	}
+	return (_user_immediate_events.write (0, event_type, size, buf) == size);
 }
 
 void
@@ -607,8 +726,14 @@ MidiTrack::MidiControl::actually_set_value (double val, PBD::Controllable::Group
 		return;
 	}
 
+	if (_session.loading ()) {
+		/* send events later in MidiTrack::restore_controls */
+		AutomationControl::actually_set_value (val, group_override);
+		return;
+	}
+
 	assert(val <= desc.upper);
-	if ( ! _list || ! automation_playback()) {
+	if (!_list || !automation_playback ()) {
 		size_t size = 3;
 		uint8_t ev[3] = { parameter.channel(), uint8_t (val), 0 };
 		switch(parameter.type()) {
@@ -646,7 +771,7 @@ MidiTrack::MidiControl::actually_set_value (double val, PBD::Controllable::Group
 			size = 0;
 			assert(false);
 		}
-		_route->write_immediate_event(size,  ev);
+		_route->write_immediate_event(Evoral::LIVE_MIDI_EVENT, size, ev);
 	}
 
 	AutomationControl::actually_set_value(val, group_override);
@@ -655,7 +780,7 @@ MidiTrack::MidiControl::actually_set_value (double val, PBD::Controllable::Group
 void
 MidiTrack::set_step_editing (bool yn)
 {
-	if (_session.record_status() != Session::Disabled) {
+	if (_session.record_status() != Disabled) {
 		return;
 	}
 
@@ -665,7 +790,7 @@ MidiTrack::set_step_editing (bool yn)
 	}
 }
 
-boost::shared_ptr<SMFSource>
+std::shared_ptr<SMFSource>
 MidiTrack::write_source (uint32_t)
 {
 	return _disk_writer->midi_write_source ();
@@ -703,10 +828,26 @@ MidiTrack::set_capture_channel_mask (uint16_t mask)
 	}
 }
 
-boost::shared_ptr<MidiPlaylist>
+std::shared_ptr<MidiPlaylist>
 MidiTrack::midi_playlist ()
 {
-	return boost::dynamic_pointer_cast<MidiPlaylist> (_playlists[DataType::MIDI]);
+	return std::dynamic_pointer_cast<MidiPlaylist> (_playlists[DataType::MIDI]);
+}
+
+void
+MidiTrack::set_restore_pgm_on_load (bool yn)
+{
+	if (_restore_pgm_on_load == yn) {
+		return;
+	}
+	_restore_pgm_on_load = yn;
+	_session.set_dirty();
+}
+
+bool
+MidiTrack::restore_pgm_on_load () const
+{
+	return _restore_pgm_on_load;
 }
 
 bool
@@ -732,10 +873,9 @@ MidiTrack::map_input_active (bool yn)
 		return;
 	}
 
-	PortSet& ports (_input->ports());
-
-	for (PortSet::iterator p = ports.begin(DataType::MIDI); p != ports.end(DataType::MIDI); ++p) {
-		boost::shared_ptr<MidiPort> mp = boost::dynamic_pointer_cast<MidiPort> (*p);
+	std::shared_ptr<PortSet> ports (_input->ports());
+	for (PortSet::iterator p = ports->begin (DataType::MIDI); p != ports->end (DataType::MIDI); ++p) {
+		std::shared_ptr<MidiPort> mp = std::dynamic_pointer_cast<MidiPort> (*p);
 		if (yn != mp->input_active()) {
 			mp->set_input_active (yn);
 		}
@@ -750,7 +890,7 @@ MidiTrack::track_input_active (IOChange change, void* /* src */)
 	}
 }
 
-boost::shared_ptr<MidiBuffer>
+std::shared_ptr<MidiBuffer>
 MidiTrack::get_gui_feed_buffer () const
 {
 	return _disk_writer->get_gui_feed_buffer ();
@@ -775,24 +915,18 @@ MidiTrack::act_on_mute ()
 
 	if (muted() || _mute_master->muted_by_others_soloing_at (MuteMaster::AllPoints)) {
 		/* only send messages for channels we are using */
-
-		uint16_t mask = _playback_filter.get_channel_mask();
-
-		for (uint8_t channel = 0; channel <= 0xF; channel++) {
-
-			if ((1<<channel) & mask) {
-
-				DEBUG_TRACE (DEBUG::MidiIO, string_compose ("%1 delivers mute message to channel %2\n", name(), channel+1));
-				uint8_t ev[3] = { ((uint8_t) (MIDI_CMD_CONTROL | channel)), MIDI_CTL_SUSTAIN, 0 };
-				write_immediate_event (3, ev);
-
-				/* Note we do not send MIDI_CTL_ALL_NOTES_OFF here, since this may
-				   silence notes that came from another non-muted track. */
+		foreach_processor ([this](std::weak_ptr<Processor> p) {
+			std::shared_ptr<Delivery> delivery = std::dynamic_pointer_cast<Delivery> (p.lock());
+			if (delivery) {
+				delivery->set_midi_mute_mask (_playback_filter.get_channel_mask());
 			}
-		}
+		});
 
 		/* Resolve active notes. */
-		_disk_reader->resolve_tracker(_immediate_events, Port::port_offset());
+
+		if (!the_instrument()) {
+			_disk_reader->resolve_tracker (_immediate_events, 0);
+		}
 	}
 }
 
@@ -805,10 +939,8 @@ MidiTrack::monitoring_changed (bool self, Controllable::GroupControlDisposition 
 	 * port level.
 	 */
 
-	PortSet& ports (_output->ports());
-
-	for (PortSet::iterator p = ports.begin(); p != ports.end(); ++p) {
-		boost::shared_ptr<MidiPort> mp = boost::dynamic_pointer_cast<MidiPort> (*p);
+	for (auto const& p : *_output->ports()) {
+		std::shared_ptr<MidiPort> mp = std::dynamic_pointer_cast<MidiPort> (p);
 		if (mp) {
 			mp->require_resolve ();
 		}
@@ -822,20 +954,28 @@ MidiTrack::monitoring_state () const
 {
 	MonitorState ms = Track::monitoring_state();
 	if (ms == MonitoringSilence) {
+		/* MIDI always monitor input as fallback */
 		return MonitoringInput;
 	}
 	return ms;
-}
-
-MonitorState
-MidiTrack::get_auto_monitoring_state () const
-{
-	//if we are a midi track,  we ignore auto_input, tape_mode, etc etc.  "Auto" will monitor Disk+In
-	return MonitoringCue;
 }
 
 void
 MidiTrack::filter_input (BufferSet& bufs)
 {
 	_capture_filter.filter (bufs);
+}
+
+void
+MidiTrack::realtime_handle_transport_stopped ()
+{
+	Route::realtime_handle_transport_stopped ();
+	_disk_reader->resolve_tracker (_immediate_events, 0);
+	_disk_reader->resolve_tracker (_user_immediate_events, 0);
+}
+
+void
+MidiTrack::playlist_contents_changed ()
+
+{
 }

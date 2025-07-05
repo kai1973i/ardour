@@ -1,23 +1,25 @@
 /*
-    Copyright (C) 2001, 2007 Paul Davis
+ * Copyright (C) 2007-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __ardour_automation_streamview_h__
-#define __ardour_automation_streamview_h__
+#pragma once
 
 #include <list>
 #include <cmath>
@@ -49,7 +51,7 @@ public:
 
 	void redisplay_track ();
 
-	inline double contents_height() const {
+	int contents_height() const {
 		return (_trackview.current_height() - TimeAxisViewItem::NAME_HIGHLIGHT_SIZE - 2);
 	}
 
@@ -60,21 +62,21 @@ public:
 
 	void clear ();
 
-	void get_selectables (ARDOUR::samplepos_t, ARDOUR::samplepos_t, double, double, std::list<Selectable*> &, bool within = false);
+	void _get_selectables (Temporal::timepos_t const &, Temporal::timepos_t const &, double, double, std::list<Selectable*> &, bool within);
 	void set_selected_points (PointSelection &);
 
-	std::list<boost::shared_ptr<AutomationLine> > get_lines () const;
+	std::list<std::shared_ptr<AutomationLine> > get_lines () const;
 
-	bool paste (samplepos_t                                pos,
+	bool paste (Temporal::timepos_t const &               pos,
 	            unsigned                                  paste_count,
 	            float                                     times,
-	            boost::shared_ptr<ARDOUR::AutomationList> list);
+	            std::shared_ptr<ARDOUR::AutomationList> list);
 
 private:
 	void setup_rec_box ();
 
-	RegionView* add_region_view_internal (boost::shared_ptr<ARDOUR::Region>, bool wait_for_data, bool recording = false);
-	void        display_region(AutomationRegionView* region_view);
+	RegionView* add_region_view_internal (std::shared_ptr<ARDOUR::Region>, bool wait_for_data, bool recording = false);
+	void        display_region (RegionView* region_view);
 
 	void color_handler ();
 
@@ -83,4 +85,3 @@ private:
 	ARDOUR::AutoState _pending_automation_state;
 };
 
-#endif /* __ardour_automation_streamview_h__ */

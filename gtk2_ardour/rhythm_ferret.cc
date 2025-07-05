@@ -1,23 +1,26 @@
 /*
-    Copyright (C) 2012 Paul Davis
+ * Copyright (C) 2008-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2008-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 #include <gtkmm2ext/utils.h>
 
 #include "pbd/memento_command.h"
@@ -228,7 +231,9 @@ RhythmFerret::run_analysis ()
 
 	clear_transients ();
 
-	regions_with_transients = editor.get_selection().regions;
+	for (auto const& rv : editor.get_selection().regions) {
+		regions_with_transients.push_back (rv->region ());
+	}
 
 	current_results.clear ();
 
@@ -236,28 +241,28 @@ RhythmFerret::run_analysis ()
 		return;
 	}
 
-	for (RegionSelection::iterator i = regions_with_transients.begin(); i != regions_with_transients.end(); ++i) {
+	for (auto const& r : regions_with_transients) {
 
-		boost::shared_ptr<Readable> rd = boost::static_pointer_cast<AudioRegion> ((*i)->region());
+		std::shared_ptr<AudioReadable> rd = std::static_pointer_cast<AudioRegion> (r);
 
 		switch (get_analysis_mode()) {
 		case PercussionOnset:
-			run_percussion_onset_analysis (rd, (*i)->region()->position(), current_results);
+			run_percussion_onset_analysis (rd, r->position_sample(), current_results);
 			break;
 		case NoteOnset:
-			run_note_onset_analysis (rd, (*i)->region()->position(), current_results);
+			run_note_onset_analysis (rd, r->position_sample(), current_results);
 			break;
 		default:
 			break;
 		}
 
-		(*i)->region()->set_onsets (current_results);
+		r->set_onsets (current_results);
 		current_results.clear();
 	}
 }
 
 int
-RhythmFerret::run_percussion_onset_analysis (boost::shared_ptr<Readable> readable, sampleoffset_t /*offset*/, AnalysisFeatureList& results)
+RhythmFerret::run_percussion_onset_analysis (std::shared_ptr<AudioReadable> readable, sampleoffset_t /*offset*/, AnalysisFeatureList& results)
 {
 	try {
 		TransientDetector t (_session->sample_rate());
@@ -312,7 +317,7 @@ RhythmFerret::get_note_onset_function ()
 }
 
 int
-RhythmFerret::run_note_onset_analysis (boost::shared_ptr<Readable> readable, sampleoffset_t /*offset*/, AnalysisFeatureList& results)
+RhythmFerret::run_note_onset_analysis (std::shared_ptr<AudioReadable> readable, sampleoffset_t /*offset*/, AnalysisFeatureList& results)
 {
 	try {
 		OnsetDetector t (_session->sample_rate());
@@ -445,8 +450,8 @@ RhythmFerret::clear_transients ()
 {
 	current_results.clear ();
 
-	for (RegionSelection::iterator i = regions_with_transients.begin(); i != regions_with_transients.end(); ++i) {
-		(*i)->region()->set_onsets (current_results);
+	for (auto const& r : regions_with_transients) {
+		r->set_onsets (current_results);
 	}
 
 	regions_with_transients.clear ();

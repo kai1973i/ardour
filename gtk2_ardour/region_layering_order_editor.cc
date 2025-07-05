@@ -1,25 +1,27 @@
 /*
-    Copyright (C) 2011-2012 Paul Davis
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/table.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/alignment.h>
+#include <ytkmm/table.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/alignment.h>
 
 #include "pbd/stateful_diff_command.h"
 
@@ -133,7 +135,7 @@ RegionLayeringOrderEditor::row_selected ()
 	/* XXX this should be reversible, really */
 
 	for (vector<RegionView*>::iterator i = eq.begin(); i != eq.end(); ++i) {
-		boost::shared_ptr<Playlist> pl = (*i)->region()->playlist();
+		std::shared_ptr<Playlist> pl = (*i)->region()->playlist();
 		if (pl) {
 			pl->raise_region_to_top ((*i)->region());
 		}
@@ -186,7 +188,7 @@ RegionLayeringOrderEditor::refill ()
 }
 
 void
-RegionLayeringOrderEditor::set_context (const string& a_name, Session* s, TimeAxisView* tav, boost::shared_ptr<Playlist> pl, samplepos_t pos)
+RegionLayeringOrderEditor::set_context (const string& a_name, Session* s, TimeAxisView* tav, std::shared_ptr<Playlist> pl, timepos_t const & pos)
 {
 	track_name_label.set_text (a_name);
 
@@ -194,7 +196,7 @@ RegionLayeringOrderEditor::set_context (const string& a_name, Session* s, TimeAx
 	clock.set (pos, true);
 
 	playlist_modified_connection.disconnect ();
-	pl->ContentsChanged.connect (playlist_modified_connection, invalidator (*this), boost::bind
+	pl->ContentsChanged.connect (playlist_modified_connection, invalidator (*this), std::bind
 				     (&RegionLayeringOrderEditor::playlist_modified, this), gui_context());
 
 	_time_axis_view = tav;

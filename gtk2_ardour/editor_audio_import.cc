@@ -1,21 +1,27 @@
 /*
-    Copyright (C) 2000-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2007 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013-2014 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2015-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -26,6 +32,7 @@
 
 #include <sndfile.h>
 
+#include "pbd/integer_division.h"
 #include "pbd/pthread_utils.h"
 #include "pbd/basename.h"
 #include "pbd/shortpath.h"
@@ -43,21 +50,24 @@
 #include "ardour/region_factory.h"
 #include "ardour/smf_source.h"
 #include "ardour/source_factory.h"
+#include "ardour/triggerbox.h"
 #include "ardour/utils.h"
 #include "pbd/memento_command.h"
 
+#include "ardour_message.h"
 #include "ardour_ui.h"
-#include "cursor_context.h"
 #include "editor.h"
 #include "sfdb_ui.h"
 #include "editing.h"
 #include "audio_time_axis.h"
 #include "midi_time_axis.h"
 #include "session_import_dialog.h"
+#include "tempo_map_change.h"
 #include "gui_thread.h"
 #include "interthread_progress_window.h"
 #include "mouse_cursors.h"
 #include "editor_cursors.h"
+#include "utils.h"
 
 #include "pbd/i18n.h"
 
@@ -67,6 +77,8 @@ using namespace PBD;
 using namespace Gtk;
 using namespace Gtkmm2ext;
 using namespace Editing;
+using namespace Temporal;
+
 using std::string;
 
 /* Functions supporting the incorporation of external (non-captured) audio material into ardour */
@@ -75,7 +87,7 @@ void
 Editor::add_external_audio_action (ImportMode mode_hint)
 {
 	if (_session == 0) {
-		MessageDialog msg (_("You can't import or embed an audiofile until you have a session loaded."));
+		ArdourMessageDialog msg (_("You can't import or embed an audiofile until you have a session loaded."));
 		msg.run ();
 		return;
 	}
@@ -97,7 +109,7 @@ Editor::external_audio_dialog ()
 	uint32_t midi_track_cnt;
 
 	if (_session == 0) {
-		MessageDialog msg (_("You can't import or embed an audiofile until you have a session loaded."));
+		ArdourMessageDialog msg (_("You can't import or embed an audiofile until you have a session loaded."));
 		msg.run ();
 		return;
 	}
@@ -140,7 +152,7 @@ Editor::session_import_dialog ()
 	dialog.run ();
 }
 
-typedef std::map<PBD::ID,boost::shared_ptr<ARDOUR::Source> > SourceMap;
+typedef std::map<PBD::ID,std::shared_ptr<ARDOUR::Source> > SourceMap;
 
 /**
  * Updating is still disabled, see note in libs/ardour/import.cc Session::import_files()
@@ -178,7 +190,7 @@ Editor::check_whether_and_how_to_import(string path, bool all_or_nothing)
 			message = string_compose (_("The session already contains a source file named %1.  Do you want to import %2 as a new source, or skip it?"), wave_name, wave_name);
 
 		}
-		MessageDialog dialog(message, false, Gtk::MESSAGE_QUESTION, Gtk::BUTTONS_NONE, true);
+		ArdourMessageDialog dialog(message, false, Gtk::MESSAGE_QUESTION, Gtk::BUTTONS_NONE, true);
 
 		if (all_or_nothing) {
 			// disabled
@@ -192,17 +204,14 @@ Editor::check_whether_and_how_to_import(string path, bool all_or_nothing)
 
 		//dialog.add_button("Skip all", 4); // All or rest?
 
-		dialog.show();
-
 		function = dialog.run ();
-
 		dialog.hide();
 	}
 
 	return function;
 }
 
-boost::shared_ptr<AudioTrack>
+std::shared_ptr<AudioTrack>
 Editor::get_nth_selected_audio_track (int nth) const
 {
 	AudioTimeAxisView* atv;
@@ -226,13 +235,13 @@ Editor::get_nth_selected_audio_track (int nth) const
 	}
 
 	if (!atv || !atv->is_audio_track()) {
-		return boost::shared_ptr<AudioTrack>();
+		return std::shared_ptr<AudioTrack>();
 	}
 
 	return atv->audio_track();
 }
 
-boost::shared_ptr<MidiTrack>
+std::shared_ptr<MidiTrack>
 Editor::get_nth_selected_midi_track (int nth) const
 {
 	MidiTimeAxisView* mtv;
@@ -256,95 +265,93 @@ Editor::get_nth_selected_midi_track (int nth) const
 	}
 
 	if (!mtv || !mtv->is_midi_track()) {
-		return boost::shared_ptr<MidiTrack>();
+		return std::shared_ptr<MidiTrack>();
 	}
 
 	return mtv->midi_track();
 }
 
 void
-Editor::import_smf_tempo_map (Evoral::SMF const & smf, samplepos_t pos)
+Editor::import_smf_tempo_map (Evoral::SMF const & smf, timepos_t const & pos)
 {
 	if (!_session) {
 		return;
 	}
 
-	const size_t num_tempos = smf.num_tempos ();
+	bool provided;
+	TempoMap::WritableSharedPtr new_map (smf.tempo_map (provided));
 
-	if (num_tempos == 0) {
+	if (!provided) {
 		return;
 	}
 
-	const samplecnt_t sample_rate = _session->sample_rate ();
-	TempoMap new_map (sample_rate);
-	Meter last_meter (4.0, 4.0);
-	bool have_initial_meter = false;
+	TempoMap::WritableSharedPtr wmap = TempoMap::write_copy ();
+	TempoMapCutBuffer* tmcb;
+	// XMLNode& tm_before (wmap->get_state());
 
-	for (size_t n = 0; n < num_tempos; ++n) {
+	tmcb = new_map->copy (timepos_t (0), timepos_t::max (Temporal::AudioTime));
 
-		Evoral::SMF::Tempo* t = smf.nth_tempo (n);
-		assert (t);
-
-		Tempo tempo (t->tempo(), 32.0 / (double) t->notes_per_note);
-		Meter meter (t->numerator, t->denominator);
-		Timecode::BBT_Time bbt; /* 1|1|0 which is correct for the no-meter case */
-
-		if (have_initial_meter) {
-			new_map.add_tempo (tempo, t->time_pulses/ (double)smf.ppqn() / 4.0, 0, MusicTime);
-			if (!(meter == last_meter)) {
-				bbt = new_map.bbt_at_quarter_note (t->time_pulses/(double)smf.ppqn());
-				new_map.add_meter (meter, bbt, 0, MusicTime);
-			}
-
-		} else {
-			new_map.replace_meter (new_map.meter_section_at_sample (0), meter, bbt, pos, AudioTime);
-			new_map.replace_tempo (new_map.tempo_section_at_sample (0), tempo, 0.0, pos, AudioTime);
-			have_initial_meter = true;
-
-		}
-
-		last_meter = meter;
-
-		cerr << "@ " << t->time_pulses/(double)smf.ppqn() << " ("
-		     << t->time_seconds << ") Add T " << tempo << " M " << meter << endl;
+	if (tmcb && !tmcb->empty()) {
+		wmap->paste (*tmcb, pos, false, _("import"));
+		TempoMap::update (wmap);
+		delete tmcb;
+		// XMLNode& tm_after (wmap->get_state());
+		// _session->add_command (new TempoCommand (_("cut tempo map"), &tm_before, &tm_after));
+	} else {
+		// delete &tm_before;
+		TempoMap::abort_update ();
 	}
-
-	cerr << "NEW MAP:\n";
-	new_map.dump (cerr);
-
-	_session->tempo_map() = new_map;
 }
 
 void
-Editor::do_import (vector<string>        paths,
-                   ImportDisposition     disposition,
-                   ImportMode            mode,
-                   SrcQuality            quality,
-                   MidiTrackNameSource   midi_track_name_source,
-                   MidiTempoMapDisposition smf_tempo_disposition,
-                   samplepos_t&           pos,
-                   ARDOUR::PluginInfoPtr instrument)
+Editor::do_import (vector<string>           paths,
+                   ImportDisposition        disposition,
+                   ImportMode               mode,
+                   SrcQuality               quality,
+                   MidiTrackNameSource      midi_track_name_source,
+                   MidiTempoMapDisposition  smf_tempo_disposition,
+                   timepos_t&               pos,
+                   ARDOUR::PluginInfoPtr    instrument,
+                   std::shared_ptr<Track> track,
+                   bool                     with_markers)
 {
-	boost::shared_ptr<Track> track;
 	vector<string> to_import;
 	int nth = 0;
-	bool use_timestamp = (pos == -1);
+	bool use_timestamp = (pos == timepos_t::max (pos.time_domain()));
+	std::string const& pgroup_id = Playlist::generate_pgroup_id ();
+
+	/* XXX nutempo2: we will import markers using music (beat) time, which
+	   will make any imported tempo map irrelevant. Not doing that (in 6.7,
+	   before nutempo2) is much more complicated because we don't know
+	   which file may have the tempo map, and if we're importing that
+	   it will change the marker positions. So for now, there's an implicit
+	   limitation that if you import more than 1 MIDI file and the first
+	   has markers but the second has the tempo map, the markers could be
+	   in the wrong position.
+	*/
 
 	if (smf_tempo_disposition == SMFTempoUse) {
-		/* Find the first MIDI file with a tempo map, and import it
-		   before we do anything else.
-		*/
+
+		bool tempo_map_done = false;
 
 		for (vector<string>::iterator a = paths.begin(); a != paths.end(); ++a) {
+
 			Evoral::SMF smf;
-			if (smf.open (*a)) {
+
+			if (smf.open (*a, 1, false)) {
 				continue;
 			}
-			if (smf.num_tempos() > 0) {
-				import_smf_tempo_map (smf, pos);
-				smf.close ();
-				break;
+
+			/* Find the first MIDI file with a tempo map, and import it
+			   before we do anything else.
+			*/
+			if (!tempo_map_done && smf_tempo_disposition == SMFTempoUse) {
+				if (smf.num_tempos() > 0) {
+					import_smf_tempo_map (smf, pos);
+					tempo_map_done = true;
+				}
 			}
+
 			smf.close ();
 		}
 	}
@@ -356,8 +363,6 @@ Editor::do_import (vector<string>        paths,
 	import_status.midi_track_name_source = midi_track_name_source;
 
 	ImportProgressWindow ipw (&import_status, _("Import"), _("Cancel Import"));
-
-	bool ok = true;
 
 	if (disposition == Editing::ImportMergeFiles) {
 
@@ -374,19 +379,17 @@ Editor::do_import (vector<string>        paths,
 			}
 		}
 
-		if (cancel) {
-			ok = false;
-		} else {
+		if (!cancel) {
 			ipw.show ();
-			ok = (import_sndfiles (paths, disposition, mode, quality, pos, 1, 1, track, false, instrument) == 0);
-			import_status.sources.clear();
+			import_sndfiles (paths, disposition, mode, quality, pos, 1, 1, track, pgroup_id, false, with_markers, instrument);
+			import_status.clear();
 		}
 
 	} else {
 
 		bool replace = false;
 
-		for (vector<string>::iterator a = paths.begin(); a != paths.end(); ++a) {
+		for (vector<string>::iterator a = paths.begin(); a != paths.end() && !import_status.cancel; ++a) {
 
 			const int check = check_whether_and_how_to_import (*a, true);
 
@@ -409,7 +412,7 @@ Editor::do_import (vector<string>        paths,
 			/* have to reset this for every file we handle */
 
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			ipw.show ();
@@ -424,8 +427,8 @@ Editor::do_import (vector<string>        paths,
 					track = get_nth_selected_audio_track (nth++);
 				}
 
-				ok = (import_sndfiles (to_import, disposition, mode, quality, pos, 1, -1, track, replace, instrument) == 0);
-				import_status.sources.clear();
+				import_sndfiles (to_import, disposition, mode, quality, pos, 1, -1, track, pgroup_id, replace, with_markers, instrument);
+				import_status.clear();
 				break;
 
 			case Editing::ImportDistinctChannels:
@@ -433,8 +436,8 @@ Editor::do_import (vector<string>        paths,
 				to_import.clear ();
 				to_import.push_back (*a);
 
-				ok = (import_sndfiles (to_import, disposition, mode, quality, pos, -1, -1, track, replace, instrument) == 0);
-				import_status.sources.clear();
+				import_sndfiles (to_import, disposition, mode, quality, pos, -1, -1, track, pgroup_id, replace, with_markers, instrument);
+				import_status.clear();
 				break;
 
 			case Editing::ImportSerializeFiles:
@@ -442,8 +445,8 @@ Editor::do_import (vector<string>        paths,
 				to_import.clear ();
 				to_import.push_back (*a);
 
-				ok = (import_sndfiles (to_import, disposition, mode, quality, pos, 1, 1, track, replace, instrument) == 0);
-				import_status.sources.clear();
+				import_sndfiles (to_import, disposition, mode, quality, pos, 1, 1, track, pgroup_id, replace, with_markers, instrument);
+				import_status.clear();
 				break;
 
 			case Editing::ImportMergeFiles:
@@ -453,23 +456,23 @@ Editor::do_import (vector<string>        paths,
 		}
 	}
 
-	if (ok) {
-		_session->save_state ("");
-	}
-
 	import_status.all_done = true;
 }
 
 void
-Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode mode, samplepos_t& pos, ARDOUR::PluginInfoPtr instrument)
+Editor::do_embed (vector<string>           paths,
+                  ImportDisposition        import_as,
+                  ImportMode               mode,
+                  timepos_t&               pos,
+                  ARDOUR::PluginInfoPtr    instrument,
+                  std::shared_ptr<Track> track)
 {
-	boost::shared_ptr<Track> track;
 	bool check_sample_rate = true;
-	bool ok = false;
 	vector<string> to_embed;
 	bool multi = paths.size() > 1;
 	int nth = 0;
-	bool use_timestamp = (pos == -1);
+	bool use_timestamp = (pos == timepos_t::max (pos.time_domain()));
+	std::string const& pgroup_id = Playlist::generate_pgroup_id ();
 
 	switch (import_as) {
 	case Editing::ImportDistinctFiles:
@@ -477,7 +480,7 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 
 			/* have to reset this for every file we handle */
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			to_embed.clear ();
@@ -487,8 +490,9 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 				track = get_nth_selected_audio_track (nth++);
 			}
 
-			if (embed_sndfiles (to_embed, multi, check_sample_rate, import_as, mode, pos, 1, -1, track, instrument) < -1) {
-				goto out;
+			if (embed_sndfiles (to_embed, multi, check_sample_rate, import_as, mode, pos, 1, -1, track, pgroup_id, instrument) < -1) {
+				/* error, bail out */
+				return;
 			}
 		}
 		break;
@@ -498,21 +502,23 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 
 			/* have to reset this for every file we handle */
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			to_embed.clear ();
 			to_embed.push_back (*a);
 
-			if (embed_sndfiles (to_embed, multi, check_sample_rate, import_as, mode, pos, -1, -1, track, instrument) < -1) {
-				goto out;
+			if (embed_sndfiles (to_embed, multi, check_sample_rate, import_as, mode, pos, -1, -1, track, pgroup_id, instrument) < -1) {
+				/* error, bail out */
+				return;
 			}
 		}
 		break;
 
 	case Editing::ImportMergeFiles:
-		if (embed_sndfiles (paths, multi, check_sample_rate, import_as, mode, pos, 1, 1, track, instrument) < -1) {
-			goto out;
+		if (embed_sndfiles (paths, multi, check_sample_rate, import_as, mode, pos, 1, 1, track, pgroup_id, instrument) < -1) {
+			/* error, bail out */
+			return;
 		}
 		break;
 
@@ -521,24 +527,18 @@ Editor::do_embed (vector<string> paths, ImportDisposition import_as, ImportMode 
 
 			/* have to reset this for every file we handle */
 			if (use_timestamp) {
-				pos = -1;
+				pos = timepos_t::max (pos.time_domain());
 			}
 
 			to_embed.clear ();
 			to_embed.push_back (*a);
 
-			if (embed_sndfiles (to_embed, multi, check_sample_rate, import_as, mode, pos, 1, 1, track, instrument) < -1) {
-				goto out;
+			if (embed_sndfiles (to_embed, multi, check_sample_rate, import_as, mode, pos, 1, 1, track, pgroup_id, instrument) < -1) {
+				/* error, bail out */
+				return;
 			}
 		}
 		break;
-	}
-
-	ok = true;
-
-  out:
-	if (ok) {
-		_session->save_state ("");
 	}
 }
 
@@ -547,20 +547,25 @@ Editor::import_sndfiles (vector<string>            paths,
                          ImportDisposition         disposition,
                          ImportMode                mode,
                          SrcQuality                quality,
-                         samplepos_t&               pos,
+                         timepos_t&                pos,
                          int                       target_regions,
                          int                       target_tracks,
-                         boost::shared_ptr<Track>& track,
+                         std::shared_ptr<Track>& track,
+                         std::string const&        pgroup_id,
                          bool                      replace,
+                         bool                      with_markers,
                          ARDOUR::PluginInfoPtr     instrument)
 {
+	/* skip periodic saves while importing */
+	Session::StateProtector sp (_session);
+
 	import_status.paths = paths;
 	import_status.done = false;
-	import_status.cancel = false;
 	import_status.freeze = false;
 	import_status.quality = quality;
 	import_status.replace_existing_source = replace;
 	import_status.split_midi_channels = (disposition == Editing::ImportDistinctChannels);
+	import_status.import_markers = with_markers;
 
 	import_status.mode = mode;
 	import_status.pos = pos;
@@ -569,8 +574,7 @@ Editor::import_sndfiles (vector<string>            paths,
 	import_status.track = track;
 	import_status.replace = replace;
 
-	CursorContext::Handle cursor_ctx = CursorContext::create(*this, _cursors->wait);
-	gdk_flush ();
+	CursorRAII cr (*this, _cursors->wait);
 
 	/* start import thread for this spec. this will ultimately call Session::import_files()
 	   which, if successful, will add the files as regions to the region list. its up to us
@@ -600,7 +604,7 @@ Editor::import_sndfiles (vector<string>            paths,
 			import_status.mode,
 			import_status.target_regions,
 			import_status.target_tracks,
-			track, false, instrument
+			track, pgroup_id, false, instrument
 			);
 
 		/* update position from results */
@@ -617,19 +621,22 @@ Editor::embed_sndfiles (vector<string>            paths,
                         bool&                     check_sample_rate,
                         ImportDisposition         disposition,
                         ImportMode                mode,
-                        samplepos_t&               pos,
+                        timepos_t&              pos,
                         int                       target_regions,
                         int                       target_tracks,
-                        boost::shared_ptr<Track>& track,
+                        std::shared_ptr<Track>& track,
+                        std::string const&        pgroup_id,
                         ARDOUR::PluginInfoPtr     instrument)
 {
-	boost::shared_ptr<AudioFileSource> source;
+	std::shared_ptr<AudioFileSource> source;
 	SourceList sources;
 	string linked_path;
 	SoundFileInfo finfo;
 
-	CursorContext::Handle cursor_ctx = CursorContext::create(*this, _cursors->wait);
-	gdk_flush ();
+	/* skip periodic saves while importing */
+	Session::StateProtector sp (_session);
+
+	CursorRAII cr (*this, _cursors->wait);
 
 	for (vector<string>::iterator p = paths.begin(); p != paths.end(); ++p) {
 
@@ -643,6 +650,12 @@ Editor::embed_sndfiles (vector<string>            paths,
 			return -3;
 		}
 
+		if (!finfo.seekable) {
+			ArdourMessageDialog msg (string_compose (_("%1\nThis audiofile cannot be embedded. It must be imported!"), short_path (path, 40)), false, Gtk::MESSAGE_ERROR);
+			msg.run ();
+			return -2;
+		}
+
 		if (check_sample_rate  && (finfo.samplerate != (int) _session->sample_rate())) {
 			vector<string> choices;
 
@@ -652,7 +665,7 @@ Editor::embed_sndfiles (vector<string>            paths,
 				choices.push_back (_("Embed all without questions"));
 
 				ArdourWidgets::Choice rate_choice (
-					_("Sample rate"),
+					_("Sample Rate"),
 					string_compose (_("%1\nThis audiofile's sample rate doesn't match the session sample rate!"),
 							short_path (path, 40)),
 					choices, false
@@ -678,7 +691,7 @@ Editor::embed_sndfiles (vector<string>            paths,
 				choices.push_back (_("Embed it anyway"));
 
 				ArdourWidgets::Choice rate_choice (
-					_("Sample rate"),
+					_("Sample Rate"),
 					string_compose (_("%1\nThis audiofile's sample rate doesn't match the session sample rate!"), path),
 					choices, false
 					);
@@ -702,19 +715,17 @@ Editor::embed_sndfiles (vector<string>            paths,
 
 				/* check if we have this thing embedded already */
 
-				boost::shared_ptr<Source> s;
+				std::shared_ptr<Source> s;
 
 				if ((s = _session->audio_source_by_path_and_channel (path, n)) == 0) {
 
-					source = boost::dynamic_pointer_cast<AudioFileSource> (
+					source = std::dynamic_pointer_cast<AudioFileSource> (
 						SourceFactory::createExternal (DataType::AUDIO, *_session,
 									       path, n,
-									       (mode == ImportAsTapeTrack
-										? Source::Destructive
-										: Source::Flag (0)),
+						                               Source::Flag (0),
 									true, true));
 				} else {
-					source = boost::dynamic_pointer_cast<AudioFileSource> (s);
+					source = std::dynamic_pointer_cast<AudioFileSource> (s);
 				}
 
 				sources.push_back(source);
@@ -730,7 +741,7 @@ Editor::embed_sndfiles (vector<string>            paths,
 	}
 
 	if (!sources.empty()) {
-		return add_sources (paths, sources, pos, disposition, mode, target_regions, target_tracks, track, true, instrument);
+		return add_sources (paths, sources, pos, disposition, mode, target_regions, target_tracks, track, pgroup_id, true, instrument);
 	}
 
 	return 0;
@@ -739,23 +750,24 @@ Editor::embed_sndfiles (vector<string>            paths,
 int
 Editor::add_sources (vector<string>            paths,
                      SourceList&               sources,
-                     samplepos_t&               pos,
+                     timepos_t&              pos,
                      ImportDisposition         disposition,
                      ImportMode                mode,
                      int                       target_regions,
                      int                       target_tracks,
-                     boost::shared_ptr<Track>& track,
+                     std::shared_ptr<Track>& track,
+                     std::string const&        pgroup_id,
                      bool                      /*add_channel_suffix*/,
                      ARDOUR::PluginInfoPtr     instrument)
 {
-	vector<boost::shared_ptr<Region> > regions;
+	vector<std::shared_ptr<Region> > regions;
 	string region_name;
 	uint32_t input_chan = 0;
 	uint32_t output_chan = 0;
 	bool use_timestamp;
 	vector<string> track_names;
 
-	use_timestamp = (pos == -1);
+	use_timestamp = (pos == timepos_t::max (pos.time_domain()));
 
 	// kludge (for MIDI we're abusing "channel" for "track" here)
 	if (SMFSource::safe_midi_file_extension (paths.front())) {
@@ -776,17 +788,18 @@ Editor::add_sources (vector<string>            paths,
 
 		PropertyList plist;
 
-		plist.add (ARDOUR::Properties::start, 0);
-		plist.add (ARDOUR::Properties::length, sources[0]->length (pos));
+		plist.add (ARDOUR::Properties::start, timecnt_t (sources[0]->type() == DataType::AUDIO ? Temporal::AudioTime : Temporal::BeatTime));
+		plist.add (ARDOUR::Properties::length, sources[0]->length ());
 		plist.add (ARDOUR::Properties::name, region_name);
 		plist.add (ARDOUR::Properties::layer, 0);
 		plist.add (ARDOUR::Properties::whole_file, true);
 		plist.add (ARDOUR::Properties::external, true);
+		plist.add (ARDOUR::Properties::opaque, true);
 
-		boost::shared_ptr<Region> r = RegionFactory::create (sources, plist);
+		std::shared_ptr<Region> r = RegionFactory::create (sources, plist);
 
-		if (use_timestamp && boost::dynamic_pointer_cast<AudioRegion>(r)) {
-			boost::dynamic_pointer_cast<AudioRegion>(r)->special_set_position(sources[0]->natural_position());
+		if (std::dynamic_pointer_cast<AudioRegion>(r)) {
+			std::dynamic_pointer_cast<AudioRegion>(r)->special_set_position(sources[0]->natural_position());
 		}
 
 		regions.push_back (r);
@@ -810,7 +823,7 @@ Editor::add_sources (vector<string>            paths,
 			just_one.clear ();
 			just_one.push_back (*x);
 
-			boost::shared_ptr<FileSource> fs = boost::dynamic_pointer_cast<FileSource> (*x);
+			std::shared_ptr<FileSource> fs = std::dynamic_pointer_cast<FileSource> (*x);
 
 			if (sources.size() > 1 && disposition == ImportDistinctChannels) {
 
@@ -856,26 +869,31 @@ Editor::add_sources (vector<string>            paths,
 			PropertyList plist;
 
 			/* Fudge region length to ensure it is non-zero; make it 1 beat at 120bpm
-			   for want of a better idea.  It can't be too small, otherwise if this
-			   is a MIDI region the conversion from samples -> beats -> samples will
-			   round it back down to 0 again.
+			   for want of a better idea.
 			*/
-			samplecnt_t len = (*x)->length (pos);
-			if (len == 0) {
-				len = (60.0 / 120.0) * _session->sample_rate ();
+			timepos_t len = (*x)->length ();
+			cerr << "for " << (*x)->name() << " source length appears to be " << len << endl;
+			if (len.is_zero()) {
+				if ((*x)->type() == DataType::AUDIO) {
+					len = timepos_t (_session->sample_rate () / 2);
+				} else {
+					len = timepos_t (Beats (1, 0));
+				}
+				cerr << " reset to use " << len << endl;
 			}
 
-			plist.add (ARDOUR::Properties::start, 0);
+			plist.add (ARDOUR::Properties::start, timepos_t ((*x)->type() == DataType::AUDIO ? Temporal::AudioTime : Temporal::BeatTime));
 			plist.add (ARDOUR::Properties::length, len);
 			plist.add (ARDOUR::Properties::name, region_name);
 			plist.add (ARDOUR::Properties::layer, 0);
 			plist.add (ARDOUR::Properties::whole_file, true);
 			plist.add (ARDOUR::Properties::external, true);
+			plist.add (ARDOUR::Properties::opaque, true);
 
-			boost::shared_ptr<Region> r = RegionFactory::create (just_one, plist);
+			std::shared_ptr<Region> r = RegionFactory::create (just_one, plist);
 
-			if (use_timestamp && boost::dynamic_pointer_cast<AudioRegion>(r)) {
-				boost::dynamic_pointer_cast<AudioRegion>(r)->special_set_position((*x)->natural_position());
+			if (std::dynamic_pointer_cast<AudioRegion>(r)) {
+				std::dynamic_pointer_cast<AudioRegion>(r)->special_set_position((*x)->natural_position());
 			}
 
 			regions.push_back (r);
@@ -883,7 +901,7 @@ Editor::add_sources (vector<string>            paths,
 	}
 
 	if (target_regions == 1) {
-		input_chan = regions.front()->n_channels();
+		input_chan = regions.front()->sources().size();
 	} else {
 		if (target_tracks == 1) {
 			input_chan = regions.size();
@@ -892,6 +910,13 @@ Editor::add_sources (vector<string>            paths,
 		}
 	}
 
+#ifdef MIXBUS
+	if (mode == ImportAsTrigger) {
+		/* Mixbus will only ever use stereo tracks when using DnD to import to triggers */
+		input_chan = 2;
+	}
+#endif
+
 	if (Config->get_output_auto_connect() & AutoConnectMaster) {
 		output_chan = (_session->master_out() ? _session->master_out()->n_inputs().n_audio() : input_chan);
 	} else {
@@ -899,7 +924,7 @@ Editor::add_sources (vector<string>            paths,
 	}
 
 	int n = 0;
-	samplepos_t rlen = 0;
+	timecnt_t rlen;
 
 	begin_reversible_command (Operations::insert_file);
 
@@ -909,16 +934,16 @@ Editor::add_sources (vector<string>            paths,
 	 */
 	assert (regions.size() == track_names.size());
 
-	for (vector<boost::shared_ptr<Region> >::iterator r = regions.begin(); r != regions.end(); ++r, ++n) {
-		boost::shared_ptr<AudioRegion> ar = boost::dynamic_pointer_cast<AudioRegion> (*r);
+	for (vector<std::shared_ptr<Region> >::iterator r = regions.begin(); r != regions.end(); ++r, ++n) {
+		std::shared_ptr<AudioRegion> ar = std::dynamic_pointer_cast<AudioRegion> (*r);
 
 		if (use_timestamp) {
 			if (ar) {
 
 				/* get timestamp for this region */
 
-				const boost::shared_ptr<Source> s (ar->sources().front());
-				const boost::shared_ptr<AudioSource> as = boost::dynamic_pointer_cast<AudioSource> (s);
+				const std::shared_ptr<Source> s (ar->sources().front());
+				const std::shared_ptr<AudioSource> as = std::dynamic_pointer_cast<AudioSource> (s);
 
 				assert (as);
 
@@ -941,7 +966,14 @@ Editor::add_sources (vector<string>            paths,
 			}
 		}
 
-		finish_bringing_in_material (*r, input_chan, output_chan, pos, mode, track, track_names[n], instrument);
+		if (track_names.size() > 2 && current_interthread_info) {
+			import_status.current = n;
+			import_status.total = track_names.size ();
+			import_status.progress = 0.5;
+			import_status.doing_what = "Creating Tracks";
+			ARDOUR::GUIIdle ();
+		}
+		finish_bringing_in_material (*r, input_chan, output_chan, pos, mode, track, track_names[n], pgroup_id, instrument);
 
 		rlen = (*r)->length();
 
@@ -967,17 +999,18 @@ Editor::add_sources (vector<string>            paths,
 }
 
 int
-Editor::finish_bringing_in_material (boost::shared_ptr<Region> region,
+Editor::finish_bringing_in_material (std::shared_ptr<Region> region,
                                      uint32_t                  in_chans,
                                      uint32_t                  out_chans,
-                                     samplepos_t&               pos,
+                                     timepos_t&                pos,
                                      ImportMode                mode,
-                                     boost::shared_ptr<Track>& existing_track,
-                                     const string&             new_track_name,
+                                     std::shared_ptr<Track>& existing_track,
+                                     string const&             new_track_name,
+                                     string const&             pgroup_id,
                                      ARDOUR::PluginInfoPtr     instrument)
 {
-	boost::shared_ptr<AudioRegion> ar = boost::dynamic_pointer_cast<AudioRegion>(region);
-	boost::shared_ptr<MidiRegion> mr = boost::dynamic_pointer_cast<MidiRegion>(region);
+	std::shared_ptr<AudioRegion> ar = std::dynamic_pointer_cast<AudioRegion>(region);
+	std::shared_ptr<MidiRegion> mr = std::dynamic_pointer_cast<MidiRegion>(region);
 
 	switch (mode) {
 	case ImportAsRegion:
@@ -999,49 +1032,73 @@ Editor::finish_bringing_in_material (boost::shared_ptr<Region> region,
 			}
 		}
 
-		boost::shared_ptr<Playlist> playlist = existing_track->playlist();
-		boost::shared_ptr<Region> copy (RegionFactory::create (region, region->properties()));
+		std::shared_ptr<Playlist> playlist = existing_track->playlist();
+		std::shared_ptr<Region> copy (RegionFactory::create (region, region->derive_properties ()));
+		copy->set_region_group(Region::get_retained_group_id());
 		playlist->clear_changes ();
+		playlist->clear_owned_changes ();
 		playlist->add_region (copy, pos);
-		if (Config->get_edit_mode() == Ripple)
-			playlist->ripple (pos, copy->length(), copy);
 
-		_session->add_command (new StatefulDiffCommand (playlist));
+		if (should_ripple()) {
+			do_ripple (playlist, pos, copy->length(), copy, true);
+		} else {
+			playlist->rdiff_and_add_command (_session);
+		}
+
 		break;
 	}
 
+	case ImportAsTrigger:
+	/* fallthrough */
 	case ImportAsTrack:
 	{
 		if (!existing_track) {
 			if (ar) {
-				list<boost::shared_ptr<AudioTrack> > at (_session->new_audio_track (in_chans, out_chans, 0, 1, string(), PresentationInfo::max_order, Normal));
-
+				list<std::shared_ptr<AudioTrack> > at (
+					_session->new_audio_track (in_chans, out_chans,
+					                           0, 1, string(),
+					                           PresentationInfo::max_order,
+					                           Normal,
+					                           true,
+					                           mode == ImportAsTrigger
+					));
 				if (at.empty()) {
 					return -1;
 				}
-				if (Config->get_strict_io ()) {
-					for (list<boost::shared_ptr<AudioTrack> >::iterator i = at.begin(); i != at.end(); ++i) {
+				for (list<std::shared_ptr<AudioTrack> >::iterator i = at.begin(); i != at.end(); ++i) {
+					if (Config->get_strict_io ()) {
 						(*i)->set_strict_io (true);
 					}
+					(*i)->playlist()->set_pgroup_id (pgroup_id);
 				}
 
 				existing_track = at.front();
 			} else if (mr) {
-				list<boost::shared_ptr<MidiTrack> > mt (
+				list<std::shared_ptr<MidiTrack> > mt (
 					_session->new_midi_track (ChanCount (DataType::MIDI, 1),
-						                  ChanCount (DataType::MIDI, 1),
+					                          ChanCount (DataType::MIDI, 1),
 					                          Config->get_strict_io () || Profile->get_mixbus (),
 					                          instrument, (Plugin::PresetRecord*) 0,
 					                          (RouteGroup*) 0,
 					                          1,
 					                          string(),
-					                          PresentationInfo::max_order));
+					                          PresentationInfo::max_order,
+					                          Normal,
+					                          true,
+					                          mode == ImportAsTrigger
+						));
 
 				if (mt.empty()) {
 					return -1;
 				}
 
-				// TODO set strict_io from preferences
+				for (list<std::shared_ptr<MidiTrack> >::iterator i = mt.begin(); i != mt.end(); ++i) {
+					if (Config->get_strict_io ()) {
+						(*i)->set_strict_io (true);
+					}
+					(*i)->playlist()->set_pgroup_id (pgroup_id);
+				}
+
 				existing_track = mt.front();
 			}
 
@@ -1052,35 +1109,26 @@ Editor::finish_bringing_in_material (boost::shared_ptr<Region> region,
 			}
 		}
 
-		boost::shared_ptr<Playlist> playlist = existing_track->playlist();
-		boost::shared_ptr<Region> copy (RegionFactory::create (region, true));
-		playlist->clear_changes ();
-		playlist->add_region (copy, pos);
-		_session->add_command (new StatefulDiffCommand (playlist));
-		break;
-	}
-
-	case ImportAsTapeTrack:
-	{
-		if (!ar) {
-			return -1;
-		}
-
-		list<boost::shared_ptr<AudioTrack> > at (_session->new_audio_track (in_chans, out_chans, 0, 1, string(), PresentationInfo::max_order, Destructive));
-		if (!at.empty()) {
-			boost::shared_ptr<Playlist> playlist = at.front()->playlist();
-			boost::shared_ptr<Region> copy (RegionFactory::create (region, true));
+		if (mode == ImportAsTrigger) {
+			std::shared_ptr<Region> copy (RegionFactory::create (region, true));
+			for (int s = 0; s < TriggerBox::default_triggers_per_box; ++s) {
+				if (!existing_track->triggerbox ()->trigger (s)->playable ()) {
+					existing_track->triggerbox ()->set_from_selection (s, copy);
+#if 1 /* assume drop from sidebar */
+					ARDOUR_UI_UTILS::copy_patch_changes (_session->the_auditioner (), existing_track->triggerbox ()->trigger (s));
+#endif
+					break;
+				}
+			}
+		} else {
+			std::shared_ptr<Playlist> playlist = existing_track->playlist();
 			playlist->clear_changes ();
-			playlist->add_region (copy, pos);
+			playlist->add_region (region, pos);
 			_session->add_command (new StatefulDiffCommand (playlist));
 		}
-		if (Config->get_strict_io ()) {
-			for (list<boost::shared_ptr<AudioTrack> >::iterator i = at.begin(); i != at.end(); ++i) {
-				(*i)->set_strict_io (true);
-			}
-		}
 		break;
 	}
+
 	}
 
 	return 0;
@@ -1098,6 +1146,8 @@ Editor::_import_thread (void *arg)
 void *
 Editor::import_thread ()
 {
+	Temporal::TempoMap::fetch ();
+
 	_session->import_files (import_status);
 	return 0;
 }

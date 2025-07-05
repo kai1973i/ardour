@@ -1,20 +1,20 @@
 /*
-    Copyright (C) 2011-2013 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2014-2015 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 
@@ -51,7 +51,7 @@ TrackingText::init ()
 }
 
 void
-TrackingText::pointer_motion (Duple const & winpos)
+TrackingText::pointer_motion (Duple const& winpos)
 {
 	if (!_visible) {
 		return;
@@ -60,18 +60,20 @@ TrackingText::pointer_motion (Duple const & winpos)
 	Duple pos (_parent->window_to_item (winpos));
 
 	if (!track_x) {
-		pos.x = position().x;
+		pos.x = position ().x;
+	} else {
+		pos.x += offset.x;
 	}
 
 	if (!track_y) {
-		pos.y = position().y;
+		pos.y = position ().y;
+	} else {
+		pos.y += offset.y;
 	}
-
-	pos = pos.translate (offset);
 
 	/* keep inside the window */
 
-	Rect r (0, 0, _canvas->width(), _canvas->height());
+	Rect r (0, 0, _canvas->width (), _canvas->height ());
 
 	/* border of 200 pixels on the right, and 50 on all other sides */
 
@@ -99,6 +101,7 @@ TrackingText::pointer_motion (Duple const & winpos)
 	/* move */
 
 	set_position (pos);
+	set_bbox_dirty ();
 }
 
 void
@@ -128,23 +131,23 @@ TrackingText::show_and_track (bool tx, bool ty)
 void
 TrackingText::set_x_offset (double o)
 {
-        begin_change ();
+	begin_change ();
 	offset.x = o;
-        end_change ();
+	end_change ();
 }
 
 void
 TrackingText::set_y_offset (double o)
 {
-        begin_change ();
+	begin_change ();
 	offset.y = o;
-        end_change ();
+	end_change ();
 }
 
 void
-TrackingText::set_offset (Duple const & d)
+TrackingText::set_offset (Duple const& d)
 {
-        begin_change ();
+	begin_change ();
 	offset = d;
-        end_change ();
+	end_change ();
 }

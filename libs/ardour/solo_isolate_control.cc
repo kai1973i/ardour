@@ -1,20 +1,21 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/debug.h"
 #include "ardour/mute_master.h"
@@ -27,22 +28,21 @@ using namespace ARDOUR;
 using namespace std;
 using namespace PBD;
 
-SoloIsolateControl::SoloIsolateControl (Session& session, std::string const & name, Soloable& s, Muteable& m)
+SoloIsolateControl::SoloIsolateControl (Session& session, std::string const & name, Soloable& s, Temporal::TimeDomainProvider const & tdp)
 	: SlavableAutomationControl (session, SoloIsolateAutomation, ParameterDescriptor (SoloIsolateAutomation),
-	                             boost::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(SoloIsolateAutomation))),
+	                             std::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(SoloIsolateAutomation), tdp)),
 	                             name)
 	, _soloable (s)
-	, _muteable (m)
 	, _solo_isolated (false)
 	, _solo_isolated_by_upstream (0)
 {
 	_list->set_interpolation (Evoral::ControlList::Discrete);
 	/* isolate changes must be synchronized by the process cycle */
-	set_flags (Controllable::Flag (flags() | Controllable::RealTime));
+	set_flag (Controllable::RealTime);
 }
 
 void
-SoloIsolateControl::master_changed (bool from_self, PBD::Controllable::GroupControlDisposition gcd, boost::weak_ptr<AutomationControl>)
+SoloIsolateControl::master_changed (bool from_self, PBD::Controllable::GroupControlDisposition gcd, std::weak_ptr<AutomationControl>)
 {
 	if (!_soloable.can_solo()) {
 		return;
@@ -144,7 +144,7 @@ SoloIsolateControl::get_value () const
 		return solo_isolated() || get_masters_value ();
 	}
 
-	if (_list && boost::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
+	if (_list && std::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
 		// Playing back automation, get the value from the list
 		return AutomationControl::get_value();
 	}
@@ -164,7 +164,7 @@ SoloIsolateControl::set_state (XMLNode const & node, int version)
 }
 
 XMLNode&
-SoloIsolateControl::get_state ()
+SoloIsolateControl::get_state () const
 {
 	XMLNode& node (SlavableAutomationControl::get_state());
 	node.set_property (X_("solo-isolated"), _solo_isolated);

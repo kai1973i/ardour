@@ -1,24 +1,30 @@
 /*
-    Copyright (C) 2006-2008 Paul Davis
+ * Copyright (C) 2008-2016 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
+#include "pbd/assert.h"
 #include "pbd/compose.h"
 #include "pbd/enumwriter.h"
 #include "pbd/error.h"
+#include "pbd/i18n.h"
 
 #include "ardour/debug.h"
 #include "ardour/midi_ring_buffer.h"
@@ -44,6 +50,7 @@ MidiRingBuffer<T>::read (MidiBuffer& dst, samplepos_t start, samplepos_t end, sa
 	}
 
 	T                 ev_time;
+	Evoral::EventType ev_type;
 	uint32_t          ev_size;
 	size_t            count = 0;
 	const size_t      prefix_size = sizeof(T) + sizeof(Evoral::EventType) + sizeof(uint32_t);
@@ -53,15 +60,21 @@ MidiRingBuffer<T>::read (MidiBuffer& dst, samplepos_t start, samplepos_t end, sa
 		uint8_t peekbuf[prefix_size];
 
 		/* this cannot fail, because we've already verified that there
-		   is prefix_space to read
-		*/
+		 * is prefix_space to read
+		 */
 		this->peek (peekbuf, prefix_size);
 
 		ev_time = *(reinterpret_cast<T*>((uintptr_t)peekbuf));
+		ev_type = *(reinterpret_cast<Evoral::EventType*>((uintptr_t)(peekbuf + sizeof(T))));
 		ev_size = *(reinterpret_cast<uint32_t*>((uintptr_t)(peekbuf + sizeof(T) + sizeof (Evoral::EventType))));
 
-		if (this->read_space() < ev_size) {
-			break;;
+		/* check that we have both the prefix and the full event
+		 *  present in the buffer before continuing. If not, we can't do
+		 *  anything (and since we have only peek'ed at the buffer, it
+		 * remains in the same state for the next read() call.
+		 */
+		if (this->read_space() < prefix_size + ev_size) {
+			break;
 		}
 
 		if (ev_time >= end) {
@@ -84,18 +97,25 @@ MidiRingBuffer<T>::read (MidiBuffer& dst, samplepos_t start, samplepos_t end, sa
 
 		uint8_t status;
 		bool r = this->peek (&status, sizeof(uint8_t));
-		assert (r); // If this failed, buffer is corrupt, all hope is lost
+		if (!r) {
+			fatal << string_compose (_("programming error: %1\n"), X_("MIDI buffer corrupt in MidiRingBuffer::read()")) << endmsg;
+			abort(); // If this failed, buffer is corrupt, all hope is lost
+		}
 
 		/* lets see if we are going to be able to write this event into dst.
 		 */
-		uint8_t* write_loc = dst.reserve (ev_time, ev_size);
+		uint8_t* write_loc = dst.reserve (ev_time, ev_type, ev_size);
 		if (write_loc == 0) {
+			/* nowhere to write to; we've already consumed the
+			 * prefix for this event (and cannot backup). Consume the
+			 * rest of the event (advances read pointer to next event)
+			 */
+			this->increment_read_ptr (ev_size);
 			if (stop_on_overflow_in_dst) {
 				DEBUG_TRACE (DEBUG::MidiRingBuffer, string_compose ("MidiRingBuffer: overflow in destination MIDI buffer, stopped after %1 events\n", count));
 				break;
 			}
 			error << "MRB: Unable to reserve space in buffer, event skipped" << endmsg;
-			this->increment_read_ptr (ev_size); // Advance read pointer to next event
 			continue;
 		}
 
@@ -143,7 +163,11 @@ MidiRingBuffer<T>::skip_to(samplepos_t start)
 	while (this->read_space() >= prefix_size) {
 
 		uint8_t peekbuf[prefix_size];
-		this->peek (peekbuf, prefix_size);
+		bool r = this->peek (peekbuf, prefix_size);
+		if (!r) {
+			fatal << string_compose (_("programming error: %1\n"), X_("MIDI buffer corrupt in MidiRingBuffer::skip_to()")) << endmsg;
+			abort ();
+		}
 
 		ev_time = *(reinterpret_cast<T*>((uintptr_t)peekbuf));
 		ev_size = *(reinterpret_cast<uint32_t*>((uintptr_t)(peekbuf + sizeof(T) + sizeof (Evoral::EventType))));
@@ -159,7 +183,7 @@ MidiRingBuffer<T>::skip_to(samplepos_t start)
 		this->increment_read_ptr (prefix_size);
 
 		uint8_t status;
-		bool r = this->peek (&status, sizeof(uint8_t));
+		r = this->peek (&status, sizeof(uint8_t));
 		assert (r); // If this failed, buffer is corrupt, all hope is lost
 
 		++count;
@@ -200,15 +224,14 @@ MidiRingBuffer<T>::flush (samplepos_t /*start*/, samplepos_t end)
 
 	while (this->read_space() >= prefix_size) {
 		uint8_t  peekbuf[prefix_size];
-		bool     success;
 		uint32_t ev_size;
 		T        ev_time;
 
-		success = this->peek (peekbuf, prefix_size);
+		bool     success = this->peek (peekbuf, prefix_size);
 		/* this cannot fail, because we've already verified that there
 		   is prefix_space to read
 		*/
-		assert (success);
+		x_assert (success, success);
 
 		ev_time = *(reinterpret_cast<T*>((uintptr_t)peekbuf));
 

@@ -1,35 +1,37 @@
 /*
-    Copyright (C) 2000 Paul Davis
+ * Copyright (C) 2005-2007 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_route_params_ui_h__
-#define __ardour_route_params_ui_h__
+#pragma once
 
 #include <list>
 
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/label.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/togglebutton.h>
-#include <gtkmm/treeview.h>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/label.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/togglebutton.h>
+#include <ytkmm/treeview.h>
 
 #include "pbd/stateful.h"
 #include "pbd/signals.h"
@@ -41,7 +43,6 @@
 #include "ardour_window.h"
 #include "processor_box.h"
 #include "processor_selection.h"
-#include "latency_gui.h"
 
 namespace ARDOUR {
 	class Route;
@@ -64,7 +65,7 @@ public:
 
 	void set_session (ARDOUR::Session*);
 	void session_going_away ();
-	PluginSelector* plugin_selector() { return _plugin_selector; }
+	PluginSelector* plugin_selector();
 
 private:
 	Gtk::VBox                list_vpacker;
@@ -90,17 +91,6 @@ private:
 
 	Gtk::VBox                choice_vpacker;
 
-	Gtk::Frame               latency_frame;
-	Gtk::VBox                latency_packer;
-	Gtk::HButtonBox          latency_button_box;
-	Gtk::Button              latency_apply_button;
-	LatencyGUI*              latency_widget;
-	Gtk::Label               delay_label;
-
-	PBD::ScopedConnectionList latency_connections;
-	sigc::connection          latency_click_connection;
-
-	void refresh_latency ();
 
 	Gtk::ToggleButton input_button;
 	Gtk::ToggleButton output_button;
@@ -112,14 +102,13 @@ private:
 	IOSelector     * _input_iosel;
 	IOSelector     * _output_iosel;
 
-	PluginSelector    *_plugin_selector;
 	ProcessorSelection  _p_selection;
 
-	boost::shared_ptr<ARDOUR::Route> _route;
+	std::shared_ptr<ARDOUR::Route> _route;
 	PBD::ScopedConnection _route_processors_connection;
 	PBD::ScopedConnectionList route_connections;
 
-	boost::shared_ptr<ARDOUR::Processor> _processor;
+	std::shared_ptr<ARDOUR::Processor> _processor;
 	PBD::ScopedConnection _processor_going_away_connection;
 
 
@@ -142,7 +131,7 @@ private:
 			add(route);
 		}
 		Gtk::TreeModelColumn<std::string> text;
-		Gtk::TreeModelColumn<boost::shared_ptr<ARDOUR::Route> > route;
+		Gtk::TreeModelColumn<std::shared_ptr<ARDOUR::Route> > route;
 	};
 
 	RouteDisplayModelColumns route_display_columns ;
@@ -150,31 +139,29 @@ private:
 	Glib::RefPtr<Gtk::ListStore> route_display_model;
 
 
-	void add_routes (ARDOUR::RouteList&);
+	void add_routes (ARDOUR::RouteList const&);
 
-	void route_property_changed (const PBD::PropertyChange&, boost::weak_ptr<ARDOUR::Route> route);
-	void route_removed (boost::weak_ptr<ARDOUR::Route> route);
+	void route_property_changed (const PBD::PropertyChange&, std::weak_ptr<ARDOUR::Route> route);
+	void route_removed (std::weak_ptr<ARDOUR::Route> route);
 	void map_frozen ();
 
 
 	void route_selected();
 	//void route_unselected (gint row, gint col, GdkEvent *ev);
 
-	void setup_io_samples();
-	void cleanup_io_samples();
+	void setup_io_selector();
+	void cleanup_io_selector();
 	void cleanup_view(bool stopupdate = true);
-	void cleanup_latency_frame ();
-	void setup_latency_frame ();
 
 	void processors_changed (ARDOUR::RouteProcessorChange);
 
 	void setup_processor_boxes();
 	void cleanup_processor_boxes();
 
-	void redirect_selected (boost::shared_ptr<ARDOUR::Processor>);
+	void redirect_selected (std::shared_ptr<ARDOUR::Processor>);
 
 	void plugin_going_away (ARDOUR::Placement);
-	void processor_going_away (boost::weak_ptr<ARDOUR::Processor>);
+	void processor_going_away (std::weak_ptr<ARDOUR::Processor>);
 
 	gint edit_input_configuration (GdkEventButton *ev);
 	gint edit_output_configuration (GdkEventButton *ev);
@@ -186,13 +173,6 @@ private:
 
 	void update_title ();
 	//void unselect_all_redirects ();
-
-	sigc::connection update_connection;
-	void update_views ();
-
-	void start_updating ();
-	void stop_updating ();
 };
 
 
-#endif /* __ardour_route_params_ui_h__ */

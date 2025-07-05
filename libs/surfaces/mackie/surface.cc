@@ -1,21 +1,26 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2008 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2016 Len Ovens <len@ovenwerks.net>
+ * Copyright (C) 2015-2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <sstream>
 #include <iomanip>
@@ -25,19 +30,22 @@
 
 #include <glibmm/convert.h>
 
-#include "pbd/stacktrace.h"
+#include "pbd/debug.h"
 
 #include "midi++/port.h"
 
 #include "ardour/audioengine.h"
 #include "ardour/automation_control.h"
+#include "ardour/chan_count.h"
 #include "ardour/debug.h"
 #include "ardour/route.h"
+#include "ardour/meter.h"
 #include "ardour/panner.h"
 #include "ardour/panner_shell.h"
 #include "ardour/profile.h"
 #include "ardour/rc_configuration.h"
 #include "ardour/session.h"
+#include "ardour/types.h"
 #include "ardour/utils.h"
 
 #include <gtkmm2ext/gui_thread.h>
@@ -69,8 +77,9 @@ using ARDOUR::Stripable;
 using ARDOUR::Panner;
 using ARDOUR::Profile;
 using ARDOUR::AutomationControl;
+using ARDOUR::ChanCount;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 #define ui_context() MackieControlProtocol::instance() /* a UICallback-derived object that specifies the event loop for signal handling */
 
@@ -86,9 +95,9 @@ static MidiByteArray mackie_sysex_hdr_xt  (5, MIDI::sysex, 0x0, 0x0, 0x66, 0x15)
 
 //QCON
 // The MCU sysex header for QCon Control surface
-static MidiByteArray mackie_sysex_hdr_qcon  (5, MIDI::sysex, 0x0, 0x0, 0x66, 0x14); 
+static MidiByteArray mackie_sysex_hdr_qcon  (5, MIDI::sysex, 0x0, 0x0, 0x66, 0x14);
 
-// The MCU sysex header for QCon Control - extender 
+// The MCU sysex header for QCon Control - extender
 // The extender differs from Mackie by 4th bit - it's same like for main control surface (for display)
 static MidiByteArray mackie_sysex_hdr_xt_qcon  (5, MIDI::sysex, 0x0, 0x0, 0x66, 0x14);
 
@@ -105,6 +114,8 @@ Surface::Surface (MackieControlProtocol& mcp, const std::string& device_name, ui
 	, _jog_wheel (0)
 	, _master_fader (0)
 	, _last_master_gain_written (-0.0f)
+	, _has_master_display (false)
+	, _has_master_meter (false)
 	, connection_state (0)
 	, is_qcon (false)
 	, input_source (0)
@@ -118,17 +129,19 @@ Surface::Surface (MackieControlProtocol& mcp, const std::string& device_name, ui
 	}
 
 	//Store Qcon flag
-	if( mcp.device_info().is_qcon() ) {
-		is_qcon = true;
-	} else {
-		is_qcon = false;
-	}
+	is_qcon = mcp.device_info().is_qcon();
 
 	/* only the first Surface object has global controls */
 	/* lets use master_position instead */
 	uint32_t mp = _mcp.device_info().master_position();
 	if (_number == mp) {
 		DEBUG_TRACE (DEBUG::MackieControl, "Surface matches MasterPosition. Might have global controls.\n");
+
+		if ( is_qcon ) {
+			_has_master_display = (mcp.device_info().has_master_fader() && mcp.device_info().has_qcon_second_lcd());
+			_has_master_meter = mcp.device_info().has_qcon_master_meters();
+		}
+
 		if (_mcp.device_info().has_global_controls()) {
 			init_controls ();
 			DEBUG_TRACE (DEBUG::MackieControl, "init_controls done\n");
@@ -193,7 +206,7 @@ Surface::~Surface ()
 }
 
 bool
-Surface::connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, boost::weak_ptr<ARDOUR::Port>, std::string name2, bool yn)
+Surface::connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool yn)
 {
 	if (!_port) {
 		return false;
@@ -262,7 +275,7 @@ Surface::connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, b
 }
 
 XMLNode&
-Surface::get_state()
+Surface::get_state() const
 {
 	XMLNode* node = new XMLNode (X_("Surface"));
 	node->set_property (X_("name"), _name);
@@ -304,14 +317,14 @@ const MidiByteArray&
 Surface::sysex_hdr() const
 {
 	switch  (_stype) {
-	case mcu: 
+	case mcu:
 		if (_mcp.device_info().is_qcon()) {
 			return mackie_sysex_hdr_qcon;
 		} else {
 			return mackie_sysex_hdr;
 		}
 	case ext:
-		if(_mcp.device_info().is_qcon()) {		
+		if(_mcp.device_info().is_qcon()) {
 			return mackie_sysex_hdr_xt_qcon;
 		} else {
 			return mackie_sysex_hdr_xt;
@@ -353,7 +366,7 @@ Surface::init_controls()
 
 	DEBUG_TRACE (DEBUG::MackieControl, "Surface::init_controls: creating jog wheel\n");
 	if (_mcp.device_info().has_jog_wheel()) {
-		_jog_wheel = new Mackie::JogWheel (_mcp);
+		_jog_wheel = new MACKIE_NAMESPACE::JogWheel (_mcp);
 	}
 
 	DEBUG_TRACE (DEBUG::MackieControl, "Surface::init_controls: creating global controls\n");
@@ -399,18 +412,43 @@ Surface::master_monitor_may_have_changed ()
 	}
 }
 
+bool
+Surface::master_stripable_is_master_monitor ()
+{
+	if (_master_stripable == _mcp.get_session().monitor_out())
+	{
+		return true;
+	}
+	return false;
+}
+
+void
+Surface::toggle_master_monitor ()
+{
+	if(master_stripable_is_master_monitor())
+	{
+		_master_stripable = _mcp.get_session().master_out();
+	} else if (_mcp.get_session().monitor_out() != 0)
+	{
+		_master_stripable = _mcp.get_session().monitor_out();
+	} else { return; }
+
+	_master_fader->set_control (_master_stripable->gain_control());
+	_master_stripable->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, std::bind (&Surface::master_gain_changed, this), ui_context());
+	_last_master_gain_written = FLT_MAX;
+	master_gain_changed ();
+}
+
 void
 Surface::setup_master ()
 {
-	boost::shared_ptr<Stripable> m;
-
-	if ((m = _mcp.get_session().monitor_out()) == 0) {
-		m = _mcp.get_session().master_out();
+	if ((_master_stripable = _mcp.get_session().monitor_out()) == 0) {
+		_master_stripable = _mcp.get_session().master_out();
 	}
 
-	if (!m) {
+	if (!_master_stripable) {
 		if (_master_fader) {
-			_master_fader->set_control (boost::shared_ptr<AutomationControl>());
+			_master_fader->set_control (std::shared_ptr<AutomationControl>());
 		}
 		master_connection.disconnect ();
 		return;
@@ -420,6 +458,7 @@ Surface::setup_master ()
 		Groups::iterator group_it;
 		Group* master_group;
 		group_it = groups.find("master");
+		DeviceInfo device_info = _mcp.device_info();
 
 		if (group_it == groups.end()) {
 			groups["master"] = master_group = new Group ("master");
@@ -427,28 +466,31 @@ Surface::setup_master ()
 			master_group = group_it->second;
 		}
 
-		_master_fader = dynamic_cast<Fader*> (Fader::factory (*this, _mcp.device_info().strip_cnt(), "master", *master_group));
+		_master_fader = dynamic_cast<Fader*> (Fader::factory (*this, device_info.strip_cnt(), "master", *master_group));
 
-		DeviceInfo device_info = _mcp.device_info();
 		GlobalButtonInfo master_button = device_info.get_global_button(Button::MasterFaderTouch);
-		Button* bb = dynamic_cast<Button*> (Button::factory (
-			                                    *this,
-			                                    Button::MasterFaderTouch,
-			                                    master_button.id,
-			                                    master_button.label,
-			                                    *(group_it->second)
-			                                    ));
-
+		DEBUG_RESULT_CAST (Button*, bb, dynamic_cast<Button*>, (Button::factory (
+			                                                        *this,
+			                                                        Button::MasterFaderTouch,
+			                                                        master_button.id,
+			                                                        master_button.label,
+			                                                        *(group_it->second)
+			                                                        )));
 		DEBUG_TRACE (DEBUG::MackieControl, string_compose ("surface %1 Master Fader new button BID %2 id %3\n",
 		                                                   number(), Button::MasterFaderTouch, bb->id()));
 	} else {
 		master_connection.disconnect ();
 	}
 
-	_master_fader->set_control (m->gain_control());
-	m->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, boost::bind (&Surface::master_gain_changed, this), ui_context());
+	_master_fader->set_control (_master_stripable->gain_control());
+	_master_stripable->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, std::bind (&Surface::master_gain_changed, this), ui_context());
 	_last_master_gain_written = FLT_MAX; /* some essentially impossible value */
 	master_gain_changed ();
+
+	if (_has_master_display) {
+		_master_stripable->PropertyChanged.connect (master_connection, MISSING_INVALIDATOR, std::bind (&Surface::master_property_changed, this, _1), ui_context());
+		show_master_name();
+	}
 }
 
 void
@@ -458,7 +500,7 @@ Surface::master_gain_changed ()
 		return;
 	}
 
-	boost::shared_ptr<AutomationControl> ac = _master_fader->control();
+	std::shared_ptr<AutomationControl> ac = _master_fader->control();
 	if (!ac) {
 		return;
 	}
@@ -468,10 +510,137 @@ Surface::master_gain_changed ()
 		return;
 	}
 
-	DEBUG_TRACE (DEBUG::MackieControl, "Surface::master_gain_changed: updating surface master fader\n");
+	DEBUG_TRACE (DEBUG::MackieControl, string_compose("Surface::master_gain_changed: val %1, pos %2\n", ac->get_value(), normalized_position));
 
-	_port->write (_master_fader->set_position (normalized_position));
+	write (_master_fader->set_position (normalized_position));
 	_last_master_gain_written = normalized_position;
+}
+
+void
+Surface::master_property_changed (const PropertyChange& what_changed)
+{
+	if (what_changed.contains (ARDOUR::Properties::name)) {
+		DEBUG_TRACE (DEBUG::MackieControl, "master_property_changed\n");
+
+		string fullname = string();
+		if (!_master_stripable) {
+			fullname = string();
+		} else {
+			fullname = _master_stripable->name();
+		}
+
+		if (fullname.length() <= 6) {
+			pending_display[0] = fullname;
+		} else {
+			pending_display[0] = PBD::short_version (fullname, 6);
+		}
+	}
+}
+
+void
+Surface::master_meter_changed ()
+{
+	if (!_has_master_meter) {
+		return;
+	}
+
+	if (!_master_stripable) {
+		return;
+	}
+
+	ChanCount count = _master_stripable->peak_meter()->output_streams();
+
+	for (unsigned i = 0; i < 2 && i < count.n_audio(); ++i) {
+		int segment;
+		float dB = _master_stripable->peak_meter()->meter_level (i, ARDOUR::MeterPeak);
+		std::pair<bool,float> result = Meter::calculate_meter_over_and_deflection(dB);
+
+		MidiByteArray msg;
+
+		/* we can use up to 13 segments */
+
+		segment = lrintf ((result.second/115.0) * 13.0);
+		write (MidiByteArray (2, 0xd1, (i<<4) | segment));
+	}
+}
+
+void
+Surface::show_master_name ()
+{
+	string fullname = string();
+	if (!_master_stripable) {
+		fullname = string();
+	} else {
+		fullname = _master_stripable->name();
+	}
+
+	DEBUG_TRACE (DEBUG::MackieControl, string_compose ("show_master_name: name %1\n", fullname));
+
+	if (fullname.length() <= 6) {
+		pending_display[0] = fullname;
+	} else {
+		pending_display[0] = PBD::short_version (fullname, 6);
+	}
+}
+
+MidiByteArray
+Surface::master_display (uint32_t line_number, const std::string& line)
+{
+	/* The second lcd on the Qcon Pro X master unit uses a 6 character label instead of 7.
+	*  That allows a 9th label for the master fader and since there is a space at the end
+	*  use all 6 characters for text.
+	*
+	*  Format: _6Char#1_6Char#2_6Char#3_6Char#4_6Char#5_6Char#6_6Char#7_6Char#8_6Char#9_
+	*
+	*  The _ in the format is a space that is inserted as label display seperators
+	*
+	*  The second LCD is an extention to the MCP with a different sys ex header.
+	*/
+
+	MidiByteArray retval;
+
+	DEBUG_TRACE (DEBUG::MackieControl, string_compose ("master display: line %1 = %2\n", line_number, line));
+
+	retval <<  MidiByteArray (5, MIDI::sysex, 0x0, 0x0, 0x67, 0x15);
+	// code for display
+	retval << 0x13;
+
+	// offset (0 to 0x37 first line, 0x38 to 0x6f for second line)
+	retval << (49 + (line_number * 0x38));	// 9th position
+
+	// ascii data to display. `line` is UTF-8
+	string ascii = Glib::convert_with_fallback (line, "UTF-8", "ISO-8859-1", "_");
+	string::size_type len = ascii.length();
+	if (len > 6) {
+		ascii = ascii.substr (0, 6);
+		len = 5;
+	}
+	retval << ascii;
+	// pad with " " out to N chars
+	for (unsigned i = len; i < 6; ++i) {
+		retval << ' ';
+	}
+
+	// Space as the last character
+	retval << ' ';
+
+	// sysex trailer
+	retval << MIDI::eox;
+
+	return retval;
+}
+
+MidiByteArray
+Surface::blank_master_display (uint32_t line_number)
+{
+	if (line_number == 0) {
+		return MidiByteArray (15, MIDI::sysex, 0x0, 0x0, 0x67, 0x15, 0x13, 0x31
+                      , 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, MIDI::eox);
+	}
+	else {
+		return MidiByteArray (15, MIDI::sysex, 0x0, 0x0, 0x67, 0x15, 0x13, 0x69
+                      , 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, MIDI::eox);
+	}
 }
 
 float
@@ -526,20 +695,20 @@ Surface::connect_to_signals ()
 		MIDI::Parser* p = _port->input_port().parser();
 
 		/* Incoming sysex */
-		p->sysex.connect_same_thread (*this, boost::bind (&Surface::handle_midi_sysex, this, _1, _2, _3));
+		p->sysex.connect_same_thread (*this, std::bind (&Surface::handle_midi_sysex, this, _1, _2, _3));
 		/* V-Pot messages are Controller */
-		p->controller.connect_same_thread (*this, boost::bind (&Surface::handle_midi_controller_message, this, _1, _2));
+		p->controller.connect_same_thread (*this, std::bind (&Surface::handle_midi_controller_message, this, _1, _2));
 		/* Button messages are NoteOn */
-		p->note_on.connect_same_thread (*this, boost::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
+		p->note_on.connect_same_thread (*this, std::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
 		/* Button messages are NoteOn but libmidi++ sends note-on w/velocity = 0 as note-off so catch them too */
-		p->note_off.connect_same_thread (*this, boost::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
+		p->note_off.connect_same_thread (*this, std::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
 		/* Fader messages are Pitchbend */
 		uint32_t i;
 		for (i = 0; i < _mcp.device_info().strip_cnt(); i++) {
-			p->channel_pitchbend[i].connect_same_thread (*this, boost::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, i));
+			p->channel_pitchbend[i].connect_same_thread (*this, std::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, i));
 		}
 		// Master fader
-		p->channel_pitchbend[_mcp.device_info().strip_cnt()].connect_same_thread (*this, boost::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, _mcp.device_info().strip_cnt()));
+		p->channel_pitchbend[_mcp.device_info().strip_cnt()].connect_same_thread (*this, std::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, _mcp.device_info().strip_cnt()));
 
 		_connected = true;
 	}
@@ -557,7 +726,7 @@ Surface::handle_midi_pitchbend_message (MIDI::Parser&, MIDI::pitchbend_t pb, uin
 	 */
 
 	DEBUG_TRACE (DEBUG::MackieControl, string_compose ("Surface::handle_midi_pitchbend_message on port %3, fader = %1 value = %2 (%4)\n",
-							   fader_id, pb, _number, pb/16384.0));
+							   fader_id, pb, _number, pb/16383.0));
 
 	if (_mcp.device_info().no_handshake()) {
 		turn_it_on ();
@@ -567,14 +736,14 @@ Surface::handle_midi_pitchbend_message (MIDI::Parser&, MIDI::pitchbend_t pb, uin
 
 	if (fader) {
 		Strip* strip = dynamic_cast<Strip*> (&fader->group());
-		float pos = pb / 16384.0;
+		float pos = pb / 16383.0;
 		if (strip) {
 			strip->handle_fader (*fader, pos);
 		} else {
 			DEBUG_TRACE (DEBUG::MackieControl, "Handling master fader\n");
 			/* master fader */
 			fader->set_value (pos); // alter master gain
-			_port->write (fader->set_position (pos)); // write back value (required for servo)
+			write (fader->set_position (pos)); // write back value (required for servo)
 		}
 	} else {
 		DEBUG_TRACE (DEBUG::MackieControl, "fader not found\n");
@@ -712,9 +881,9 @@ Surface::handle_midi_sysex (MIDI::Parser &, MIDI::byte * raw_bytes, size_t count
 		if (_mcp.device_info().is_qcon()) {
 			mackie_sysex_hdr_qcon[4] = bytes[4];
 		} else {
-			mackie_sysex_hdr[4] = bytes[4]; 
+			mackie_sysex_hdr[4] = bytes[4];
 		}
-		
+
 	} else {
 		if (_mcp.device_info().is_qcon()) {
 			mackie_sysex_hdr_xt_qcon[4] = bytes[4];
@@ -915,6 +1084,21 @@ Surface::zero_all ()
 
 	if (_mcp.device_info().has_master_fader () && _master_fader) {
 		_port->write (_master_fader->zero ());
+
+		if (_has_master_display) {
+			DEBUG_TRACE (DEBUG::MackieControl, "Surface::zero_all: Clearing Master display\n");
+			_port->write (blank_master_display(0));
+			_port->write (blank_master_display(1));
+			pending_display[0] = string();
+			pending_display[1] = string();
+			current_display[0] = string();
+			current_display[1] = string();
+		}
+		if (_has_master_meter) {
+			_port->write (MidiByteArray (2, 0xd1, 0x00));
+			_port->write (MidiByteArray (2, 0xd1, 0x10));
+		}
+
 	}
 
 	// zero all strips
@@ -948,17 +1132,32 @@ Surface::zero_controls ()
 }
 
 void
-Surface::periodic (uint64_t now_usecs)
+Surface::periodic (PBD::microseconds_t now_usecs)
 {
 	master_gain_changed();
+	master_meter_changed();
 	for (Strips::iterator s = strips.begin(); s != strips.end(); ++s) {
 		(*s)->periodic (now_usecs);
 	}
 }
 
 void
-Surface::redisplay (ARDOUR::microseconds_t now, bool force)
+Surface::redisplay (PBD::microseconds_t now, bool force)
 {
+	if (_has_master_display) {
+		if (force || (current_display[0] != pending_display[0])) {
+			DEBUG_TRACE (DEBUG::MackieControl, "Surface::redisplay: Updating master display line 0\n");
+			write (master_display (0, pending_display[0]));
+			current_display[0] = pending_display[0];
+		}
+
+		if (force || (current_display[1] != pending_display[1])) {
+			DEBUG_TRACE (DEBUG::MackieControl, "Surface::redisplay: Updating master display line 1\n");
+			write (master_display (1, pending_display[1]));
+			current_display[1] = pending_display[1];
+		}
+	}
+
 	for (Strips::iterator s = strips.begin(); s != strips.end(); ++s) {
 		(*s)->redisplay (now, force);
 	}
@@ -984,12 +1183,17 @@ Surface::update_strip_selection ()
 }
 
 void
-Surface::map_stripables (const vector<boost::shared_ptr<Stripable> >& stripables)
+Surface::map_stripables (const vector<std::shared_ptr<Stripable> >& stripables)
 {
-	vector<boost::shared_ptr<Stripable> >::const_iterator r;
+	vector<std::shared_ptr<Stripable> >::const_iterator r;
 	Strips::iterator s = strips.begin();
 
 	DEBUG_TRACE (DEBUG::MackieControl, string_compose ("Mapping %1 stripables to %2 strips\n", stripables.size(), strips.size()));
+
+	
+	bool xtouch = _mcp.device_info().is_xtouch();
+	XTouchColors colors[] { Off, Off, Off, Off, Off, Off, Off, Off };
+	uint8_t i = 0;
 
 	for (r = stripables.begin(); r != stripables.end() && s != strips.end(); ++s) {
 
@@ -999,14 +1203,20 @@ Surface::map_stripables (const vector<boost::shared_ptr<Stripable> >& stripables
 		*/
 
 		if (!(*s)->locked()) {
+			if(xtouch){
+				colors[i] = static_cast<XTouchColors> (convert_color_to_xtouch_value((*r)->presentation_info().color()));
+				++i;
+			}
 			(*s)->set_stripable (*r);
 			++r;
 		}
 	}
-
 	for (; s != strips.end(); ++s) {
 		DEBUG_TRACE (DEBUG::MackieControl, string_compose ("strip %1 being set to null stripable\n", (*s)->index()));
-		(*s)->set_stripable (boost::shared_ptr<Stripable>());
+		(*s)->set_stripable (std::shared_ptr<Stripable>());
+	}
+	if(xtouch){
+		_port->write (display_colors_on_xtouch(colors)); //write colors to strips for xtouch
 	}
 }
 
@@ -1015,12 +1225,12 @@ translate_seven_segment (char achar)
 {
 	achar = toupper (achar);
 
-	if  (achar >= 0x40 && achar <= 0x60) {
+	if  (achar >= 0x40 && achar <= 0x5f) {
 		return achar - 0x40;
-	} else if  (achar >= 0x21 && achar <= 0x3f) {
+	} else if  (achar >= 0x20 && achar <= 0x3f) {
 		return achar;
 	} else {
-		return 0x00;
+		return 0x20;
 	}
 }
 
@@ -1099,6 +1309,7 @@ Surface::update_flip_mode_display ()
 void
 Surface::subview_mode_changed ()
 {
+	show_master_name();
 	for (Strips::iterator s = strips.begin(); s != strips.end(); ++s) {
 		(*s)->subview_mode_changed ();
 	}
@@ -1130,11 +1341,6 @@ Surface::update_view_mode_display (bool with_helpful_text)
 		id = Button::MidiTracks;
 		text = _("MIDI Tracks");
 		break;
-	case MackieControlProtocol::Plugins:
-		show_two_char_display ("PL");
-		id = Button::Plugin;
-		text = _("Plugins");
-		break;
 	case MackieControlProtocol::Busses:
 		show_two_char_display ("BS");
 		id = Button::Busses;
@@ -1149,15 +1355,25 @@ Surface::update_view_mode_display (bool with_helpful_text)
 		id = Button::Aux;
 		text = _("Auxes");
 		break;
-	case MackieControlProtocol::Hidden:
-		show_two_char_display ("HI");
+	case MackieControlProtocol::Outputs:
+		show_two_char_display ("Fb");
 		id = Button::Outputs;
-		text = _("Hidden Tracks");
+		text = _("Foldback Busses");
 		break;
 	case MackieControlProtocol::Selected:
 		show_two_char_display ("SE");
 		id = Button::User;
 		text = _("Selected Tracks");
+		break;
+	case MackieControlProtocol::AudioInstr:
+		show_two_char_display ("IS");
+		id = Button::AudioInstruments;
+		text = _("VCAs");
+		break;
+	case MackieControlProtocol::Inputs:
+		show_two_char_display ("CU");
+		id = Button::Inputs;
+		text = _("Cue Tracks");
 		break;
 	default:
 		break;
@@ -1172,11 +1388,14 @@ Surface::update_view_mode_display (bool with_helpful_text)
 	view_mode_buttons.push_back (Button::Aux);
 	view_mode_buttons.push_back (Button::Outputs);
 	view_mode_buttons.push_back (Button::User);
+	view_mode_buttons.push_back (Button::Inputs);
+	view_mode_buttons.push_back (Button::AudioInstruments);
+	view_mode_buttons.push_back (Button::Outputs);
 
 	if (id >= 0) {
 
 		for (vector<int>::iterator i = view_mode_buttons.begin(); i != view_mode_buttons.end(); ++i) {
-			map<int,Control*>::iterator x = controls_by_device_independent_id.find (id);
+			map<int,Control*>::iterator x = controls_by_device_independent_id.find (*i);
 
 			if (x != controls_by_device_independent_id.end()) {
 				Button* button = dynamic_cast<Button*> (x->second);
@@ -1212,15 +1431,25 @@ Surface::say_hello ()
 void
 Surface::next_jog_mode ()
 {
+	if (_jog_wheel) {
+		if (_jog_wheel->mode() == JogWheel::scroll) {
+			_jog_wheel->set_mode (JogWheel::shuttle);
+		} else {
+			_jog_wheel->set_mode (JogWheel::scroll);
+		}
+	}
 }
 
 void
-Surface::set_jog_mode (JogWheel::Mode)
+Surface::set_jog_mode (JogWheel::Mode m)
 {
+	if (_jog_wheel) {
+		_jog_wheel->set_mode (m);
+	}
 }
 
 bool
-Surface::stripable_is_locked_to_strip (boost::shared_ptr<Stripable> stripable) const
+Surface::stripable_is_locked_to_strip (std::shared_ptr<Stripable> stripable) const
 {
 	for (Strips::const_iterator s = strips.begin(); s != strips.end(); ++s) {
 		if ((*s)->stripable() == stripable && (*s)->locked()) {
@@ -1231,7 +1460,7 @@ Surface::stripable_is_locked_to_strip (boost::shared_ptr<Stripable> stripable) c
 }
 
 bool
-Surface::stripable_is_mapped (boost::shared_ptr<Stripable> stripable) const
+Surface::stripable_is_mapped (std::shared_ptr<Stripable> stripable) const
 {
 	for (Strips::const_iterator s = strips.begin(); s != strips.end(); ++s) {
 		if ((*s)->stripable() == stripable) {
@@ -1356,7 +1585,7 @@ Surface::display_line (string const& msg, int line_num)
 
 	} else {
 
-		/* ascii data to display. @param msg is UTF-8 which is not legal. */
+		/* ascii data to display. @p msg is UTF-8 which is not legal. */
 		string ascii = Glib::convert_with_fallback (msg, "UTF-8", "ISO-8859-1", "_");
 		string::size_type len = ascii.length();
 
@@ -1376,7 +1605,7 @@ Surface::display_line (string const& msg, int line_num)
 	return midi_msg;
 }
 
-/** display @param msg on the 55x2 screen for @param msecs milliseconds
+/** display @p msg on the 55x2 screen for @p msecs milliseconds
  *
  *  @param msg is assumed to be UTF-8 encoded, and will be converted
  *  to ASCII with an underscore as fallback character before being
@@ -1408,5 +1637,81 @@ Surface::display_message_for (string const& msg, uint64_t msecs)
 
 	for (Strips::const_iterator s = strips.begin(); s != strips.end(); ++s) {
 		(*s)->block_screen_display_for (msecs);
+	}
+}
+ 
+/** display @p color_values on the 8 scribble strips of the X-Touch
+ *
+ *  @param color_values is assumed to be an array with a color value for each of the 8 scribble strips
+*/
+MidiByteArray
+Surface::display_colors_on_xtouch (const XTouchColors color_values[]) const
+{
+	MidiByteArray midi_msg;
+	midi_msg << sysex_hdr ();
+	midi_msg << 0x72;
+	
+	uint8_t displaycount = 8;
+	
+	for (uint8_t i = 0; i < displaycount; ++i) {
+		midi_msg << color_values[i];
+	}
+	
+	midi_msg << MIDI::eox;
+	
+	return midi_msg;
+}
+
+/** takes trackcolor in 0xRRGGBBAA (Red, Green, Blue, Alpha) and converts it to suitable xtouch colors
+ * return value can be casted to enum XTouchColor
+*/
+uint8_t
+Surface::convert_color_to_xtouch_value (uint32_t color) const
+{
+
+	uint8_t red = color >> 24;
+	uint8_t green = (color >> 16) & 0xff;
+	uint8_t blue = (color >> 8) & 0xff;
+	
+	uint8_t max = red;
+	if (max < green) {
+		max = green;
+	}
+	if (max < blue) {
+		max = blue;
+	}
+	
+	if (max != 0) {
+		
+		//set the highest value to 0xFF to be brightness independent
+		
+		float norm = 255.0/max;
+		red = static_cast<uint8_t> (red*norm);
+		green = static_cast<uint8_t> (green*norm);
+		blue = static_cast<uint8_t> (blue*norm);
+		
+		uint8_t xcolor = 0;
+		if (red > 0x7f) {
+		
+			xcolor = xcolor | 0b001;	//lowest bit is red
+			
+		}
+		if (green > 0x7f) {
+		
+			xcolor = xcolor | 0b010;	//second bit is green
+			
+		}
+		if (blue > 0x7f) {
+		
+			xcolor = xcolor | 0b100;	//third bit is blue
+			
+		}
+		
+		return xcolor;
+	
+	} else {
+	
+		return White;				//if it would be black (color = 0x000000) return white, because black means off
+		
 	}
 }

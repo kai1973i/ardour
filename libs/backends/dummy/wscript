@@ -1,20 +1,13 @@
 #!/usr/bin/env python
-from waflib.extras import autowaf as autowaf
 import os
-import sys
-import re
 
 I18N_PACKAGE = 'dummy-backend'
 
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
-    autowaf.configure(conf)
+    pass
 
 def build(bld):
     obj = bld(features = 'cxx cxxshlib')
@@ -25,7 +18,7 @@ def build(bld):
     obj.name     = 'dummy_audiobackend'
     obj.target   = 'dummy_audiobackend'
     obj.use      = 'libardour libpbd libltc'
-    obj.uselib   = 'GLIBMM XML'
+    obj.uselib   = 'GLIBMM XML OSX'
     obj.install_path  = os.path.join(bld.env['LIBDIR'], 'backends')
     obj.defines = ['PACKAGE="' + I18N_PACKAGE + '"',
                    'ARDOURBACKEND_DLL_EXPORTS'

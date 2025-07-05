@@ -1,22 +1,24 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2009 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/audio_track_importer.h"
 
@@ -55,7 +57,7 @@ AudioTrackImportHandler::AudioTrackImportHandler (XMLTree const & source, Sessio
 		if ( (!type || type->value() == "audio") &&  ((*it)->property ("diskstream") != 0 || (*it)->property ("diskstream-id") != 0)) {
 			try {
 				elements.push_back (ElementPtr ( new AudioTrackImporter (source, session, *this, **it, pl_handler)));
-			} catch (failed_constructor err) {
+			} catch (failed_constructor const&) {
 				set_dirty();
 			}
 		}
@@ -281,7 +283,7 @@ AudioTrackImporter::_move ()
 #if 0
 	/* Add diskstream */
 
-	boost::shared_ptr<XMLSharedNodeList> ds_node_list;
+	std::shared_ptr<XMLSharedNodeList> ds_node_list;
 	string xpath = "/Session/DiskStreams/AudioDiskstream[@id='" + old_ds_id.to_s() + "']";
 	ds_node_list = source.find (xpath);
 
@@ -290,14 +292,14 @@ AudioTrackImporter::_move ()
 		return;
 	}
 
-	boost::shared_ptr<XMLNode> ds_node = ds_node_list->front();
+	std::shared_ptr<XMLNode> ds_node = ds_node_list->front();
 	XMLProperty * p = ds_node->property (X_("id"));
 	assert (p);
 	p->set_value (new_ds_id.to_s());
 
-	boost::shared_ptr<DiskReader> new_ds (new DiskReader (session, *ds_node));
+	std::shared_ptr<DiskReader> new_ds (new DiskReader (session, *ds_node));
 	new_ds->set_name (name);
-	new_ds->do_refill_with_alloc ();
+	new_ds->do_refill_with_alloc (true, false);
 	new_ds->set_block_size (session.get_block_size ());
 
 	/* Import playlists */

@@ -1,25 +1,28 @@
 /*
-    Copyright (C) 2000-2011 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2011-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <string>
-#include <gtkmm/enums.h>
-#include "pbd/stacktrace.h"
+#include <ytkmm/enums.h>
+
 #include "ardour/profile.h"
 
 #include "canvas/debug.h"
@@ -27,7 +30,7 @@
 #include "canvas/tracking_text.h"
 
 #include "audio_clock.h"
-#include "editor.h"
+#include "editing_context.h"
 #include "editor_drag.h"
 #include "main_clock.h"
 #include "verbose_cursor.h"
@@ -38,11 +41,12 @@
 
 using namespace std;
 using namespace ARDOUR;
+using namespace Temporal;
 
-VerboseCursor::VerboseCursor (Editor* editor)
+VerboseCursor::VerboseCursor (EditingContext& editor)
 	: _editor (editor)
 {
-	_canvas_item = new ArdourCanvas::TrackingText (_editor->get_noscroll_group());
+	_canvas_item = new ArdourCanvas::TrackingText (_editor.get_noscroll_group());
 	CANVAS_DEBUG_NAME (_canvas_item, "verbose canvas cursor");
 	_canvas_item->set_font_description (Pango::FontDescription (UIConfiguration::instance().get_LargerBoldFont()));
 	color_handler ();
@@ -97,9 +101,9 @@ VerboseCursor::set_time (samplepos_t sample)
 {
 	char buf[128];
 	Timecode::Time timecode;
-	Timecode::BBT_Time bbt;
+	Temporal::BBT_Time bbt;
 
-	if (_editor->_session == 0) {
+	if (_editor.session() == 0) {
 		return;
 	}
 
@@ -109,21 +113,21 @@ VerboseCursor::set_time (samplepos_t sample)
 
 	switch (m) {
 	case AudioClock::BBT:
-		_editor->_session->bbt_time (sample, bbt);
+		bbt = TempoMap::use()->bbt_at (timepos_t (sample));
 		snprintf (buf, sizeof (buf), "%02" PRIu32 "|%02" PRIu32 "|%02" PRIu32, bbt.bars, bbt.beats, bbt.ticks);
 		break;
 
 	case AudioClock::Timecode:
-		_editor->_session->timecode_time (sample, timecode);
+		_editor.session()->timecode_time (sample, timecode);
 		snprintf (buf, sizeof (buf), "%s", Timecode::timecode_format_time (timecode).c_str());
 		break;
 
 	case AudioClock::MinSec:
-		AudioClock::print_minsec (sample, buf, sizeof (buf), _editor->_session->sample_rate());
+		AudioClock::print_minsec (sample, buf, sizeof (buf), _editor.session()->sample_rate());
 		break;
 
 	case AudioClock::Seconds:
-		snprintf (buf, sizeof(buf), "%.1f", sample / (float)_editor->_session->sample_rate());
+		snprintf (buf, sizeof(buf), "%.1f", sample / (float)_editor.session()->sample_rate());
 		break;
 
 	default:
@@ -139,11 +143,11 @@ VerboseCursor::set_duration (samplepos_t start, samplepos_t end)
 {
 	char buf[128];
 	Timecode::Time timecode;
-	Timecode::BBT_Time sbbt;
-	Timecode::BBT_Time ebbt;
-	Meter meter_at_start (_editor->_session->tempo_map().meter_at_sample (start));
+	Temporal::BBT_Time sbbt;
+	Temporal::BBT_Time ebbt;
+	Meter const & meter_at_start (TempoMap::use()->metric_at (timepos_t (start)).meter());
 
-	if (_editor->_session == 0) {
+	if (_editor.session() == 0) {
 		return;
 	}
 
@@ -152,8 +156,8 @@ VerboseCursor::set_duration (samplepos_t start, samplepos_t end)
 	switch (m) {
 	case AudioClock::BBT:
 	{
-		_editor->_session->bbt_time (start, sbbt);
-		_editor->_session->bbt_time (end, ebbt);
+		sbbt = TempoMap::use()->bbt_at (timepos_t (start));
+		ebbt = TempoMap::use()->bbt_at (timepos_t (end));
 
 		/* subtract */
 		/* XXX this computation won't work well if the
@@ -170,7 +174,7 @@ VerboseCursor::set_duration (samplepos_t start, samplepos_t end)
 
 		ticks -= sbbt.ticks;
 		if (ticks < 0) {
-			ticks += int (Timecode::BBT_Time::ticks_per_beat);
+			ticks += int (Temporal::ticks_per_beat);
 			--beats;
 		}
 
@@ -187,16 +191,16 @@ VerboseCursor::set_duration (samplepos_t start, samplepos_t end)
 	}
 
 	case AudioClock::Timecode:
-		_editor->_session->timecode_duration (end - start, timecode);
+		_editor.session()->timecode_duration (end - start, timecode);
 		snprintf (buf, sizeof (buf), "%s", Timecode::timecode_format_time (timecode).c_str());
 		break;
 
 	case AudioClock::MinSec:
-		AudioClock::print_minsec (end - start, buf, sizeof (buf), _editor->_session->sample_rate());
+		AudioClock::print_minsec (end - start, buf, sizeof (buf), _editor.session()->sample_rate());
 		break;
 
 	case AudioClock::Seconds:
-		snprintf (buf, sizeof(buf), "%.1f", (end - start) / (float)_editor->_session->sample_rate());
+		snprintf (buf, sizeof(buf), "%.1f", (end - start) / (float)_editor.session()->sample_rate());
 		break;
 
 	default:

@@ -1,24 +1,26 @@
 /*
-    Copyright (C) 2004-2011 Paul Davis
+ * Copyright (C) 2006-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_panner_h__
-#define __ardour_panner_h__
+#pragma once
 
 #include <cmath>
 #include <cassert>
@@ -58,10 +60,10 @@ class Speakers;
 class LIBARDOUR_API Panner : public PBD::Stateful, public PBD::ScopedConnectionList
 {
 public:
-	Panner (boost::shared_ptr<Pannable>);
+	Panner (std::shared_ptr<Pannable>);
 	~Panner ();
 
-	virtual boost::shared_ptr<Speakers> get_speakers() const { return boost::shared_ptr<Speakers>(); }
+	virtual std::shared_ptr<Speakers> get_speakers() const { return std::shared_ptr<Speakers>(); }
 
 	virtual ChanCount in() const = 0;
 	virtual ChanCount out() const = 0;
@@ -101,38 +103,7 @@ public:
 	virtual void reset () = 0;
 
 	/* azimut, width or elevation updated -> recalc signal_position ->  emit Changed */
-	PBD::Signal0<void> SignalPositionChanged;
-
-	void      set_automation_state (AutoState);
-	AutoState automation_state() const;
-
-	virtual std::set<Evoral::Parameter> what_can_be_automated() const;
-	virtual std::string describe_parameter (Evoral::Parameter);
-	virtual std::string value_as_string (boost::shared_ptr<const AutomationControl>) const;
-
-	bool touching() const;
-
-	static double azimuth_to_lr_fract (double azi) {
-		/* 180.0 degrees=> left => 0.0 */
-		/* 0.0 degrees => right => 1.0 */
-
-		/* humans can only distinguish 1 degree of arc between two positions,
-		   so force azi back to an integral value before computing
-		*/
-
-		return 1.0 - (rint(azi)/180.0);
-	}
-
-	static double lr_fract_to_azimuth (double fract) {
-		/* fract = 0.0 => degrees = 180.0 => left */
-		/* fract = 1.0 => degrees = 0.0 => right */
-
-		/* humans can only distinguish 1 degree of arc between two positions,
-		   so force azi back to an integral value after computing
-		*/
-
-		return rint (180.0 - (fract * 180.0));
-	}
+	PBD::Signal<void()> SignalPositionChanged;
 
 	/**
 	 *  Pan some input buffers to a number of output buffers.
@@ -156,29 +127,27 @@ public:
 	                                   pan_t** buffers);
 
 	int set_state (const XMLNode&, int version);
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 
-	boost::shared_ptr<Pannable> pannable() const { return _pannable; }
-
-	static bool equivalent (pan_t a, pan_t b) {
-		return fabsf (a - b) < 0.002; // about 1 degree of arc for a stereo panner
-	}
-
-	static bool equivalent (const PBD::AngularVector& a, const PBD::AngularVector& b) {
-		/* XXX azimuth only, at present */
-		return fabs (a.azi - b.azi) < 1.0;
-	}
+	std::shared_ptr<Pannable> pannable() const { return _pannable; }
 
 	virtual void freeze ();
 	virtual void thaw ();
 
-protected:
-	boost::shared_ptr<Pannable> _pannable;
+	const std::set<Evoral::Parameter>& what_can_be_automated() const {
+		return _can_automate_list;
+	}
 
+	virtual std::string value_as_string (std::shared_ptr<const AutomationControl>) const = 0;
+
+protected:
 	virtual void distribute_one (AudioBuffer&, BufferSet& obufs, gain_t gain_coeff, pframes_t nframes, uint32_t which) = 0;
 	virtual void distribute_one_automated (AudioBuffer&, BufferSet& obufs,
 	                                       samplepos_t start, samplepos_t end, pframes_t nframes,
 	                                       pan_t** buffers, uint32_t which) = 0;
+
+	std::shared_ptr<Pannable> _pannable;
+	std::set<Evoral::Parameter> _can_automate_list;
 
 	int32_t _frozen;
 };
@@ -193,8 +162,7 @@ struct LIBARDOUR_API PanPluginDescriptor {
 	int32_t in;
 	int32_t out;
 	uint32_t priority;
-	ARDOUR::Panner* (*factory)(boost::shared_ptr<ARDOUR::Pannable>, boost::shared_ptr<ARDOUR::Speakers>);
+	ARDOUR::Panner* (*factory)(std::shared_ptr<ARDOUR::Pannable>, std::shared_ptr<ARDOUR::Speakers>);
 };
 }
 
-#endif /* __ardour_panner_h__ */

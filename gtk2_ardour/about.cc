@@ -1,21 +1,27 @@
 /*
-    Copyright (C) 2003 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2007-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2008-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 #include <unistd.h>
@@ -136,13 +142,17 @@ static const char* authors[] = {
 	N_("Thomas Brand"),
 	N_("Chris Cannam"),
 	N_("Jeremy Carter"),
+	N_("Enrico Castella"),
 	N_("Jesse Chappell"),
 	N_("Thomas Charbonnel"),
 	N_("Sam Chessman"),
+	N_("Dan Church"),
 	N_("André Colomb"),
 	N_("Paul Davis"),
+	N_("Simon Dixon"),
 	N_("Gerard van Dongen"),
 	N_("John Emmas"),
+	N_("Hubert Figuière"),
 	N_("Colin Fletcher"),
 	N_("Dave Flick"),
 	N_("Hans Fugal"),
@@ -160,24 +170,32 @@ static const char* authors[] = {
 	N_("Rob Holland"),
 	N_("Robert Jordens"),
 	N_("Stefan Kersten"),
+	N_("Mads Kiilerich"),
 	N_("Armand Klenk"),
 	N_("Julien de Kozak"),
 	N_("Matt Krai"),
 	N_("Georg Krause"),
+	N_("Marijn Kruisselbrink"),
 	N_("Nick Lanham"),
 	N_("Colin Law"),
 	N_("Joshua Leach"),
+	N_("Jan Lentfer"),
 	N_("Ben Loftis"),
+	N_("Hector Martin"),
+	N_("Matthias Mauch"),
 	N_("Nick Mainsbridge"),
 	N_("Tim Mayberry"),
 	N_("Doug Mclain"),
+	N_("Alexander Mitchell"),
 	N_("Johannes Mueller"),
+	N_("Edward Tomasz Napierała"),
 	N_("Todd Naugle"),
 	N_("André Nusser"),
 	N_("Bent Bisballe Nyeng"),
 	N_("Jack O'Quin"),
 	N_("Len Ovens"),
 	N_("Pavel Potocek"),
+	N_("Caleb Potter"),
 	N_("Nimal Ratnayake"),
 	N_("Julien Rivaud"),
 	N_("David Robillard"),
@@ -186,6 +204,7 @@ static const char* authors[] = {
 	N_("Andreas Ruge"),
 	N_("Sampo Savolainen"),
 	N_("Rodrigo Severo"),
+	N_("Ayan Shafqat"),
 	N_("Daniel Sheeler"),
 	N_("Per Sigmond"),
 	N_("Lincoln Spiteri"),
@@ -195,15 +214,34 @@ static const char* authors[] = {
 	N_("Roland Stigge"),
 	N_("Petter Sundlöf"),
 	N_("Mike Täht"),
+	N_("Remi Thebault"),
 	N_("Roy Vegard"),
+	N_("Bruno Vernay"),
+	N_("Florian Walpen"),
 	N_("Thorsten Wilms"),
 	N_("Damien Zammit"),
 	N_("Grygorii Zharun"),
+	N_("albatross"),
+	N_("cooltehno"),
+	N_("danceswithbugs"),
+	N_("dbolton"),
+	N_("itmuckel"),
+	N_("mlachland"),
+	N_("sra"),
+	N_("tassyv"),
 	0
 };
 
 static const char* translators[] = {
-	N_("French:\n\tAlain Fréhel <alain.frehel@free.fr>\n\tChristophe Combelles <ccomb@free.fr>\n\tMartin Blanchard\n\tRomain Arnaud <roming22@gmail.com>\n\tOlivier Humbert <trebmuh@tuxfamily.org>\n"),
+	N_("Catalan:\n\tAlbert Homs <alberthoms@gmail.com>\n"),
+        N_("French:\n\tAlain Fréhel <alain.frehel@free.fr>\
+\n\tChristophe Combelles <ccomb@free.fr>\
+\n\tMartin Blanchard\
+\n\tRomain Arnaud <roming22@gmail.com>\
+\n\tOlivier Humbert <trebmuh@tuxfamily.org>\
+\n\tFrédéric Rech <fred_rech@laposte.net>\
+\n\tJulien Taverna <jujudusud@gmail.com>\
+\n\tNicolas Faure <sub26nico@laposte.net>\n"),
 	N_("German:\n\tKarsten Petersen <kapet@kapet.de>\
 \n\tSebastian Arnold <mail@sebastian-arnold.net>\
 \n\tRobert Schwede <schwede@ironshark.com>\
@@ -211,32 +249,62 @@ static const char* translators[] = {
 \n\tEdgar Aichinger <edogawa@aon.at>\
 \n\tRichard Oax <richard@pagliacciempire.de>\
 \n\tRobin Gloster <robin@loc-com.de>\n"),
-	N_("Italian:\n\tFilippo Pappalardo <filippo@email.it>\n\tRaffaele Morelli <raffaele.morelli@gmail.com>\n"),
+	N_("Italian:\n\tVincenzo Reale <smart2128@baslug.org>\
+\n\tFilippo Pappalardo <filippo@email.it>\
+\n\tRaffaele Morelli <raffaele.morelli@gmail.com>\
+\n\tGuido Pietrella\
+\n\tDaniele Tombolini\n"),
 	N_("Portuguese:\n\tRui Nuno Capela <rncbc@rncbc.org>\n"),
 	N_("Brazilian Portuguese:\n\tAlexander da Franca Fernandes <alexander@nautae.eti.br>\
 \n\tChris Ross <chris@tebibyte.org>\n"),
-	N_("Spanish:\n\t Alex Krohn <alexkrohn@fastmail.fm>\n\tPablo Fernández <pablo.fbus@gmail.com>\n"),
+	N_("Spanish:\n\t Alex Krohn <alexkrohn@fastmail.fm>\
+\n\tPablo Fernández <pablo.fbus@gmail.com>\n"),
 	N_("Russian:\n\t Igor Blinov <pitstop@nm.ru>\
+\n\tAleksandr Koltsov <ag1455@mail.ru>\
+\n\tPetr Semiletov <tea@list.ru>\
 \n\tAlexandre Prokoudine <alexandre.prokoudine@gmail.com>\n"),
 	N_("Greek:\n\t Klearchos Gourgourinis <muadib@in.gr>\n"),
 	N_("Swedish:\n\t Petter Sundlöf <petter.sundlof@gmail.com>\n"),
 	N_("Polish:\n\t Piotr Zaryk <pzaryk@gmail.com>\n"),
-	N_("Czech:\n\t Pavel Fric <pavelfric@seznam.cz>\n"),
+	N_("Czech:\n\t Pavel Fric <pavelfric@seznam.cz>\n\t Martin Vlk <martin@vlkk.cz>\n"),
 	N_("Norwegian:\n\t Eivind Ødegård\n"),
 	N_("Chinese:\n\t Rui-huai Zhang <zrhzrh@mail.ustc.edu.cn>\n"),
 	N_("Japanese:\n\t Hiroki Inagaki <hiroki.ingk@gmail.com>\n"),
+	N_("Korean:\n\t Junghee Lee <daemul72@gmail.com>\n"),
 	0
 };
 
-static const char* gpl = X_("\n\
+static char const* gpl = X_("\n\
 Ardour comes with NO WARRANTY. It is free software, and you are welcome to redistribute it\n\
-under the terms of the GNU General Public License, shown below.\n\
+under the terms of the GNU General Public License (GPL) v2.0 or any later version, shown below.\n\
+\n\
+			    Plugin Clarification\n\
+\n\
+The following states the Ardour developers understanding of the\n\
+relationship between Ardour's license (GPL v2.0 or later) and plugins.\n\
+\n\
+For the purposes of this understanding, \"plugins\" refer to software\n\
+dynamically loaded by another program, where the interaction between the\n\
+plugin and the loading program (typically called \"the host\") is defined by\n\
+a 3rd party API. Such APIs include (but are not limited to) VST,\n\
+AudioUnits, LV2, LADSPA and CLAP.\n\
+\n\
+Since (a) any such plugin may be loaded by any host that supports the API\n\
+and (b) any host may load any plugin that supports the API, we consider it\n\
+self-evident that there can be no \"derivative\" relationship (in the sense\n\
+of the GPL's use of this term) between the host and plugin.\n\
+\n\
+Consequently, Ardour may load arbitrarily licensed plugins, so as to cause\n\
+interactions between Ardour and the plugin via a 3rd party API, without any\n\
+implications for either Ardour or the plugin. In our understanding, Using\n\
+such plugins with Ardour is not impacted in any way by Ardour's GPL licensing.\n\
+\n\
 \n\
 		    GNU GENERAL PUBLIC LICENSE\n\
 		       Version 2, June 1991\n\
 \n\
  Copyright (C) 1989, 1991 Free Software Foundation, Inc.\n\
-     59 Temple Place, Suite 330, Boston, MA  02111-1307  USA\n\
+  51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA\n\
  Everyone is permitted to copy and distribute verbatim copies\n\
  of this license document, but changing it is not allowed.\n\
 \n\
@@ -552,13 +620,19 @@ About::About ()
 	const std::string cpu_arch = _("PowerPC 64-bit");
 #elif defined __ppc__
 	const std::string cpu_arch = _("PowerPC 32-bit");
+#elif defined  __aarch64__
+	const std::string cpu_arch = _("ARM 64-bit (aarch64)");
+#elif defined  __arm__ && defined __ARM_NEON
+	const std::string cpu_arch = _("ARM 32-bit (armhf)");
+#elif defined  __arm__
+	const std::string cpu_arch = _("ARM 32-bit");
 #elif defined  __LP64__
 	const std::string cpu_arch = _("64-bit");
 #else
-	const std::string cpu_arch = _("32-bit"); // ARM, ALPHA,..
+	const std::string cpu_arch = _("32-bit");
 #endif
 	std::string codename = CODENAME;
-	if (ARDOUR::Profile->get_mixbus() || ARDOUR::Profile->get_trx()) {
+	if (ARDOUR::Profile->get_mixbus()) {
 		codename = "";
 	}
 
@@ -569,10 +643,10 @@ About::About ()
 #endif
 
 	set_translator_credits (t);
-	set_copyright (_("Copyright (C) 1999-2018 Paul Davis\n"));
+	set_copyright (_("Copyright (C) 1999-2025 Paul Davis\n"));
 	set_license (gpl);
 	set_name (X_("Ardour"));
-	set_website (X_("http://ardour.org/"));
+	set_website (X_("https://ardour.org/"));
 	set_website_label (_("http://ardour.org/"));
 	set_version ((string_compose(_("%1%2\n(rev %3)\n%4%5"),
 				     VERSIONSTRING,

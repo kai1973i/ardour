@@ -1,24 +1,26 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2010 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __pbd_properties_h__
-#define __pbd_properties_h__
+#pragma once
 
 #include <string>
 #include <list>
@@ -80,6 +82,18 @@ public:
 		return _current;
 	}
 
+	T operator- (T const other) const {
+		return _current - other;
+	}
+
+	bool operator< (T const &other) const {
+		return _current < other;
+	}
+
+	bool operator> (T const &other) const {
+		return _current > other;
+	}
+
 	bool operator==(const T& other) const {
 		return _current == other;
 	}
@@ -96,6 +110,9 @@ public:
 		return _current;
 	}
 
+	T& non_const_val () {
+		return _current;
+	}
 
 	/* MANAGEMENT OF Stateful State */
 
@@ -152,7 +169,7 @@ public:
 
 	/* VARIOUS */
 
-	void apply_changes (PropertyBase const * p) {
+	void apply_change (PropertyBase const * p) {
 		T v = dynamic_cast<const PropertyTemplate<T>* > (p)->val ();
 		if (v != _current) {
 			set (v);
@@ -250,6 +267,11 @@ public:
 		return this->_current;
 	}
 
+	Property<T>& operator=(Property<T> const& v) {
+		this->set (v);
+		return *this;
+	}
+
 private:
         friend class PropertyFactory;
 
@@ -335,6 +357,7 @@ private:
 
 	/* no copy-construction */
 	EnumProperty (EnumProperty const &);
+	EnumProperty& operator= (EnumProperty const &);
 };
 
 /** A Property which holds a shared_ptr to a Stateful object,
@@ -348,7 +371,7 @@ template <class T>
 class /*LIBPBD_API*/ SharedStatefulProperty : public PropertyBase
 {
 public:
-	typedef boost::shared_ptr<T> Ptr;
+	typedef std::shared_ptr<T> Ptr;
 
 	SharedStatefulProperty (PropertyID d, Ptr p)
 		: PropertyBase (d)
@@ -396,9 +419,10 @@ public:
 	}
 
 	bool changed () const {
-		/* Expensive, but, hey; this requires operator!= in
-		   our T
-		*/
+		if (!_old) {
+			return false;
+		}
+		/* Expensive, but, hey; this requires operator!= in our T */
 		return (*_old != *_current);
 	}
 
@@ -423,7 +447,7 @@ public:
 		}
 	}
 
-	void apply_changes (PropertyBase const * p) {
+	void apply_change (PropertyBase const * p) {
 		*_current = *(dynamic_cast<SharedStatefulProperty const *> (p))->val ();
 	}
 
@@ -456,4 +480,3 @@ private:
 #include "pbd/property_list_impl.h"
 #include "pbd/property_basics_impl.h"
 
-#endif /* __pbd_properties_h__ */

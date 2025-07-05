@@ -1,19 +1,21 @@
 /*
-    Copyright (C) 2004 Paul Davis
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2004 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <string>
 #include <sstream>
@@ -39,7 +41,7 @@ using namespace Gtkmm2ext;
 using namespace ArdourWidgets;
 
 BarController::BarController (Gtk::Adjustment& adj,
-		boost::shared_ptr<PBD::Controllable> mc)
+		std::shared_ptr<PBD::Controllable> mc)
 	: _slider (&adj, mc, 60, 16)
 	, _switching (false)
 	, _switch_on_release (false)
@@ -58,7 +60,11 @@ BarController::BarController (Gtk::Adjustment& adj,
 	Gtk::SpinButton& spinner = _slider.get_spin_button();
 	spinner.signal_activate().connect (mem_fun (*this, &BarController::entry_activated));
 	spinner.signal_focus_out_event().connect (mem_fun (*this, &BarController::entry_focus_out));
-	spinner.set_digits (4);
+	if (mc && mc->is_gain_like ()) {
+		spinner.set_digits (2); // 0.01 dB
+	} else {
+		spinner.set_digits (4);
+	}
 	spinner.set_numeric (true);
 	spinner.set_name ("BarControlSpinner");
 	add (_slider);
@@ -81,7 +87,7 @@ BarController::on_button_press_event (GdkEventButton* ev)
 	} else {
 		_switch_on_release = false;
 	}
-	return false;
+	return 1 == ev->button;
 }
 
 bool

@@ -1,27 +1,29 @@
 /*
-    Copyright (C) 2002-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "control_point.h"
 #include "automation_line.h"
 #include "public_editor.h"
 #include "ui_config.h"
 
+#include "canvas/debug.h"
 #include "canvas/rectangle.h"
 
 #include "pbd/i18n.h"
@@ -30,7 +32,7 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-PBD::Signal1<void, ControlPoint *> ControlPoint::CatchDeletion;
+PBD::Signal<void(ControlPoint *)> ControlPoint::CatchDeletion;
 
 ControlPoint::ControlPoint (AutomationLine& al)
 	: _line (al)
@@ -44,6 +46,7 @@ ControlPoint::ControlPoint (AutomationLine& al)
 	_size = 4.0;
 
 	_item = new ArdourCanvas::Rectangle (&_line.canvas_group());
+	CANVAS_DEBUG_NAME (_item, "Control Point");
 	_item->set_fill (true);
 	_item->set_fill_color (UIConfiguration::instance().color ("control point fill"));
 	_item->set_outline_color (UIConfiguration::instance().color ("control point outline"));
@@ -87,7 +90,7 @@ ControlPoint::~ControlPoint ()
 bool
 ControlPoint::event_handler (GdkEvent* event)
 {
-	return PublicEditor::instance().canvas_control_point_event (event, _item, this);
+	return _line.editing_context().canvas_control_point_event (event, _item, this);
 }
 
 void
@@ -120,11 +123,19 @@ void
 ControlPoint::set_color ()
 {
 	if (_selected) {
+
 		_item->set_outline_color(UIConfiguration::instance().color ("control point selected outline"));;
 		_item->set_fill_color(UIConfiguration::instance().color ("control point selected fill"));
+
 	} else {
-		_item->set_outline_color(UIConfiguration::instance().color ("control point outline"));
-		_item->set_fill_color(UIConfiguration::instance().color ("control point fill"));
+
+		if (_line.control_points_inherit_color()) {
+			_item->set_outline_color(_line.get_line_color());
+			_item->set_fill_color(_line.get_line_fill_color ());
+		} else {
+			_item->set_outline_color(UIConfiguration::instance().color ("control point outline"));
+			_item->set_fill_color(UIConfiguration::instance().color ("control point fill"));
+		}
 	}
 }
 
@@ -132,7 +143,13 @@ void
 ControlPoint::set_size (double sz)
 {
 	_size = sz;
-	move_to (_x, _y, _shape);
+	move_to (_x, _y);
+}
+
+void
+ControlPoint::move_to (double x, double y)
+{
+	move_to (x, y, _shape);
 }
 
 void

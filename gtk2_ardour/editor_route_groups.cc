@@ -1,40 +1,35 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifdef WAF_BUILD
-#include "gtk2ardour-config.h"
-#endif
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstdlib>
-#include <cmath>
 
-#include "fix_carbon.h"
+#include <ytkmm/stock.h>
 
-#include <gtkmm/stock.h>
-
+#include "gtkmm2ext/colors.h"
 #include "gtkmm2ext/gtk_ui.h"
 #include "gtkmm2ext/cell_renderer_color_selector.h"
 
 #include "widgets/tooltips.h"
 
 #include "ardour/route_group.h"
-#include "ardour/route.h"
 #include "ardour/session.h"
 
 #include "ardour_ui.h"
@@ -44,29 +39,19 @@
 #include "editor_routes.h"
 #include "gui_thread.h"
 #include "keyboard.h"
-#include "marker.h"
 #include "route_group_dialog.h"
-#include "route_time_axis.h"
 #include "time_axis_view.h"
-#include "utils.h"
 
 #include "pbd/i18n.h"
 
 using namespace std;
 using namespace ARDOUR;
-using namespace ARDOUR_UI_UTILS;
 using namespace ArdourWidgets;
 using namespace PBD;
 using namespace Gtk;
 using Gtkmm2ext::Keyboard;
 
-struct ColumnInfo {
-	int         index;
-	const char* label;
-	const char* tooltip;
-};
-
-EditorRouteGroups::EditorRouteGroups (Editor* e)
+EditorRouteGroups::EditorRouteGroups (Editor& e)
 	: EditorComponent (e)
 	, _in_row_change (false)
 	, _in_rebuild (false)
@@ -96,7 +81,12 @@ EditorRouteGroups::EditorRouteGroups (Editor* e)
 	TreeViewColumn* col;
 	Gtk::Label* l;
 
-	ColumnInfo ci[] = {
+	struct ColumnInfo {
+		int         index;
+		const char* label;
+		const char* tooltip;
+	} ci[] = {
+	/* clang-format off */
 		{ 0,   _("Col"),            _("Group Tab Color") },
 		{ 1,   _("Name"),           _("Name of Group") },
 		{ 2,  S_("Visible|V"),      _("Group is visible?") },
@@ -111,7 +101,7 @@ EditorRouteGroups::EditorRouteGroups (Editor* e)
 		{ 11, S_("Active|A"),       _("Sharing Active Status?") },
 		{ -1, 0, 0 }
 	};
-
+	/* clang-format on */
 
 	for (int i = 0; ci[i].index >= 0; ++i) {
 		col = _display.get_column (ci[i].index);
@@ -131,8 +121,8 @@ EditorRouteGroups::EditorRouteGroups (Editor* e)
 
 	_display.set_headers_visible (true);
 
-	color_dialog.get_colorsel()->set_has_opacity_control (false);
-	color_dialog.get_colorsel()->set_has_palette (true);
+	color_dialog.get_color_selection()->set_has_opacity_control (false);
+	color_dialog.get_color_selection()->set_has_palette (true);
 	color_dialog.get_ok_button()->signal_clicked().connect (sigc::bind (sigc::mem_fun (color_dialog, &Gtk::Dialog::response), RESPONSE_ACCEPT));
 	color_dialog.get_cancel_button()->signal_clicked().connect (sigc::bind (sigc::mem_fun (color_dialog, &Gtk::Dialog::response), RESPONSE_CANCEL));
 
@@ -250,7 +240,7 @@ EditorRouteGroups::button_press_event (GdkEventButton* ev)
 	}
 
 	if (Keyboard::is_context_menu_event (ev)) {
-		_editor->_group_tabs->get_menu(group)->popup (1, ev->time);
+		_editor._group_tabs->get_menu(group)->popup (1, ev->time);
 		return true;
 	}
 
@@ -267,20 +257,17 @@ EditorRouteGroups::button_press_event (GdkEventButton* ev)
 	switch (GPOINTER_TO_UINT (column->get_data (X_("colnum")))) {
 	case 0:
 		c =  (*iter)[_columns.gdkcolor];
-		color_dialog.get_colorsel()->set_previous_color (c);
-		color_dialog.get_colorsel()->set_current_color (c);
+		color_dialog.get_color_selection()->set_previous_color (c);
+		color_dialog.get_color_selection()->set_current_color (c);
 
 		switch (color_dialog.run()) {
-		case RESPONSE_CANCEL:
-			break;
-		case RESPONSE_ACCEPT:
-			c = color_dialog.get_colorsel()->get_current_color();
-			GroupTabs::set_group_color (group, gdk_color_to_rgba (c));
-			break;
+			case RESPONSE_ACCEPT:
+				c = color_dialog.get_color_selection()->get_current_color();
+				GroupTabs::set_group_color (group, Gtkmm2ext::gdk_color_to_rgba (c));
+				break;
 
-		default:
-			break;
-
+			default:
+				break;
 		}
 
 		color_dialog.hide ();
@@ -406,7 +393,7 @@ EditorRouteGroups::row_change (const Gtk::TreeModel::Path&, const Gtk::TreeModel
 
 	group->apply_changes (plist);
 
-	GroupTabs::set_group_color ((*iter)[_columns.routegroup], gdk_color_to_rgba ((*iter)[_columns.gdkcolor]));
+	GroupTabs::set_group_color ((*iter)[_columns.routegroup], Gtkmm2ext::gdk_color_to_rgba ((*iter)[_columns.gdkcolor]));
 }
 
 void
@@ -429,7 +416,7 @@ EditorRouteGroups::add (RouteGroup* group)
 	row[_columns.is_visible] = !group->is_hidden();
 
 	Gdk::Color c;
-	set_color_from_rgba (c, GroupTabs::group_color (group));
+	Gtkmm2ext::set_color_from_rgba (c, GroupTabs::group_color (group));
 	row[_columns.gdkcolor] = c;
 
 	_in_row_change = true;
@@ -443,7 +430,7 @@ EditorRouteGroups::add (RouteGroup* group)
 		focus = true;
 	}
 
-	group->PropertyChanged.connect (_property_changed_connections, MISSING_INVALIDATOR, boost::bind (&EditorRouteGroups::property_changed, this, group, _1), gui_context());
+	group->PropertyChanged.connect (_property_changed_connections, MISSING_INVALIDATOR, std::bind (&EditorRouteGroups::property_changed, this, group, _1), gui_context());
 
 	if (focus) {
 		TreeViewColumn* col = _display.get_column (0);
@@ -453,7 +440,7 @@ EditorRouteGroups::add (RouteGroup* group)
 
 	_in_row_change = false;
 
-	_editor->_group_tabs->set_dirty ();
+	_editor._group_tabs->set_dirty ();
 }
 
 void
@@ -503,7 +490,7 @@ EditorRouteGroups::property_changed (RouteGroup* group, const PropertyChange&)
 			(*iter)[_columns.is_visible] = !group->is_hidden();
 
 			Gdk::Color c;
-			set_color_from_rgba (c, GroupTabs::group_color (group));
+			Gtkmm2ext::set_color_from_rgba (c, GroupTabs::group_color (group));
 			(*iter)[_columns.gdkcolor] = c;
 
 			break;
@@ -512,12 +499,12 @@ EditorRouteGroups::property_changed (RouteGroup* group, const PropertyChange&)
 
 	_in_row_change = false;
 
-	for (TrackViewList::const_iterator i = _editor->get_track_views().begin(); i != _editor->get_track_views().end(); ++i) {
+	for (TrackViewList::const_iterator i = _editor.get_track_views().begin(); i != _editor.get_track_views().end(); ++i) {
 		if ((*i)->route_group() == group) {
 			if (group->is_hidden ()) {
-				_editor->hide_track_in_display (*i);
+				_editor.hide_track_in_display (*i);
 			} else {
-				_editor->_routes->show_track_in_display (**i);
+				_editor.show_track_in_display (*i);
 			}
 		}
 	}
@@ -556,12 +543,12 @@ EditorRouteGroups::set_session (Session* s)
 
 	if (_session) {
 
-		_session->route_group_added.connect (_session_connections, MISSING_INVALIDATOR, boost::bind (&EditorRouteGroups::add, this, _1), gui_context());
+		_session->route_group_added.connect (_session_connections, MISSING_INVALIDATOR, std::bind (&EditorRouteGroups::add, this, _1), gui_context());
 		_session->route_group_removed.connect (
-			_session_connections, MISSING_INVALIDATOR, boost::bind (&EditorRouteGroups::groups_changed, this), gui_context()
+			_session_connections, MISSING_INVALIDATOR, std::bind (&EditorRouteGroups::groups_changed, this), gui_context()
 			);
 		_session->route_groups_reordered.connect (
-			_session_connections, MISSING_INVALIDATOR, boost::bind (&EditorRouteGroups::groups_changed, this), gui_context()
+			_session_connections, MISSING_INVALIDATOR, std::bind (&EditorRouteGroups::groups_changed, this), gui_context()
 			);
 	}
 
@@ -575,7 +562,7 @@ EditorRouteGroups::set_session (Session* s)
 void
 EditorRouteGroups::run_new_group_dialog ()
 {
-	return _editor->_group_tabs->run_new_group_dialog (0, false);
+	return _editor._group_tabs->run_new_group_dialog (0, false);
 }
 
 /** Called when a model row is deleted, but also when the model is

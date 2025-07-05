@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2011-2013 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 #include <cairomm/context.h>
@@ -52,7 +52,7 @@ Line::compute_bounding_box () const
 	bbox = bbox.expand (0.5 + (_outline_width / 2));
 
 	_bounding_box = bbox;
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }
 
 void
@@ -86,7 +86,7 @@ Line::set (Duple a, Duple b)
 		_points[0] = a;
 		_points[1] = b;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -100,7 +100,7 @@ Line::set_x (Coord x0, Coord x1)
 		_points[0].x = x0;
 		_points[1].x = x1;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -113,7 +113,7 @@ Line::set_x0 (Coord x0)
 
 		_points[0].x = x0;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -126,7 +126,7 @@ Line::set_y0 (Coord y0)
 
 		_points[0].y = y0;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 
@@ -141,7 +141,7 @@ Line::set_x1 (Coord x1)
 
 		_points[1].x = x1;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -154,7 +154,7 @@ Line::set_y1 (Coord y1)
 
 		_points[1].y = y1;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }

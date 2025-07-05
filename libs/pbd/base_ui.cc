@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 2000-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2008-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstring>
 #include <stdint.h>
@@ -47,13 +50,15 @@ using namespace PBD;
 using namespace Glib;
 
 uint64_t BaseUI::rt_bit = 1;
+int BaseUI::_thread_priority = PBD_RT_PRI_CTRL;
+
 BaseUI::RequestType BaseUI::CallSlot = BaseUI::new_request_type();
 BaseUI::RequestType BaseUI::Quit = BaseUI::new_request_type();
 
 BaseUI::BaseUI (const string& loop_name)
 	: EventLoop (loop_name)
 	, m_context(MainContext::get_default())
-	, run_loop_thread (0)
+	, _run_loop_thread (0)
 	, request_channel (true)
 {
 	base_ui_instance = this;
@@ -64,6 +69,7 @@ BaseUI::BaseUI (const string& loop_name)
 
 BaseUI::~BaseUI()
 {
+	delete _run_loop_thread;
 }
 
 BaseUI::RequestType
@@ -80,9 +86,9 @@ BaseUI::new_request_type ()
 }
 
 int
-BaseUI::set_thread_priority (const int policy, int priority) const
+BaseUI::set_thread_priority () const
 {
-	return pbd_set_thread_priority (pthread_self(), policy, priority);
+	return pbd_set_thread_priority (pthread_self(), PBD_SCHED_FIFO, _thread_priority);
 }
 
 void
@@ -115,7 +121,7 @@ BaseUI::run ()
 	attach_request_source ();
 
 	Glib::Threads::Mutex::Lock lm (_run_lock);
-	run_loop_thread = Glib::Threads::Thread::create (mem_fun (*this, &BaseUI::main_thread));
+	_run_loop_thread = PBD::Thread::create (std::bind (&BaseUI::main_thread, this), string_compose ("UI:%1", event_loop_name ()));
 	_running.wait (_run_lock);
 }
 
@@ -124,7 +130,7 @@ BaseUI::quit ()
 {
 	if (_main_loop && _main_loop->is_running()) {
 		_main_loop->quit ();
-		run_loop_thread->join ();
+		_run_loop_thread->join ();
 	}
 }
 
@@ -132,10 +138,6 @@ bool
 BaseUI::request_handler (Glib::IOCondition ioc)
 {
 	/* check the request pipe */
-
-	if (ioc & ~IO_IN) {
-		_main_loop->quit ();
-	}
 
 	if (ioc & IO_IN) {
 		request_channel.drain ();
@@ -150,13 +152,19 @@ BaseUI::request_handler (Glib::IOCondition ioc)
 		handle_ui_requests ();
 	}
 
+	if (ioc & ~(IO_IN|IO_PRI)) {
+		_main_loop->quit ();
+	}
+
 	return true;
 }
 
 void
 BaseUI::signal_new_request ()
 {
-	DEBUG_TRACE (DEBUG::EventLoop, string_compose ("%1: signal_new_request\n", event_loop_name()));
+	if ((DEBUG::EventLoop & PBD::debug_bits).any()) {
+		std::cout << "DEBUG::EventLoop: " <<  string_compose ("%1: signal_new_request\n", event_loop_name());
+	}
 	request_channel.wakeup ();
 }
 
@@ -168,4 +176,6 @@ BaseUI::attach_request_source ()
 {
 	DEBUG_TRACE (DEBUG::EventLoop, string_compose ("%1: attach request source\n", event_loop_name()));
 	request_channel.attach (m_context);
+	maybe_install_precall_handler (m_context);
 }
+

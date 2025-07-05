@@ -1,20 +1,23 @@
 /*
-    Copyright (C) 2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2016 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2016 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 
 #ifdef WAF_BUILD
@@ -34,13 +37,11 @@
 #include "ardour/midi_buffer.h"
 #include "ardour/port.h"
 #include "ardour/port_set.h"
-#ifdef LV2_SUPPORT
 #include "ardour/lv2_plugin.h"
-#include "lv2_evbuf.h"
+#include "ardour/lv2_evbuf.h"
 #include "ardour/uri_map.h"
-#endif
 #if defined WINDOWS_VST_SUPPORT || defined LXVST_SUPPORT || defined MACVST_SUPPORT
-#include "ardour/vestige/aeffectx.h"
+#include "ardour/vestige/vestige.h"
 #endif
 
 namespace ARDOUR {
@@ -87,12 +88,10 @@ BufferSet::clear()
 	_vst_buffers.clear ();
 #endif
 
-#ifdef LV2_SUPPORT
 	for (LV2Buffers::iterator i = _lv2_buffers.begin(); i != _lv2_buffers.end(); ++i) {
-		free ((*i).second);
+		lv2_evbuf_free ((*i).second);
 	}
 	_lv2_buffers.clear ();
-#endif
 
 }
 
@@ -103,7 +102,7 @@ BufferSet::clear()
  *  XXX: this *is* called in a process context; I'm not sure quite what `should not' means above.
  */
 void
-BufferSet::attach_buffers (PortSet& ports)
+BufferSet::attach_buffers (PortSet const& ports)
 {
 	const ChanCount& count (ports.count());
 
@@ -192,19 +191,16 @@ BufferSet::ensure_buffers(DataType type, size_t num_buffers, size_t buffer_capac
 		_count.set (type, num_buffers);
 	}
 
-#ifdef LV2_SUPPORT
 	// Ensure enough low level MIDI format buffers are available for conversion
 	// in both directions (input & output, out-of-place)
 	if (type == DataType::MIDI && _lv2_buffers.size() < _buffers[type].size() * 2 + 1) {
 		while (_lv2_buffers.size() < _buffers[type].size() * 2) {
 			_lv2_buffers.push_back(
 				std::make_pair(false, lv2_evbuf_new(buffer_capacity,
-				                                    LV2_EVBUF_EVENT,
 				                                    URIMap::instance().urids.atom_Chunk,
 				                                    URIMap::instance().urids.atom_Sequence)));
 		}
 	}
-#endif
 
 #if defined WINDOWS_VST_SUPPORT || defined LXVST_SUPPORT || defined MACVST_SUPPORT
 	// As above but for VST
@@ -233,6 +229,19 @@ BufferSet::ensure_buffers(const ChanCount& chns, size_t buffer_capacity)
 	}
 }
 
+bool
+BufferSet::silent_data () const
+{
+	for (DataType::iterator t = DataType::begin(); t != DataType::end(); ++t) {
+		for (BufferSet::const_iterator i = begin (*t); i != end (*t); ++i) {
+			if (!i->silent_data ()) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 /** Get the capacity (size) of the available buffers of the given type.
  *
  * All buffers of a certain type always have the same capacity.
@@ -245,20 +254,18 @@ BufferSet::buffer_capacity(DataType type) const
 }
 
 Buffer&
-BufferSet::get(DataType type, size_t i)
+BufferSet::get_available(DataType type, size_t i)
 {
 	assert(i < _available.get(type));
 	return *_buffers[type][i];
 }
 
 const Buffer&
-BufferSet::get(DataType type, size_t i) const
+BufferSet::get_available(DataType type, size_t i) const
 {
 	assert(i < _available.get(type));
 	return *_buffers[type][i];
 }
-
-#ifdef LV2_SUPPORT
 
 void
 BufferSet::ensure_lv2_bufsize(bool input, size_t i, size_t buffer_capacity)
@@ -274,31 +281,27 @@ BufferSet::ensure_lv2_bufsize(bool input, size_t i, size_t buffer_capacity)
 	_lv2_buffers.at(i * 2 + (input ? 0 : 1)) =
 		std::make_pair(false, lv2_evbuf_new(
 					buffer_capacity,
-					LV2_EVBUF_EVENT,
 					URIMap::instance().urids.atom_Chunk,
 					URIMap::instance().urids.atom_Sequence));
 }
 
 LV2_Evbuf*
-BufferSet::get_lv2_midi(bool input, size_t i, bool old_api)
+BufferSet::get_lv2_midi(bool input, size_t i)
 {
 	assert(count().get(DataType::MIDI) > i);
 
 	LV2Buffers::value_type b     = _lv2_buffers.at(i * 2 + (input ? 0 : 1));
 	LV2_Evbuf*             evbuf = b.second;
 
-	lv2_evbuf_set_type(evbuf, old_api ? LV2_EVBUF_EVENT : LV2_EVBUF_ATOM);
 	lv2_evbuf_reset(evbuf, input);
 	return evbuf;
 }
 
 void
-BufferSet::forward_lv2_midi(LV2_Evbuf* buf, size_t i, bool purge_ardour_buffer)
+BufferSet::forward_lv2_midi(LV2_Evbuf* buf, size_t i, pframes_t n_samples, samplecnt_t offset)
 {
 	MidiBuffer& mbuf  = get_midi(i);
-	if (purge_ardour_buffer) {
-		mbuf.silence(0, 0);
-	}
+	mbuf.silence (n_samples, offset);
 	for (LV2_Evbuf_Iterator i = lv2_evbuf_begin(buf);
 			 lv2_evbuf_is_valid(i);
 			 i = lv2_evbuf_next(i)) {
@@ -306,19 +309,19 @@ BufferSet::forward_lv2_midi(LV2_Evbuf* buf, size_t i, bool purge_ardour_buffer)
 		uint8_t* data;
 		lv2_evbuf_get(i, &samples, &subframes, &type, &size, &data);
 		if (type == URIMap::instance().urids.midi_MidiEvent) {
-			mbuf.push_back(samples, size, data);
+			mbuf.push_back(samples + offset, Evoral::MIDI_EVENT, size, data);
 		}
 	}
 }
 
 void
-BufferSet::flush_lv2_midi(bool input, size_t i)
+BufferSet::flush_lv2_midi(bool input, size_t i, pframes_t n_samples, samplecnt_t offset)
 {
 	MidiBuffer&            mbuf  = get_midi(i);
 	LV2Buffers::value_type b     = _lv2_buffers.at(i * 2 + (input ? 0 : 1));
 	LV2_Evbuf*             evbuf = b.second;
 
-	mbuf.silence(0, 0);
+	mbuf.silence (n_samples, offset);
 	for (LV2_Evbuf_Iterator i = lv2_evbuf_begin(evbuf);
 	     lv2_evbuf_is_valid(i);
 	     i = lv2_evbuf_next(i)) {
@@ -336,12 +339,10 @@ BufferSet::flush_lv2_midi(bool input, size_t i)
 #endif
 		if (type == URIMap::instance().urids.midi_MidiEvent) {
 			// TODO: Make Ardour event buffers generic so plugins can communicate
-			mbuf.push_back(samples, size, data);
+			mbuf.push_back(samples + offset, Evoral::MIDI_EVENT, size, data);
 		}
 	}
 }
-
-#endif /* LV2_SUPPORT */
 
 #if defined WINDOWS_VST_SUPPORT || defined LXVST_SUPPORT || defined MACVST_SUPPORT
 

@@ -1,23 +1,22 @@
 /*
-    Copyright (C) 2015 Paul Davis
+ * Copyright (C) 2015-2019 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include "gtkmm/stock.h"
+#include "ytkmm/stock.h"
 
 #include "ardour/route.h"
 #include "ardour/session.h"
@@ -33,7 +32,7 @@ using namespace ARDOUR;
 using namespace Gtk;
 
 DuplicateRouteDialog::DuplicateRouteDialog ()
-	: ArdourDialog (_("Duplicate Tracks & Busses"), false, false)
+	: ArdourDialog (_("Duplicate Tracks/Busses"), false, false)
 	, playlist_option_label (_("For each Track:"))
 	, copy_playlists_button (playlist_button_group, _("Copy playlist"))
 	, new_playlists_button (playlist_button_group, _("New playlist"))
@@ -55,10 +54,10 @@ DuplicateRouteDialog::DuplicateRouteDialog ()
 	playlist_button_box.pack_start (share_playlists_button, false, false);
 	playlist_button_box.show_all ();
 
-	insert_at_combo.append_text (_("First"));
-	insert_at_combo.append_text (_("Before Selection"));
-	insert_at_combo.append_text (_("After Selection"));
-	insert_at_combo.append_text (_("Last"));
+	insert_at_combo.append (_("First"));
+	insert_at_combo.append (_("Before Selection"));
+	insert_at_combo.append (_("After Selection"));
+	insert_at_combo.append (_("Last"));
 	insert_at_combo.set_active (3);
 
 	Gtk::Label* l = manage (new Label (_("Insert duplicates at: ")));
@@ -96,14 +95,12 @@ DuplicateRouteDialog::restart (Session* s)
 			continue;
 		}
 
-		boost::shared_ptr<Route> r (rui->route());
+		std::shared_ptr<Route> r (rui->route());
 
-		if (boost::dynamic_pointer_cast<Track> (r)) {
+		if (std::dynamic_pointer_cast<Track> (r)) {
 			ntracks++;
-		} else {
-			if (!r->is_master() && !r->is_monitor()) {
-				nbusses++;
-			}
+		} else if (!r->is_main_bus()) {
+			nbusses++;
 		}
 	}
 
@@ -161,21 +158,37 @@ DuplicateRouteDialog::on_response (int response)
 	TrackSelection tracks  (PublicEditor::instance().get_selection().tracks);
 	int err = 0;
 
+	/* Track Selection should be sorted into presentation order before
+	 * duplicating, so that new tracks appear in same order as the
+	 * originals.
+	 */
+
+	StripableList sl;
+
 	for (TrackSelection::iterator t = tracks.begin(); t != tracks.end(); ++t) {
-
 		RouteUI* rui = dynamic_cast<RouteUI*> (*t);
+		if (rui) {
+			sl.push_back (rui->route());
+		}
+	}
 
-		if (!rui) {
-			/* some other type of timeaxis view, not a route */
+	sl.sort (Stripable::Sorter());
+
+	for (StripableList::iterator s = sl.begin(); s != sl.end(); ++s) {
+
+		std::shared_ptr<Route> r;
+
+		if ((r = std::dynamic_pointer_cast<Route> (*s)) == 0) {
+			/* some other type of Stripable, not a route */
 			continue;
 		}
 
-		if (rui->route()->is_master() || rui->route()->is_monitor()) {
+		if ((*s)->is_main_bus ()) {
 			/* no option to duplicate these */
 			continue;
 		}
 
-		XMLNode& state (rui->route()->get_state());
+		XMLNode& state (r->get_state());
 		RouteList rl = _session->new_route_from_template (cnt, ARDOUR_UI::instance()->translate_order (insert_at()), state, std::string(), playlist_action);
 
 		/* normally the state node would be added to a parent, and

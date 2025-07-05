@@ -48,6 +48,11 @@ export ARDOUR_CONFIG_PATH=@CONFDIR@
 export ARDOUR_DLL_PATH=@LIBDIR@
 
 #
+# disable ubuntu global menu, causes crash in libappmenu-gtk-module.so
+#
+export UBUNTU_MENUPROXY=""
+
+#
 # NSM needs a path to this script
 #
 
@@ -61,8 +66,10 @@ export VAMP_PATH=@LIBDIR@/vamp${VAMP_PATH:+:$VAMP_PATH}
 
 if [ $# -gt 0 ] ; then
     case $1 in
-        -g|--gdb) GDB=gdb; shift ;;
+        --ddd)    DEBUGGER=ddd; shift ;;
+        -g|--gdb) DEBUGGER=gdb; shift ;;
+        --lldb)   DEBUGGER=lldb; shift ;;
     esac
 fi
 
-exec $GDB @LIBDIR@/ardour-@VERSION@ "$@"
+exec $DEBUGGER @LIBDIR@/ardour-@VERSION@ "$@"

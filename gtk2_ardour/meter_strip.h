@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2013 Paul Davis
-    Author: Robin Gareus
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2013-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_meter_strip__
 #define __ardour_meter_strip__
@@ -23,11 +23,11 @@
 #include <vector>
 #include <cmath>
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/box.h>
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/separator.h>
+#include <ytkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/separator.h>
 
 #include "pbd/stateful.h"
 
@@ -35,6 +35,7 @@
 #include "ardour/ardour.h"
 
 #include "widgets/ardour_button.h"
+#include "widgets/ardour_knob.h"
 
 #include "level_meter.h"
 #include "route_ui.h"
@@ -48,22 +49,22 @@ namespace ARDOUR {
 class MeterStrip : public Gtk::VBox, public AxisView, public RouteUI
 {
 public:
-	MeterStrip (ARDOUR::Session*, boost::shared_ptr<ARDOUR::Route>);
+	MeterStrip (ARDOUR::Session*, std::shared_ptr<ARDOUR::Route>);
 	MeterStrip (int, ARDOUR::MeterType);
 	~MeterStrip ();
 
 	std::string name() const;
 	Gdk::Color color () const;
 
-	boost::shared_ptr<ARDOUR::Stripable> stripable() const { return RouteUI::stripable(); }
+	std::shared_ptr<ARDOUR::Stripable> stripable() const { return RouteUI::stripable(); }
 
 	void set_session (ARDOUR::Session* s);
 	void fast_update ();
-	boost::shared_ptr<ARDOUR::Route> route() { return _route; }
+	std::shared_ptr<ARDOUR::Route> route() { return _route; }
 
-	static PBD::Signal1<void,MeterStrip*> CatchDeletion;
-	static PBD::Signal0<void> MetricChanged;
-	static PBD::Signal0<void> ConfigurationChanged;
+	static PBD::Signal<void(MeterStrip*)> CatchDeletion;
+	static PBD::Signal<void()> MetricChanged;
+	static PBD::Signal<void()> ConfigurationChanged;
 
 	void reset_peak_display ();
 	void reset_route_peak_display (ARDOUR::Route*);
@@ -82,7 +83,7 @@ public:
 	bool selected() const { return false; }
 
 protected:
-	boost::shared_ptr<ARDOUR::Route> _route;
+	std::shared_ptr<ARDOUR::Route> _route;
 	PBD::ScopedConnectionList meter_route_connections;
 	PBD::ScopedConnectionList level_meter_connection;
 	void self_delete ();
@@ -121,6 +122,7 @@ private:
 	Gtk::HBox recbox;
 	Gtk::HBox mon_in_box;
 	Gtk::HBox mon_disk_box;
+	Gtk::HBox gain_box;
 
 	Gtk::Alignment meter_align;
 	Gtk::Alignment peak_align;
@@ -131,7 +133,8 @@ private:
 	std::vector<ARDOUR::DataType> _types;
 	ARDOUR::MeterType metric_type;
 
-	float max_peak;
+	bool _clear_meters;
+	bool _meter_peaked;
 	bool _has_midi;
 	int _tick_bar;
 	int _strip_type;
@@ -139,12 +142,17 @@ private:
 
 	LevelMeterHBox *level_meter;
 
+	ArdourWidgets::ArdourKnob gain_control;
+
 	void route_property_changed (const PBD::PropertyChange&);
 	void meter_configuration_changed (ARDOUR::ChanCount);
 	void meter_type_changed (ARDOUR::MeterType);
 	void update_background (ARDOUR::MeterType);
 
 	bool peak_button_release (GdkEventButton*);
+
+	void gain_start_touch (int);
+	void gain_end_touch (int);
 
 	void parameter_changed (std::string const & p);
 	void redraw_metrics ();

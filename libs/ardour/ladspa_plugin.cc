@@ -1,21 +1,27 @@
 /*
-    Copyright (C) 2000-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005-2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2017 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2008-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -39,16 +45,20 @@
 #include <lrdf.h>
 #endif
 
+#include <glibmm/miscutils.h>
+#include <glibmm/fileutils.h>
+#include <glibmm/convert.h>
+
 #include "pbd/compose.h"
 #include "pbd/error.h"
 #include "pbd/locale_guard.h"
 #include "pbd/xml++.h"
-#include "pbd/stacktrace.h"
 
 #include "ardour/session.h"
 #include "ardour/ladspa_plugin.h"
 #include "ardour/buffer_set.h"
 #include "ardour/audio_buffer.h"
+#include "ardour/filesystem_paths.h"
 
 #include "pbd/stl_delete.h"
 
@@ -91,27 +101,27 @@ LadspaPlugin::init (string module_path, uint32_t index, samplecnt_t rate)
 	_was_activated = false;
 
 	if (!(*_module)) {
-		error << _("LADSPA: Unable to open module: ") << Glib::Module::get_last_error() << endmsg;
+		warning << _("LADSPA: Unable to open module: ") << Glib::Module::get_last_error() << endmsg;
 		delete _module;
 		throw failed_constructor();
 	}
 
 	if (!_module->get_symbol("ladspa_descriptor", func)) {
-		error << _("LADSPA: module has no descriptor function.") << endmsg;
+		warning << _("LADSPA: module has no descriptor function.") << endmsg;
 		throw failed_constructor();
 	}
 
 	dfunc = (LADSPA_Descriptor_Function)func;
 
 	if ((_descriptor = dfunc (index)) == 0) {
-		error << _("LADSPA: plugin has gone away since discovery!") << endmsg;
+		warning << _("LADSPA: plugin has gone away since discovery!") << endmsg;
 		throw failed_constructor();
 	}
 
 	_index = index;
 
 	if (LADSPA_IS_INPLACE_BROKEN(_descriptor->Properties)) {
-		error << string_compose(_("LADSPA: \"%1\" cannot be used, since it cannot do inplace processing"), _descriptor->Name) << endmsg;
+		info << string_compose(_("LADSPA: \"%1\" cannot be used, since it cannot do inplace processing"), _descriptor->Name) << endmsg;
 		throw failed_constructor();
 	}
 
@@ -178,6 +188,7 @@ LadspaPlugin::_default_value (uint32_t port) const
 	bool bounds_given = false;
 	bool sr_scaling = false;
 	bool earlier_hint = false;
+	bool logarithmic = LADSPA_IS_HINT_LOGARITHMIC (prh[port].HintDescriptor);
 
 	/* defaults - case 1 */
 
@@ -189,17 +200,29 @@ LadspaPlugin::_default_value (uint32_t port) const
 		}
 
 		else if (LADSPA_IS_HINT_DEFAULT_LOW(prh[port].HintDescriptor)) {
-			ret = prh[port].LowerBound * 0.75f + prh[port].UpperBound * 0.25f;
+			if (logarithmic && prh[port].LowerBound * prh[port].UpperBound > 0) {
+				ret = exp (log(prh[port].LowerBound) * 0.75f + log (prh[port].UpperBound) * 0.25f);
+			} else {
+				ret = prh[port].LowerBound * 0.75f + prh[port].UpperBound * 0.25f;
+			}
 			bounds_given = true;
 			sr_scaling = true;
 		}
 		else if (LADSPA_IS_HINT_DEFAULT_MIDDLE(prh[port].HintDescriptor)) {
-			ret = prh[port].LowerBound * 0.5f + prh[port].UpperBound * 0.5f;
+			if (logarithmic && prh[port].LowerBound * prh[port].UpperBound > 0) {
+				ret = exp (log(prh[port].LowerBound) * 0.5f + log (prh[port].UpperBound) * 0.5f);
+			} else {
+				ret = prh[port].LowerBound * 0.5f + prh[port].UpperBound * 0.5f;
+			}
 			bounds_given = true;
 			sr_scaling = true;
 		}
 		else if (LADSPA_IS_HINT_DEFAULT_HIGH(prh[port].HintDescriptor)) {
-			ret = prh[port].LowerBound * 0.25f + prh[port].UpperBound * 0.75f;
+			if (logarithmic && prh[port].LowerBound * prh[port].UpperBound > 0) {
+				ret = exp (log(prh[port].LowerBound) * 0.25f + log (prh[port].UpperBound) * 0.75f);
+			} else {
+				ret = prh[port].LowerBound * 0.25f + prh[port].UpperBound * 0.75f;
+			}
 			bounds_given = true;
 			sr_scaling = true;
 		}
@@ -289,7 +312,7 @@ LadspaPlugin::_default_value (uint32_t port) const
 }
 
 void
-LadspaPlugin::set_parameter (uint32_t which, float val)
+LadspaPlugin::set_parameter (uint32_t which, float val, sampleoffset_t when)
 {
 	if (which < _descriptor->PortCount) {
 
@@ -312,7 +335,7 @@ LadspaPlugin::set_parameter (uint32_t which, float val)
 			<< endmsg;
 	}
 
-	Plugin::set_parameter (which, val);
+	Plugin::set_parameter (which, val, when);
 }
 
 /** @return `plugin' value */
@@ -369,18 +392,14 @@ LadspaPlugin::set_state (const XMLNode& node, int version)
 		return set_state_2X (node, version);
 	}
 
-#ifndef NO_PLUGIN_STATE
 	XMLNodeList nodes;
 	XMLNodeConstIterator iter;
 	XMLNode *child;
-#endif
 
 	if (node.name() != state_node_name()) {
 		error << _("Bad node sent to LadspaPlugin::set_state") << endmsg;
 		return -1;
 	}
-
-#ifndef NO_PLUGIN_STATE
 
 	nodes = node.children ("Port");
 
@@ -401,9 +420,8 @@ LadspaPlugin::set_state (const XMLNode& node, int version)
 			continue;
 		}
 
-		set_parameter (port_id, value);
+		set_parameter (port_id, value, 0);
 	}
-#endif
 
 	latency_compute_run ();
 
@@ -413,7 +431,6 @@ LadspaPlugin::set_state (const XMLNode& node, int version)
 int
 LadspaPlugin::set_state_2X (const XMLNode& node, int /* version */)
 {
-#ifndef NO_PLUGIN_STATE
 	XMLNodeList nodes;
 	XMLProperty const * prop;
 	XMLNodeConstIterator iter;
@@ -421,7 +438,6 @@ LadspaPlugin::set_state_2X (const XMLNode& node, int /* version */)
 	const char *port;
 	const char *data;
 	uint32_t port_id;
-#endif
 	LocaleGuard lg;
 
 	if (node.name() != state_node_name()) {
@@ -429,7 +445,6 @@ LadspaPlugin::set_state_2X (const XMLNode& node, int /* version */)
 		return -1;
 	}
 
-#ifndef NO_PLUGIN_STATE
 	nodes = node.children ("port");
 
 	for(iter = nodes.begin(); iter != nodes.end(); ++iter){
@@ -450,11 +465,10 @@ LadspaPlugin::set_state_2X (const XMLNode& node, int /* version */)
 		}
 
 		sscanf (port, "%" PRIu32, &port_id);
-		set_parameter (port_id, atof(data));
+		set_parameter (port_id, atof(data), 0);
 	}
 
 	latency_compute_run ();
-#endif
 
 	return 0;
 }
@@ -488,7 +502,7 @@ LadspaPlugin::get_parameter_descriptor (uint32_t which, ParameterDescriptor& des
 		if (LADSPA_IS_HINT_TOGGLED (prh.HintDescriptor)) {
 			desc.upper = 1;
 		} else {
-			desc.upper = 4; /* completely arbitrary */
+			desc.upper = 1; /* completely arbitrary, although a range 0..1 makes some sense */
 		}
 	}
 
@@ -526,12 +540,8 @@ LadspaPlugin::describe_parameter (Evoral::Parameter which)
 }
 
 ARDOUR::samplecnt_t
-LadspaPlugin::signal_latency () const
+LadspaPlugin::plugin_latency () const
 {
-	if (_user_latency) {
-		return _user_latency;
-	}
-
 	if (_latency_control_port) {
 		return (samplecnt_t) floor (*_latency_control_port);
 	} else {
@@ -558,7 +568,7 @@ LadspaPlugin::automatable () const
 int
 LadspaPlugin::connect_and_run (BufferSet& bufs,
 		samplepos_t start, samplepos_t end, double speed,
-		ChanMapping in_map, ChanMapping out_map,
+		ChanMapping const& in_map, ChanMapping const& out_map,
 		pframes_t nframes, samplecnt_t offset)
 {
 	Plugin::connect_and_run (bufs, start, end, speed, in_map, out_map, nframes, offset);
@@ -578,12 +588,12 @@ LadspaPlugin::connect_and_run (BufferSet& bufs,
 				const uint32_t buf_index = in_map.get(DataType::AUDIO, audio_in_index++, &valid);
 				connect_port(port_index,
 				             valid ? bufs.get_audio(buf_index).data(offset)
-				                   : silent_bufs.get_audio(0).data(offset));
+				                   : silent_bufs.get_audio(0).data(0));
 			} else if (LADSPA_IS_PORT_OUTPUT(port_descriptor(port_index))) {
 				const uint32_t buf_index = out_map.get(DataType::AUDIO, audio_out_index++, &valid);
 				connect_port(port_index,
 				             valid ? bufs.get_audio(buf_index).data(offset)
-				                   : scratch_bufs.get_audio(0).data(offset));
+				                   : scratch_bufs.get_audio(0).data(0));
 			}
 		}
 	}
@@ -619,22 +629,10 @@ LadspaPlugin::parameter_is_input (uint32_t param) const
 	return LADSPA_IS_PORT_INPUT(port_descriptor (param));
 }
 
-void
-LadspaPlugin::print_parameter (uint32_t param, char *buf, uint32_t len) const
-{
-	if (buf && len) {
-		if (param < parameter_count()) {
-			snprintf (buf, len, "%.3f", get_parameter (param));
-		} else {
-			strcat (buf, "0");
-		}
-	}
-}
-
-boost::shared_ptr<ScalePoints>
+std::shared_ptr<ScalePoints>
 LadspaPlugin::get_scale_points(uint32_t port_index) const
 {
-	boost::shared_ptr<ScalePoints> ret;
+	std::shared_ptr<ScalePoints> ret;
 #ifdef HAVE_LRDF
 	const uint32_t id     = atol(unique_id().c_str());
 	lrdf_defaults* points = lrdf_get_scale_values(id, port_index);
@@ -643,7 +641,7 @@ LadspaPlugin::get_scale_points(uint32_t port_index) const
 		return ret;
 	}
 
-	ret = boost::shared_ptr<ScalePoints>(new ScalePoints());
+	ret = std::shared_ptr<ScalePoints>(new ScalePoints());
 
 	for (uint32_t i = 0; i < points->count; ++i) {
 		ret->insert(make_pair(points->items[i].label,
@@ -731,7 +729,7 @@ std::vector<Plugin::PresetRecord>
 LadspaPluginInfo::get_presets (bool /*user_only*/) const
 {
 	std::vector<Plugin::PresetRecord> p;
-#if (defined HAVE_LRDF && !defined NO_PLUGIN_STATE)
+#ifdef HAVE_LRDF
 	if (!isdigit (unique_id[0])) {
 		return p;
 	}
@@ -740,12 +738,15 @@ LadspaPluginInfo::get_presets (bool /*user_only*/) const
 
 	if (set_uris) {
 		for (uint32_t i = 0; i < (uint32_t) set_uris->count; ++i) {
+			// TODO somehow mark factory presets as such..
 			if (char* label = lrdf_get_label (set_uris->items[i])) {
 				p.push_back (Plugin::PresetRecord (set_uris->items[i], label));
 			}
 		}
 		lrdf_free_uris(set_uris);
 	}
+
+	std::sort (p.begin (), p.end ());
 #endif
 	return p;
 }
@@ -793,7 +794,7 @@ LadspaPlugin::load_preset (PresetRecord r)
 	if (defs) {
 		for (uint32_t i = 0; i < (uint32_t) defs->count; ++i) {
 			if (parameter_is_input (defs->items[i].pid)) {
-				set_parameter(defs->items[i].pid, defs->items[i].value);
+				set_parameter(defs->items[i].pid, defs->items[i].value, 0);
 				PresetPortSetValue (defs->items[i].pid, defs->items[i].value); /* EMIT SIGNAL */
 			}
 		}
@@ -816,7 +817,8 @@ lrdf_remove_preset (const char* /*source*/, const char *setting_uri)
 	char setting_uri_copy[64];
 	char buf[64];
 
-	strncpy(setting_uri_copy, setting_uri, sizeof(setting_uri_copy));
+	strncpy(setting_uri_copy, setting_uri, sizeof(setting_uri_copy) - 1);
+	setting_uri_copy[sizeof (setting_uri_copy) - 1] = '\0';
 
 	p.subject = setting_uri_copy;
 	strncpy(buf, LADSPA_BASE "hasPortValue", sizeof(buf));
@@ -850,60 +852,51 @@ void
 LadspaPlugin::do_remove_preset (string name)
 {
 #ifdef HAVE_LRDF
-	string const envvar = preset_envvar ();
-	if (envvar.empty()) {
-		warning << _("Could not locate HOME.  Preset not removed.") << endmsg;
-		return;
-	}
-
 	Plugin::PresetRecord const * p = preset_by_label (name);
 	if (!p) {
 		return;
 	}
 
-	string const source = preset_source (envvar);
+	string const source = preset_source ();
 	lrdf_remove_preset (source.c_str(), p->uri.c_str ());
 
-	write_preset_file (envvar);
+	write_preset_file ();
 #endif
 }
 
 string
-LadspaPlugin::preset_envvar () const
+LadspaPlugin::preset_source () const
 {
-	char* envvar;
-	if ((envvar = getenv ("HOME")) == 0) {
-		return "";
-	}
-
-	return envvar;
-}
-
-string
-LadspaPlugin::preset_source (string envvar) const
-{
-	return string_compose ("file:%1/.ladspa/rdf/ardour-presets.n3", envvar);
+	string const domain = "ladspa";
+#ifdef PLATFORM_WINDOWS
+	string path = Glib::build_filename (ARDOUR::user_cache_directory (), domain, "rdf", "ardour-presets.n3");
+#else
+	string path = Glib::build_filename (Glib::get_home_dir (), "." + domain, "rdf", "ardour-presets.n3");
+#endif
+	return Glib::filename_to_uri (path);
 }
 
 bool
-LadspaPlugin::write_preset_file (string envvar)
+LadspaPlugin::write_preset_file ()
 {
 #ifdef HAVE_LRDF
-	string path = string_compose("%1/.ladspa", envvar);
-	if (g_mkdir_with_parents (path.c_str(), 0775)) {
-		warning << string_compose(_("Could not create %1.  Preset not saved. (%2)"), path, strerror(errno)) << endmsg;
+
+#ifndef PLATFORM_WINDOWS
+	if (Glib::get_home_dir ().empty ()) {
+		warning << _("Could not locate HOME. Preset file not written.") << endmsg;
+		return false;
+	}
+#endif
+
+	string const source   = preset_source ();
+	string const filename = Glib::filename_from_uri (source);
+
+	if (g_mkdir_with_parents (Glib::path_get_dirname (filename).c_str(), 0775)) {
+		warning << string_compose(_("Could not create %1.  Preset not saved. (%2)"), source, strerror(errno)) << endmsg;
 		return false;
 	}
 
-	path += "/rdf";
-	if (g_mkdir_with_parents (path.c_str(), 0775)) {
-		warning << string_compose(_("Could not create %1.  Preset not saved. (%2)"), path, strerror(errno)) << endmsg;
-		return false;
-	}
-
-	string const source = preset_source (envvar);
-
-	if (lrdf_export_by_source (source.c_str(), source.substr(5).c_str())) {
+	if (lrdf_export_by_source (source.c_str(), filename.c_str())) {
 		warning << string_compose(_("Error saving presets file %1."), source) << endmsg;
 		return false;
 	}
@@ -918,6 +911,8 @@ string
 LadspaPlugin::do_save_preset (string name)
 {
 #ifdef HAVE_LRDF
+	do_remove_preset (name);
+
 	/* make a vector of pids that are input parameters */
 	vector<int> input_parameter_pids;
 	for (uint32_t i = 0; i < parameter_count(); ++i) {
@@ -944,19 +939,13 @@ LadspaPlugin::do_save_preset (string name)
 		portvalues[i].value = get_parameter (input_parameter_pids[i]);
 	}
 
-	string const envvar = preset_envvar ();
-	if (envvar.empty()) {
-		warning << _("Could not locate HOME.  Preset not saved.") << endmsg;
-		return "";
-	}
-
-	string const source = preset_source (envvar);
+	string const source = preset_source ();
 
 	char* uri_char = lrdf_add_preset (source.c_str(), name.c_str(), id, &defaults);
 	string uri (uri_char);
 	free (uri_char);
 
-	if (!write_preset_file (envvar)) {
+	if (!write_preset_file ()) {
 		return "";
 	}
 

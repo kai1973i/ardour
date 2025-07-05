@@ -1,20 +1,21 @@
 /*
-    Copyright (C) 2013 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2013-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <algorithm>
@@ -63,23 +64,38 @@ Arc::compute_bounding_box () const
 	bbox = bbox.expand (0.5 + (_outline_width / 2));
 
 	_bounding_box = bbox;
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }
 
 void
-Arc::render (Rect const & /*area*/, Cairo::RefPtr<Cairo::Context> context) const
+Arc::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) const
 {
-	if (_radius <= 0.0 || _arc_degrees <= 0.0) {
+	if (_radius <= 0.0 || (!fill() && !outline())) {
 		return;
 	}
 
 	Duple c = item_to_window (Duple (_center.x, _center.y));
 
-	context->arc (c.x, c.y, _radius, _start_degrees * (M_PI/180.0), _arc_degrees * (M_PI/180.0));
-	setup_fill_context (context);
-	context->fill_preserve ();
-	setup_outline_context (context);
-	context->stroke ();
+	if (_arc_degrees != _start_degrees) {
+
+		context->arc (c.x, c.y, _radius, _start_degrees * (M_PI/180.0), _arc_degrees * (M_PI/180.0));
+
+		if (fill()) {
+			setup_fill_context (context);
+			if (outline()) {
+				context->fill_preserve ();
+			} else {
+				context->fill ();
+			}
+		}
+
+		if (outline()) {
+			setup_outline_context (context);
+			context->stroke ();
+		}
+	}
+
+	render_children (area, context);
 }
 
 void
@@ -89,7 +105,7 @@ Arc::set_center (Duple const & c)
 
 	_center = c;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -100,7 +116,7 @@ Arc::set_radius (Coord r)
 
 	_radius = r;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -111,7 +127,7 @@ Arc::set_arc (double deg)
 
 	_arc_degrees = deg;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -123,7 +139,7 @@ Arc::set_start (double deg)
 
 	_start_degrees = deg;
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -138,4 +154,20 @@ Arc::covers (Duple const & point) const
 	return (angle_degs >= _start_degrees) &&
 		(angle_degs <= (_start_degrees + _arc_degrees)) &&
 		(radius < _radius);
+}
+
+void
+Arc::_size_allocate (Rect const & r)
+{
+	Item::_size_allocate (r);
+
+	/* This is an arc - some section of a circle, so any difference between
+	 * height and width cannot change what is drawn. Pick width arbitrarily
+	 * as the "key" dimension
+	 */
+
+	_radius = min (r.width(),r.height()) / 2.0;
+	_center = Duple ((r.width()/2.), (r.height() /2.));
+
+	set_bbox_dirty ();
 }

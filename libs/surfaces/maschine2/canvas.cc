@@ -1,20 +1,19 @@
 /*
- * Copyright (C) 2016 Paul Davis
  * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <vector>
@@ -25,13 +24,14 @@
 
 #include "pbd/compose.h"
 #include "pbd/error.h"
-#include "pbd/i18n.h"
 
 #include "canvas.h"
 #include "layout.h"
 
 #include "maschine2.h"
 #include "m2device.h"
+
+#include "pbd/i18n.h"
 
 #ifdef __APPLE__
 #define Rect ArdourCanvas::Rect
@@ -49,7 +49,7 @@ Maschine2Canvas::Maschine2Canvas (Maschine2&m, M2Device* hw)
 	_width = hw->surface ()->get_width ();
 	_height = hw->surface ()->get_height ();
 
-	hw->vblank.connect_same_thread (vblank_connections, boost::bind (&Maschine2Canvas::expose, this));
+	hw->vblank.connect_same_thread (vblank_connections, std::bind (&Maschine2Canvas::expose, this));
 }
 
 Maschine2Canvas::~Maschine2Canvas ()
@@ -60,6 +60,12 @@ void
 Maschine2Canvas::request_redraw ()
 {
 	request_redraw (Rect (0, 0, _width, _height));
+}
+
+void
+Maschine2Canvas::queue_resize ()
+{
+	/* nothing to do here, for now */
 }
 
 void

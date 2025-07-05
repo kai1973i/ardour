@@ -1,28 +1,31 @@
 /*
-    Copyright (C) 2006 Paul Davis
-    Written by Sampo Savolainen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2006-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2016 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <gtkmm2ext/gtk_ui.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/label.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treeiter.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/label.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treeiter.h>
 
 #include "ardour/audioregion.h"
 #include "ardour/audioplaylist.h"
@@ -240,8 +243,8 @@ AnalysisWindow::analyze_data (Gtk::Button * /*button*/)
 			TimeSelection ts = s.time;
 
 			for (TrackSelection::iterator i = s.tracks.begin(); i != s.tracks.end(); ++i) {
-				boost::shared_ptr<AudioPlaylist> pl
-					= boost::dynamic_pointer_cast<AudioPlaylist>((*i)->playlist());
+				std::shared_ptr<AudioPlaylist> pl
+					= std::dynamic_pointer_cast<AudioPlaylist>((*i)->playlist());
 
 				if (!pl)
 					continue;
@@ -256,22 +259,24 @@ AnalysisWindow::analyze_data (Gtk::Button * /*button*/)
 				// std::cerr << "Analyzing ranges on track " << rui->route()->name() << std::endl;
 
 				FFTResult *res = fft_graph.prepareResult(rui->route_color(), rui->route()->name());
-				for (std::list<AudioRange>::iterator j = ts.begin(); j != ts.end(); ++j) {
+				for (std::list<TimelineRange>::iterator j = ts.begin(); j != ts.end(); ++j) {
 
-					int n;
+					samplecnt_t n;
+					const samplecnt_t slen = j->length().samples();
+
 					for (int channel = 0; channel < n_inputs; channel++) {
 						samplecnt_t x = 0;
 
-						while (x < j->length()) {
+						while (x < slen) {
 							// TODO: What about stereo+ channels? composite all to one, I guess
 
 							n = fft_graph.windowSize();
 
-							if (x + n >= (*j).length() ) {
-								n = (*j).length() - x;
+							if (x + n >= slen) {
+								n = slen - x;
 							}
 
-							n = pl->read(buf, mixbuf, gain, (*j).start + x, n, channel);
+							n = pl->read(buf, mixbuf, gain, j->start() + timepos_t (x), timecnt_t (n), channel).samples();
 
 							if ( n < fft_graph.windowSize()) {
 								for (int j = n; j < fft_graph.windowSize(); j++) {
@@ -311,10 +316,10 @@ AnalysisWindow::analyze_data (Gtk::Button * /*button*/)
 				}
 				FFTResult *res = fft_graph.prepareResult(rtav->color(), arv->get_item_name());
 				int n;
-				for (unsigned int channel = 0; channel < arv->region()->n_channels(); channel++) {
+				for (unsigned int channel = 0; channel < arv->audio_region()->n_channels(); channel++) {
 
 					samplecnt_t x = 0;
-					samplecnt_t length = arv->region()->length();
+					samplecnt_t length = arv->region()->length_samples();
 
 					while (x < length) {
 						// TODO: What about stereo+ channels? composite all to one, I guess
@@ -325,7 +330,7 @@ AnalysisWindow::analyze_data (Gtk::Button * /*button*/)
 						}
 
 						memset (buf, 0, n * sizeof (Sample));
-						n = arv->audio_region()->read_at(buf, mixbuf, gain, arv->region()->position() + x, n, channel);
+						n = arv->audio_region()->read_at(buf, mixbuf, gain, arv->region()->position_sample() + x, n, channel);
 
 						if (n == 0)
 							break;
@@ -405,5 +410,3 @@ AnalysisWindow::display_model_changed (Gtk::RadioButton *button)
 	}
 	*/
 }
-
-

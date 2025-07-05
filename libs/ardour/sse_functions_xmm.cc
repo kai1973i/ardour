@@ -1,22 +1,21 @@
 /*
-    Copyright (C) 2007 Paul sDavis
-    Written by Sampo Savolainen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2015 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <xmmintrin.h>
 #include "ardour/types.h"
@@ -46,7 +45,7 @@ x86_sse_find_peaks(const ARDOUR::Sample* buf, ARDOUR::pframes_t nframes, float *
         // use 64 byte prefetch for quadruple quads
         while (nframes >= 16) {
 #ifdef COMPILER_MSVC
-				_mm_prefetch(((char*)buf+64), 0);  // A total guess! Assumed to be eqivalent to
+				_mm_prefetch(((char*)buf+64), 0);  // A total guess! Assumed to be equivalent to
 #else                                              // the line below but waiting to be tested !!
                 __builtin_prefetch(buf+64,0,0);
 #endif

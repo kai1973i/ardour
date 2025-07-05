@@ -4,17 +4,17 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "weak_libjack.h"
@@ -53,7 +53,7 @@ static void* lib_symbol(void* const lib, const char* const sym) {
 #endif
 }
 
-#ifdef COMPILER_MSVC
+#if defined _MSC_VER  && ! defined __INTEL_COMPILER
 typedef void * pvoid_t;
 #define MAPSYM(SYM, FAIL) _j._ ## SYM = (func_t)lib_symbol(lib, "jack_" # SYM); \
 	if (!_j._ ## SYM) err |= FAIL;
@@ -92,8 +92,9 @@ static struct WeakJack {
 } _j;
 
 static int _status = -1;
-
+#if !defined _MSC_VER || defined __INTEL_COMPILER
 __attribute__((constructor))
+#endif
 static void init_weak_jack(void)
 {
 	void* lib;
@@ -109,8 +110,23 @@ static void init_weak_jack(void)
 	if (!lib) {
 		lib = lib_open("/usr/local/lib/libjack.dylib");
 	}
+	if (!lib) {
+		/* New Homebrew location */
+		lib = lib_open("/opt/homebrew/lib/libjack.dylib");
+		if (lib) {
+			fprintf(stderr, "*** WEAK-JACK: using Homebrew\n");
+		}
+	}
+	if (!lib) {
+		/* MacPorts location */
+		lib = lib_open("/opt/local/lib/libjack.dylib");
+		if (lib) {
+			fprintf(stderr, "*** WEAK-JACK: using MacPorts\n");
+		}
+	}
+
 #elif (defined PLATFORM_WINDOWS)
-# if ( defined(__x86_64__) || defined(_M_X64) )
+# if defined(__x86_64__) || defined(_M_X64) || defined(__amd64__)
 	lib = lib_open("libjack64.dll");
 # else
 	lib = lib_open("libjack.dll");

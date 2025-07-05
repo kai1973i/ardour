@@ -1,24 +1,24 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <gtkmm/button.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/label.h>
+#include <ytkmm/button.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/label.h>
 
 #include "ardour/luascripting.h"
 
@@ -27,7 +27,7 @@
 class ScriptSelector : public ArdourDialog
 {
 public:
-	ScriptSelector (std::string title, ARDOUR::LuaScriptInfo::ScriptType t);
+	ScriptSelector (Gtk::Window& parent, std::string title, ARDOUR::LuaScriptInfo::ScriptType t);
 	ARDOUR::LuaScriptInfoPtr script() const { return _script; }
 
 private:
@@ -66,7 +66,7 @@ class ScriptParameterDialog : public ArdourDialog
 public:
 	ScriptParameterDialog (std::string title, const ARDOUR::LuaScriptInfoPtr&, const std::vector<std::string>&, ARDOUR::LuaScriptParamList&);
 	std::string name () { return _name_entry.get_text (); }
-	bool need_interation () const;
+	bool need_interaction () const;
 
 private:
 	void update_sensitivity ();

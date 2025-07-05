@@ -1,21 +1,20 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2009-2015 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 /* -*- Mode: C ; c-basic-offset: 2 -*- */
 /*****************************************************************************
@@ -54,7 +53,7 @@ extern "C" {
 struct lv2_external_ui
 {
   /**
-   * Host calls this function regulary. UI library implementing the
+   * Host calls this function regularly. UI library implementing the
    * callback may do IPC or redraw the UI.
    *
    * @param _this_ the UI context
@@ -88,7 +87,7 @@ struct lv2_external_ui_host
   /**
    * Callback that plugin UI will call
    * when UI (GUI window) is closed by user.
-   * This callback wil; be called during execution of lv2_external_ui::run()
+   * This callback will be called during execution of lv2_external_ui::run()
    * (i.e. not from background thread).
    *
    * After this callback is called, UI is defunct. Host must call

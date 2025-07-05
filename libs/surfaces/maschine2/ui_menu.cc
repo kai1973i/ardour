@@ -1,28 +1,25 @@
 /*
- * Copyright (C) 2016 Paul Davis
  * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <cairomm/context.h>
 #include <cairomm/surface.h>
 #include <cairomm/region.h>
 #include <pangomm/layout.h>
-
-#include "pbd/i18n.h"
 
 #include "gtkmm2ext/colors.h"
 
@@ -35,6 +32,8 @@
 
 #include "canvas.h"
 #include "ui_menu.h"
+
+#include "pbd/i18n.h"
 
 #ifdef __APPLE__
 #define Rect ArdourCanvas::Rect
@@ -185,7 +184,7 @@ Maschine2Menu::set_control (M2EncoderInterface* ctrl)
 	if (!ctrl) {
 		return;
 	}
-	ctrl->changed.connect_same_thread (encoder_connection, boost::bind (&Maschine2Menu::encoder_changed, this, _1));
+	ctrl->changed.connect_same_thread (encoder_connection, std::bind (&Maschine2Menu::encoder_changed, this, _1));
 }
 
 void

@@ -1,21 +1,29 @@
 /*
-    Copyright (C) 2000-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2006 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2005-2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Karsten Wiese <fzuuzf@googlemail.com>
+ * Copyright (C) 2006-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstdlib>
 #include <cmath>
@@ -31,6 +39,7 @@
 #include "pbd/stl_delete.h"
 #include "pbd/memento_command.h"
 
+#include "gtkmm2ext/colors.h"
 #include "gtkmm2ext/gtk_ui.h"
 #include "gtkmm2ext/utils.h"
 
@@ -42,7 +51,7 @@
 #include "ardour/panner_shell.h"
 
 #include "audio_time_axis.h"
-#include "automation_line.h"
+#include "editor_automation_line.h"
 #include "enums.h"
 #include "gui_thread.h"
 #include "automation_time_axis.h"
@@ -51,14 +60,13 @@
 #include "public_editor.h"
 #include "audio_region_view.h"
 #include "audio_streamview.h"
-#include "utils.h"
+#include "ui_config.h"
 
 #include "pbd/i18n.h"
 
 using namespace std;
 using namespace ARDOUR;
 using namespace ArdourWidgets;
-using namespace ARDOUR_UI_UTILS;
 using namespace PBD;
 using namespace Gtk;
 using namespace Editing;
@@ -67,10 +75,11 @@ AudioTimeAxisView::AudioTimeAxisView (PublicEditor& ed, Session* sess, ArdourCan
 	: SessionHandlePtr (sess)
 	, RouteTimeAxisView(ed, sess, canvas)
 {
+	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &AudioTimeAxisView::parameter_changed));
 }
 
 void
-AudioTimeAxisView::set_route (boost::shared_ptr<Route> rt)
+AudioTimeAxisView::set_route (std::shared_ptr<Route> rt)
 {
 	_route = rt;
 
@@ -82,14 +91,10 @@ AudioTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 
 	RouteTimeAxisView::set_route (rt);
 
-	_view->apply_color (gdk_color_to_rgba (color()), StreamView::RegionColor);
+	_view->apply_color (Gtkmm2ext::gdk_color_to_rgba (color()), StreamView::RegionColor);
 
 	// Make sure things are sane...
 	assert(!is_track() || is_audio_track());
-
-	subplugin_menu.set_name ("ArdourContextMenu");
-
-	ignore_toggle = false;
 
 	if (is_audio_track()) {
 		controls_ebox.set_name ("AudioTrackControlsBaseUnselected");
@@ -115,7 +120,7 @@ AudioTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 
 	if (_route->panner_shell()) {
 		_route->panner_shell()->Changed.connect (*this, invalidator (*this),
-		                                         boost::bind (&AudioTimeAxisView::ensure_pan_views, this, false), gui_context());
+		                                         std::bind (&AudioTimeAxisView::ensure_pan_views, this, false), gui_context());
 	}
 
 	/* map current state of the route */
@@ -143,6 +148,8 @@ AudioTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 
 AudioTimeAxisView::~AudioTimeAxisView ()
 {
+	delete _view;
+	_view = nullptr;
 }
 
 void
@@ -156,20 +163,6 @@ AudioStreamView*
 AudioTimeAxisView::audio_view()
 {
 	return dynamic_cast<AudioStreamView*>(_view);
-}
-
-guint32
-AudioTimeAxisView::show_at (double y, int& nth, Gtk::VBox *parent)
-{
-	set_gui_property ("visible", true);
-	return TimeAxisView::show_at (y, nth, parent);
-}
-
-void
-AudioTimeAxisView::hide ()
-{
-	set_gui_property ("visible", false);
-	TimeAxisView::hide ();
 }
 
 void
@@ -229,7 +222,7 @@ void
 AudioTimeAxisView::show_all_automation (bool apply_to_selection)
 {
 	if (apply_to_selection) {
-		_editor.get_selection().tracks.foreach_audio_time_axis (boost::bind (&AudioTimeAxisView::show_all_automation, _1, false));
+		_editor.get_selection().tracks.foreach_audio_time_axis (std::bind (&AudioTimeAxisView::show_all_automation, _1, false));
 	} else {
 
 		no_redraw = true;
@@ -245,7 +238,7 @@ void
 AudioTimeAxisView::show_existing_automation (bool apply_to_selection)
 {
 	if (apply_to_selection) {
-		_editor.get_selection().tracks.foreach_audio_time_axis (boost::bind (&AudioTimeAxisView::show_existing_automation, _1, false));
+		_editor.get_selection().tracks.foreach_audio_time_axis (std::bind (&AudioTimeAxisView::show_existing_automation, _1, false));
 	} else {
 		no_redraw = true;
 
@@ -261,7 +254,7 @@ void
 AudioTimeAxisView::hide_all_automation (bool apply_to_selection)
 {
 	if (apply_to_selection) {
-		_editor.get_selection().tracks.foreach_audio_time_axis (boost::bind (&AudioTimeAxisView::hide_all_automation, _1, false));
+		_editor.get_selection().tracks.foreach_audio_time_axis (std::bind (&AudioTimeAxisView::hide_all_automation, _1, false));
 	} else {
 		no_redraw = true;
 
@@ -275,7 +268,25 @@ AudioTimeAxisView::hide_all_automation (bool apply_to_selection)
 void
 AudioTimeAxisView::route_active_changed ()
 {
+	RouteTimeAxisView::route_active_changed();
 	update_control_names ();
+
+	if (!_route->active()) {
+		controls_table.hide();
+		inactive_table.show();
+		RouteTimeAxisView::hide_all_automation();
+	} else {
+		inactive_table.hide();
+		controls_table.show();
+	}
+}
+
+void
+AudioTimeAxisView::parameter_changed (string const & p)
+{
+	if (p == "vertical-region-gap") {
+		_view->update_contents_height ();
+	}
 }
 
 

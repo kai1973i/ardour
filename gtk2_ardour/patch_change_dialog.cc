@@ -1,34 +1,33 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2011-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
-
-#include <boost/algorithm/string.hpp>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "gtkmm2ext/utils.h"
 
 #include "midi++/midnam_patch.h"
 
-#include "ardour/beats_samples_converter.h"
 #include "ardour/instrument_info.h"
+#include "ardour/region.h"
 
 #include "patch_change_dialog.h"
 #include "gui_thread.h"
@@ -41,15 +40,15 @@ using namespace Gtkmm2ext;
 
 /** @param tc If non-0, a time converter for this patch change.  If 0, time control will be desensitized */
 PatchChangeDialog::PatchChangeDialog (
-	const ARDOUR::BeatsSamplesConverter*        tc,
-	ARDOUR::Session*                           session,
-	Evoral::PatchChange<Temporal::Beats> const & patch,
-	ARDOUR::InstrumentInfo&                    info,
-	const Gtk::BuiltinStockID&                 ok,
-	bool                                       allow_delete,
-	bool                                       modal)
+	ARDOUR::Session*                            session,
+	Evoral::PatchChange<Temporal::Beats> const& patch,
+	ARDOUR::InstrumentInfo&                     info,
+	const Gtk::BuiltinStockID&                  ok,
+	bool                                        allow_delete,
+	bool                                        modal,
+	std::shared_ptr<ARDOUR::Region>           region)
 	: ArdourDialog (_("Patch Change"), modal)
-	, _time_converter (tc)
+	, _region (region)
 	, _info (info)
 	, _time (X_("patchchangetime"), true, "", true, false)
 	, _channel (*manage (new Adjustment (1, 1, 16, 1, 4)))
@@ -64,7 +63,7 @@ PatchChangeDialog::PatchChangeDialog (
 	t->set_spacings (6);
 	int r = 0;
 
-	if (_time_converter) {
+	if (_region) {
 
 		l = manage (left_aligned_label (_("Time")));
 		t->attach (*l, 0, 1, r, r + 1);
@@ -73,7 +72,7 @@ PatchChangeDialog::PatchChangeDialog (
 
 		_time.set_session (session);
 		_time.set_mode (AudioClock::BBT);
-		_time.set (_time_converter->to (patch.time ()), true);
+		_time.set (_region->source_beats_to_absolute_time (patch.time ()), true);
 	}
 
 	l = manage (left_aligned_label (_("Patch Bank")));
@@ -116,9 +115,10 @@ PatchChangeDialog::PatchChangeDialog (
 	t->attach (_bank_lsb, 1, 2, r, r + 1);
 	++r;
 
+	assert (patch.bank() != UINT16_MAX);
+
 	_bank_msb.set_value ((patch.bank() >> 7));
 	_bank_msb.signal_changed().connect (sigc::mem_fun (*this, &PatchChangeDialog::bank_changed));
-
 	_bank_lsb.set_value ((patch.bank() & 127));
 	_bank_lsb.signal_changed().connect (sigc::mem_fun (*this, &PatchChangeDialog::bank_changed));
 
@@ -138,7 +138,7 @@ PatchChangeDialog::PatchChangeDialog (
 	bank_combo_changed ();
 
 	_info.Changed.connect (_info_changed_connection, invalidator (*this),
-			       boost::bind (&PatchChangeDialog::instrument_info_changed, this), gui_context());
+			       std::bind (&PatchChangeDialog::instrument_info_changed, this), gui_context());
 
 	show_all ();
 }
@@ -166,6 +166,9 @@ PatchChangeDialog::instrument_info_changed ()
 	_patch_combo.clear ();
 	fill_bank_combo ();
 	fill_patch_combo ();
+
+	set_active_bank_combo ();
+	bank_combo_changed ();
 }
 
 Evoral::PatchChange<Temporal::Beats>
@@ -173,8 +176,8 @@ PatchChangeDialog::patch () const
 {
 	Temporal::Beats t = Temporal::Beats();
 
-	if (_time_converter) {
-		t = _time_converter->from (_time.current_time ());
+	if (_region) {
+		t = _region->absolute_time_to_source_beats (_time.last_when ());
 	}
 
 	return Evoral::PatchChange<Temporal::Beats> (
@@ -191,7 +194,7 @@ PatchChangeDialog::fill_bank_combo ()
 {
 	_bank_combo.clear ();
 
-	boost::shared_ptr<MIDI::Name::ChannelNameSet> cns = _info.get_patches (_channel.get_value_as_int() - 1);
+	std::shared_ptr<MIDI::Name::ChannelNameSet> cns = _info.get_patches (_channel.get_value_as_int() - 1);
 
 	if (!cns) {
 		return;
@@ -199,8 +202,8 @@ PatchChangeDialog::fill_bank_combo ()
 
 	for (MIDI::Name::ChannelNameSet::PatchBanks::const_iterator i = cns->patch_banks().begin(); i != cns->patch_banks().end(); ++i) {
 		string n = (*i)->name ();
-		boost::replace_all (n, "_", " ");
-		_bank_combo.append_text (n);
+		std::replace (n.begin (), n.end (), '_', ' ');
+		_bank_combo.append (n);
 	}
 }
 
@@ -210,7 +213,7 @@ PatchChangeDialog::set_active_bank_combo ()
 {
 	_current_patch_bank.reset ();
 
-	boost::shared_ptr<MIDI::Name::ChannelNameSet> cns = _info.get_patches (_channel.get_value_as_int() - 1);
+	std::shared_ptr<MIDI::Name::ChannelNameSet> cns = _info.get_patches (_channel.get_value_as_int() - 1);
 
 	if (!cns) {
 		return;
@@ -219,7 +222,7 @@ PatchChangeDialog::set_active_bank_combo ()
 	for (MIDI::Name::ChannelNameSet::PatchBanks::const_iterator i = cns->patch_banks().begin(); i != cns->patch_banks().end(); ++i) {
 
 		string n = (*i)->name ();
-		boost::replace_all (n, "_", " ");
+		std::replace (n.begin (), n.end (), '_', ' ');
 
 		if ((*i)->number() == get_14bit_bank()) {
 			_current_patch_bank = *i;
@@ -247,7 +250,7 @@ PatchChangeDialog::bank_combo_changed ()
 
 	_current_patch_bank.reset ();
 
-	boost::shared_ptr<MIDI::Name::ChannelNameSet> cns = _info.get_patches (_channel.get_value_as_int() - 1);
+	std::shared_ptr<MIDI::Name::ChannelNameSet> cns = _info.get_patches (_channel.get_value_as_int() - 1);
 
 	if (!cns) {
 		return;
@@ -255,7 +258,7 @@ PatchChangeDialog::bank_combo_changed ()
 
 	for (MIDI::Name::ChannelNameSet::PatchBanks::const_iterator i = cns->patch_banks().begin(); i != cns->patch_banks().end(); ++i) {
 		string n = (*i)->name ();
-		boost::replace_all (n, "_", " ");
+		std::replace (n.begin (), n.end (), '_', ' ');
 		if (n == _bank_combo.get_active_text()) {
 			_current_patch_bank = *i;
 		}
@@ -270,10 +273,12 @@ PatchChangeDialog::bank_combo_changed ()
 	fill_patch_combo ();
 	set_active_patch_combo ();
 
-	_ignore_signals = true;
-	_bank_msb.set_value (_current_patch_bank->number() >> 7);
-	_bank_lsb.set_value (_current_patch_bank->number() & 127);
-	_ignore_signals = false;
+	if (_current_patch_bank->number() != UINT16_MAX) {
+		_ignore_signals = true;
+		_bank_msb.set_value (_current_patch_bank->number() >> 7);
+		_bank_lsb.set_value (_current_patch_bank->number() & 127);
+		_ignore_signals = false;
+	}
 }
 
 /** Fill the contents of the patch combo */
@@ -289,8 +294,8 @@ PatchChangeDialog::fill_patch_combo ()
 	const MIDI::Name::PatchNameList& patches = _current_patch_bank->patch_name_list ();
 	for (MIDI::Name::PatchNameList::const_iterator j = patches.begin(); j != patches.end(); ++j) {
 		string n = (*j)->name ();
-		boost::replace_all (n, "_", " ");
-		_patch_combo.append_text (n);
+		std::replace (n.begin (), n.end (), '_', ' ');
+		_patch_combo.append (n);
 	}
 }
 
@@ -312,7 +317,7 @@ PatchChangeDialog::set_active_patch_combo ()
 	const MIDI::Name::PatchNameList& patches = _current_patch_bank->patch_name_list ();
 	for (MIDI::Name::PatchNameList::const_iterator j = patches.begin(); j != patches.end(); ++j) {
 		string n = (*j)->name ();
-		boost::replace_all (n, "_", " ");
+		std::replace (n.begin (), n.end (), '_', ' ');
 
 		MIDI::Name::PatchPrimaryKey const & key = (*j)->patch_primary_key ();
 		if (key.program() == _program.get_value() - 1) {
@@ -340,11 +345,13 @@ PatchChangeDialog::patch_combo_changed ()
 
 	for (MIDI::Name::PatchNameList::const_iterator j = patches.begin(); j != patches.end(); ++j) {
 		string n = (*j)->name ();
-		boost::replace_all (n, "_", " ");
+		std::replace (n.begin (), n.end (), '_', ' ');
 
 		if (n == _patch_combo.get_active_text ()) {
 			_ignore_signals = true;
 			_program.set_value ((*j)->program_number() + 1);
+			_bank_msb.set_value ((*j)->bank_number() >> 7);
+			_bank_lsb.set_value ((*j)->bank_number() & 127);
 			_ignore_signals = false;
 			break;
 		}

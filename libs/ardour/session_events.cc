@@ -1,32 +1,35 @@
 /*
-    Copyright (C) 1999-2004 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 1999-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <unistd.h>
 
 #include "pbd/error.h"
 #include "pbd/enumwriter.h"
-#include "pbd/stacktrace.h"
 #include "pbd/pthread_utils.h"
 
 #include "ardour/debug.h"
 #include "ardour/session_event.h"
+#include "ardour/track.h"
+#include "ardour/region.h"
 
 #include "pbd/i18n.h"
 
@@ -42,6 +45,15 @@ SessionEvent::init_event_pool ()
 	pool = new PerThreadPool;
 }
 
+guint
+SessionEvent::pool_available ()
+{
+	if (!pool || !pool->per_thread_pool (false)) {
+		return 0;
+	}
+	return pool->per_thread_pool()->available ();
+}
+
 bool
 SessionEvent::has_per_thread_pool ()
 {
@@ -55,7 +67,13 @@ SessionEvent::create_per_thread_pool (const std::string& name, uint32_t nitems)
 	   a CrossThreadPool for use by this thread whenever events are allocated/released
 	   from SessionEvent::pool()
 	*/
-	pool->create_per_thread_pool (name, sizeof (SessionEvent), nitems);
+	pool->create_per_thread_pool (name, sizeof (SessionEvent), nitems,
+#ifndef NDEBUG
+			[](size_t i, void*p) { std::cout << i << " " << *static_cast<SessionEvent*> (p) << "\n"; }
+#else
+			NULL
+#endif
+			);
 }
 
 SessionEvent::SessionEvent (Type t, Action a, samplepos_t when, samplepos_t where, double spd, bool yn, bool yn2, bool yn3)
@@ -124,6 +142,7 @@ SessionEventManager::remove_event (samplepos_t sample, SessionEvent::Type type)
 void
 SessionEventManager::replace_event (SessionEvent::Type type, samplepos_t sample, samplepos_t target)
 {
+	assert (sample != SessionEvent::Immediate);
 	SessionEvent* ev = new SessionEvent (type, SessionEvent::Replace, sample, target, 0);
 	queue_event (ev);
 }
@@ -136,7 +155,7 @@ SessionEventManager::clear_events (SessionEvent::Type type)
 }
 
 void
-SessionEventManager::clear_events (SessionEvent::Type type, boost::function<void (void)> after)
+SessionEventManager::clear_events (SessionEvent::Type type, std::function<void (void)> after)
 {
 	SessionEvent* ev = new SessionEvent (type, SessionEvent::Clear, SessionEvent::Immediate, 0, 0);
 	ev->rt_slot = after;
@@ -148,7 +167,7 @@ SessionEventManager::clear_events (SessionEvent::Type type, boost::function<void
 
 	ev->event_loop = PBD::EventLoop::get_event_loop_for_thread ();
 	if (ev->event_loop) {
-		ev->rt_return = boost::bind (&CrossThreadPool::flush_pending_with_ev, ev->event_pool(), _1);
+		ev->rt_return = std::bind (&CrossThreadPool::flush_pending_with_ev, ev->event_pool(), _1);
 	}
 
 	queue_event (ev);
@@ -160,7 +179,7 @@ SessionEventManager::dump_events () const
 	cerr << "EVENT DUMP" << endl;
 	for (Events::const_iterator i = events.begin(); i != events.end(); ++i) {
 
-		cerr << "\tat " << (*i)->action_sample << ' ' << enum_2_string ((*i)->type) << " target = " << (*i)->target_sample << endl;
+		cerr << "\tat " << (*i)->action_sample << " type " << enum_2_string ((*i)->type) << " target = " << (*i)->target_sample << endl;
 	}
 	cerr << "Next event: ";
 
@@ -199,7 +218,7 @@ SessionEventManager::merge_event (SessionEvent* ev)
 		}
 		if (ev->event_loop) {
 			/* run non-realtime callback (in some other thread) */
-			ev->event_loop->call_slot (MISSING_INVALIDATOR, boost::bind (ev->rt_return, ev));
+			ev->event_loop->call_slot (MISSING_INVALIDATOR, std::bind (ev->rt_return, ev));
 		} else {
 			delete ev;
 		}
@@ -211,7 +230,7 @@ SessionEventManager::merge_event (SessionEvent* ev)
 
 	/* try to handle immediate events right here */
 
-	if (ev->type == SessionEvent::Locate || ev->type == SessionEvent::LocateRoll) {
+	if (ev->type == SessionEvent::Locate || ev->type == SessionEvent::LocateRoll || ev->type == SessionEvent::EndRoll) {
 		/* remove any existing Locates that are waiting to execute */
 		_clear_event_type (ev->type);
 	}
@@ -223,8 +242,6 @@ SessionEventManager::merge_event (SessionEvent* ev)
 
 	switch (ev->type) {
 	case SessionEvent::AutoLoop:
-	case SessionEvent::AutoLoopDeclick:
-	case SessionEvent::StopOnce:
 		_clear_event_type (ev->type);
 		break;
 	default:
@@ -250,10 +267,19 @@ SessionEventManager::_replace_event (SessionEvent* ev)
 	bool ret = false;
 	Events::iterator i;
 
-	/* private, used only for events that can only exist once in the queue */
+	/* use only for events that can only exist once in the respective queue */
+	Events& e (ev->action_sample == SessionEvent::Immediate ? immediate_events : events);
 
-	for (i = events.begin(); i != events.end(); ++i) {
-		if ((*i)->type == ev->type) {
+	for (i = e.begin(); i != e.end(); ++i) {
+		if ((*i)->type == ev->type && ev->type == SessionEvent::Overwrite && (*i)->track.lock() == ev->track.lock()) {
+			assert (ev->action_sample == SessionEvent::Immediate);
+			(*i)->overwrite = ARDOUR::OverwriteReason ((*i)->overwrite | ev->overwrite);
+			delete ev;
+			return true;
+		}
+		else if ((*i)->type == ev->type && ev->type != SessionEvent::Overwrite) {
+			assert (ev->action_sample != SessionEvent::Immediate);
+			assert (ev->type == SessionEvent::PunchIn || ev->type == SessionEvent::PunchOut ||  ev->type == SessionEvent::AutoLoop);
 			(*i)->action_sample = ev->action_sample;
 			(*i)->target_sample = ev->target_sample;
 			if ((*i) == ev) {
@@ -264,12 +290,17 @@ SessionEventManager::_replace_event (SessionEvent* ev)
 		}
 	}
 
-	if (i == events.end()) {
-		events.insert (events.begin(), ev);
+	if (i == e.end()) {
+		e.insert (e.begin(), ev);
 	}
 
-	events.sort (SessionEvent::compare);
-	next_event = events.end();
+	if (ev->action_sample == SessionEvent::Immediate) {
+		/* no need to sort immediate events */
+		return ret;
+	}
+
+	e.sort (SessionEvent::compare);
+	next_event = e.end();
 	set_next_event ();
 
 	return ret;
@@ -284,6 +315,7 @@ SessionEventManager::_remove_event (SessionEvent* ev)
 
 	for (i = events.begin(); i != events.end(); ++i) {
 		if ((*i)->type == ev->type && (*i)->action_sample == ev->action_sample) {
+			assert ((*i)->action_sample != SessionEvent::Immediate);
 			if ((*i) == ev) {
 				ret = true;
 			}
@@ -339,4 +371,46 @@ SessionEventManager::_clear_event_type (SessionEvent::Type type)
 	}
 
 	set_next_event ();
+}
+
+std::ostream& operator<<(std::ostream& o, ARDOUR::SessionEvent const& ev) {
+  o << "SessionEvent"
+		<< " type: " << enum_2_string (ev.type)
+		<< " action: " << enum_2_string (ev.action)
+		<< " atime: " << ev.action_sample
+		<< " ttime: " << ev.target_sample;
+
+	switch (ev.type) {
+		case SessionEvent::Locate:
+			o << " disposition: " << ev.locate_transport_disposition;
+			o << " force: " << ev.yes_or_no;
+			break;
+		case SessionEvent::LocateRoll:
+			o << " force: " << ev.yes_or_no;
+			break;
+		case SessionEvent::SetDefaultPlaySpeed:
+			/* fallthrough */
+		case SessionEvent::SetTransportSpeed:
+			o << " speed: " << ev.speed;
+			break;
+		case SessionEvent::EndRoll:
+			o << " abort: " << ev.yes_or_no;
+			o << " clear: " << ev.second_yes_or_no;
+			break;
+		case SessionEvent::OverwriteAll:
+			o << " reason: " << ev.overwrite;
+			break;
+		case SessionEvent::Audition:
+			o << " region: '" << ev.region->name () << "'";
+			break;
+		case SessionEvent::Overwrite:
+			if (std::shared_ptr<Track> track = ev.track.lock ()) {
+				o << " track: '" << track->name () << "'";
+			}
+			o << " reason: " << ev.overwrite;
+			break;
+		default:
+			break;
+	}
+	return o;
 }

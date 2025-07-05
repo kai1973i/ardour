@@ -1,20 +1,28 @@
 /*
-  Copyright (C) 2004 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2005-2006 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2006-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2008-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2015 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <limits.h>
 
@@ -29,6 +37,7 @@
 
 #include "widgets/tooltips.h"
 
+#include "gain_meter.h"
 #include "panner_ui.h"
 #include "panner2d.h"
 #include "gui_thread.h"
@@ -55,7 +64,6 @@ PannerUI::PannerUI (Session* s)
 {
 	set_session (s);
 
-	ignore_toggle = false;
 	pan_menu = 0;
 	pan_astate_menu = 0;
 	pan_astyle_menu = 0;
@@ -71,7 +79,7 @@ PannerUI::PannerUI (Session* s)
 
 	//set_size_request_to_display_given_text (pan_automation_state_button, X_("O"), 2, 2);
 
-	pan_automation_state_button.unset_flags (Gtk::CAN_FOCUS);
+	pan_automation_state_button.set_can_focus (false);
 
 	pan_automation_state_button.signal_button_press_event().connect (sigc::mem_fun(*this, &PannerUI::pan_automation_state_button_event), false);
 
@@ -85,12 +93,12 @@ PannerUI::PannerUI (Session* s)
 }
 
 void
-PannerUI::set_panner (boost::shared_ptr<PannerShell> ps, boost::shared_ptr<Panner> p)
+PannerUI::set_panner (std::shared_ptr<PannerShell> ps, std::shared_ptr<Panner> p)
 {
 	/* note that the panshell might not change here (i.e. ps == _panshell)
 	 */
 
- 	connections.drop_connections ();
+	connections.drop_connections ();
 
 	delete pan_astyle_menu;
 	pan_astyle_menu = 0;
@@ -104,6 +112,9 @@ PannerUI::set_panner (boost::shared_ptr<PannerShell> ps, boost::shared_ptr<Panne
 	delete twod_panner;
 	twod_panner = 0;
 
+	delete big_window;
+	big_window = 0;
+
 	delete _stereo_panner;
 	_stereo_panner = 0;
 
@@ -114,7 +125,7 @@ PannerUI::set_panner (boost::shared_ptr<PannerShell> ps, boost::shared_ptr<Panne
 		return;
 	}
 
-	_panshell->Changed.connect (connections, invalidator (*this), boost::bind (&PannerUI::panshell_changed, this), gui_context());
+	_panshell->Changed.connect (connections, invalidator (*this), std::bind (&PannerUI::panshell_changed, this), gui_context());
 
 	/* new panner object, force complete reset of panner GUI
 	 */
@@ -139,24 +150,18 @@ PannerUI::build_astate_menu ()
 		pan_astate_menu->items().clear ();
 	}
 
-	/** TRANSLATORS: this is `Manual' in the sense of automation not being played,
-	    so that changes to pan must be done by hand.
-	*/
-	pan_astate_menu->items().push_back (MenuElem (S_("Automation|Manual"), sigc::bind (
-			sigc::mem_fun (_panner.get(), &Panner::set_automation_state),
-			(AutoState) ARDOUR::Off)));
-	pan_astate_menu->items().push_back (MenuElem (_("Play"), sigc::bind (
-			sigc::mem_fun (_panner.get(), &Panner::set_automation_state),
-			(AutoState) Play)));
-	pan_astate_menu->items().push_back (MenuElem (_("Write"), sigc::bind (
-			sigc::mem_fun (_panner.get(), &Panner::set_automation_state),
-			(AutoState) Write)));
-	pan_astate_menu->items().push_back (MenuElem (_("Touch"), sigc::bind (
-			sigc::mem_fun (_panner.get(), &Panner::set_automation_state),
-			(AutoState) Touch)));
-	pan_astate_menu->items().push_back (MenuElem (_("Latch"), sigc::bind (
-			sigc::mem_fun (_panner.get(), &Panner::set_automation_state),
-			(AutoState) Latch)));
+	std::shared_ptr<Pannable> pannable = _panshell->pannable();
+
+	pan_astate_menu->items().push_back (MenuElem (GainMeterBase::astate_string (ARDOUR::Off),
+			sigc::bind ( sigc::mem_fun (pannable.get(), &Pannable::set_automation_state), (AutoState) ARDOUR::Off)));
+	pan_astate_menu->items().push_back (MenuElem (GainMeterBase::astate_string (ARDOUR::Play),
+			sigc::bind ( sigc::mem_fun (pannable.get(), &Pannable::set_automation_state), (AutoState) Play)));
+	pan_astate_menu->items().push_back (MenuElem (GainMeterBase::astate_string (ARDOUR::Write),
+			sigc::bind ( sigc::mem_fun (pannable.get(), &Pannable::set_automation_state), (AutoState) Write)));
+	pan_astate_menu->items().push_back (MenuElem (GainMeterBase::astate_string (ARDOUR::Touch),
+			sigc::bind (sigc::mem_fun (pannable.get(), &Pannable::set_automation_state), (AutoState) Touch)));
+	pan_astate_menu->items().push_back (MenuElem (GainMeterBase::astate_string (ARDOUR::Latch),
+			sigc::bind ( sigc::mem_fun (pannable.get(), &Pannable::set_automation_state), (AutoState) Latch)));
 
 }
 
@@ -212,6 +217,8 @@ PannerUI::setup_pan ()
 	int const nouts = _panner ? _panner->out().n_audio() : -1;
 	int const nins = _panner ? _panner->in().n_audio() : -1;
 
+	assert (_panshell);
+
 	if (nouts == _current_nouts
 			&& nins == _current_nins
 			&& _current_uri == _panshell->panner_gui_uri()
@@ -246,26 +253,26 @@ PannerUI::setup_pan ()
 		delete big_window;
 		big_window = 0;
 
-		boost::shared_ptr<Pannable> pannable = _panner->pannable();
+		std::shared_ptr<Pannable> pannable = _panner->pannable();
 
 		_stereo_panner = new StereoPanner (_panshell);
 		_stereo_panner->set_size_request (-1, 5 * ceilf(7.f * scale));
 		_stereo_panner->set_send_drawing_mode (_send_mode);
 		pan_vbox.pack_start (*_stereo_panner, false, false);
 
-		boost::shared_ptr<AutomationControl> ac;
+		std::shared_ptr<AutomationControl> ac;
 
 		ac = pannable->pan_azimuth_control;
 		_stereo_panner->StartPositionGesture.connect (sigc::bind (sigc::mem_fun (*this, &PannerUI::start_touch),
-					boost::weak_ptr<AutomationControl> (ac)));
+					std::weak_ptr<AutomationControl> (ac)));
 		_stereo_panner->StopPositionGesture.connect (sigc::bind (sigc::mem_fun (*this, &PannerUI::stop_touch),
-					boost::weak_ptr<AutomationControl>(ac)));
+					std::weak_ptr<AutomationControl>(ac)));
 
 		ac = pannable->pan_width_control;
 		_stereo_panner->StartWidthGesture.connect (sigc::bind (sigc::mem_fun (*this, &PannerUI::start_touch),
-					boost::weak_ptr<AutomationControl> (ac)));
+					std::weak_ptr<AutomationControl> (ac)));
 		_stereo_panner->StopWidthGesture.connect (sigc::bind (sigc::mem_fun (*this, &PannerUI::stop_touch),
-					boost::weak_ptr<AutomationControl>(ac)));
+					std::weak_ptr<AutomationControl>(ac)));
 		_stereo_panner->signal_button_release_event().connect (sigc::mem_fun(*this, &PannerUI::pan_button_event));
 	}
 	else if (_current_uri == "http://ardour.org/plugin/panner_1in2out#ui"
@@ -273,15 +280,15 @@ PannerUI::setup_pan ()
 	{
 		delete big_window;
 		big_window = 0;
-		boost::shared_ptr<Pannable> pannable = _panner->pannable();
-		boost::shared_ptr<AutomationControl> ac = pannable->pan_azimuth_control;
+		std::shared_ptr<Pannable> pannable = _panner->pannable();
+		std::shared_ptr<AutomationControl> ac = pannable->pan_azimuth_control;
 
 		_mono_panner = new MonoPanner (_panshell);
 
 		_mono_panner->StartGesture.connect (sigc::bind (sigc::mem_fun (*this, &PannerUI::start_touch),
-					boost::weak_ptr<AutomationControl> (ac)));
+					std::weak_ptr<AutomationControl> (ac)));
 		_mono_panner->StopGesture.connect (sigc::bind (sigc::mem_fun (*this, &PannerUI::stop_touch),
-					boost::weak_ptr<AutomationControl>(ac)));
+					std::weak_ptr<AutomationControl>(ac)));
 
 		_mono_panner->signal_button_release_event().connect (sigc::mem_fun(*this, &PannerUI::pan_button_event));
 
@@ -308,7 +315,7 @@ PannerUI::setup_pan ()
 		twod_panner->set_size_request (-1, rintf(61.f * scale));
 		twod_panner->set_send_drawing_mode (_send_mode);
 
-		/* and finally, add it to the panner sample */
+		/* and finally, add it to the panner frame */
 
 		pan_vbox.pack_start (*twod_panner, false, false);
 	}
@@ -339,23 +346,23 @@ PannerUI::set_send_drawing_mode (bool onoff)
 }
 
 void
-PannerUI::start_touch (boost::weak_ptr<AutomationControl> wac)
+PannerUI::start_touch (std::weak_ptr<AutomationControl> wac)
 {
-	boost::shared_ptr<AutomationControl> ac = wac.lock();
+	std::shared_ptr<AutomationControl> ac = wac.lock();
 	if (!ac) {
 		return;
 	}
-	ac->start_touch (ac->session().transport_sample());
+	ac->start_touch (timepos_t (ac->session().transport_sample()));
 }
 
 void
-PannerUI::stop_touch (boost::weak_ptr<AutomationControl> wac)
+PannerUI::stop_touch (std::weak_ptr<AutomationControl> wac)
 {
-	boost::shared_ptr<AutomationControl> ac = wac.lock();
+	std::shared_ptr<AutomationControl> ac = wac.lock();
 	if (!ac) {
 		return;
 	}
-	ac->stop_touch (ac->session().transport_sample());
+	ac->stop_touch (timepos_t (ac->session().transport_sample()));
 }
 
 bool
@@ -374,11 +381,11 @@ PannerUI::pan_button_event (GdkEventButton* ev)
 
 	case 3:
 		if (pan_menu == 0) {
-			pan_menu = manage (new Menu);
+			pan_menu = new Menu;
 			pan_menu->set_name ("ArdourContextMenu");
 		}
 		build_pan_menu ();
-		pan_menu->popup (1, ev->time);
+		pan_menu->popup (ev->button, ev->time);
 		return true;
 		break;
 	default:
@@ -409,6 +416,16 @@ PannerUI::build_pan_menu ()
 		items.push_back (MenuElem (_("Edit..."), sigc::mem_fun (*this, &PannerUI::pan_edit)));
 	}
 
+	if (_send_mode) {
+		items.push_back (SeparatorElem());
+		items.push_back (CheckMenuElem (_("Link send and main panner"), sigc::mem_fun(*this, &PannerUI::pan_bypass_toggle)));
+		send_link_menu_item = static_cast<Gtk::CheckMenuItem*> (&items.back());
+		send_link_menu_item->set_active (_panshell->is_linked_to_route ());
+		send_link_menu_item->signal_toggled().connect (sigc::mem_fun(*this, &PannerUI::pan_link_toggle));
+	} else {
+		send_link_menu_item = NULL;
+	}
+
 	if (_panner_list.size() > 1 && !_panshell->bypassed()) {
 		RadioMenuItem::Group group;
 		items.push_back (SeparatorElem());
@@ -429,6 +446,14 @@ PannerUI::pan_bypass_toggle ()
 {
 	if (bypass_menu_item && (_panshell->bypassed() != bypass_menu_item->get_active())) {
 		_panshell->set_bypassed (!_panshell->bypassed());
+	}
+}
+
+void
+PannerUI::pan_link_toggle ()
+{
+	if (send_link_menu_item && (_panshell->is_linked_to_route() != send_link_menu_item->get_active())) {
+		_panshell->set_linked_to_route (!_panshell->is_linked_to_route());
 	}
 }
 
@@ -503,7 +528,7 @@ PannerUI::pan_automation_state_button_event (GdkEventButton *ev)
 		if (pan_astate_menu == 0) {
 			build_astate_menu ();
 		}
-		pan_astate_menu->popup (1, ev->time);
+		pan_astate_menu->popup (ev->button, ev->time);
 		break;
 	default:
 		break;
@@ -515,64 +540,16 @@ PannerUI::pan_automation_state_button_event (GdkEventButton *ev)
 void
 PannerUI::pan_automation_state_changed ()
 {
-	boost::shared_ptr<Pannable> pannable (_panner->pannable());
-
-	switch (_width) {
-	case Wide:
-		pan_automation_state_button.set_label (astate_string(pannable->automation_state()));
-		break;
-	case Narrow:
-		pan_automation_state_button.set_label (short_astate_string(pannable->automation_state()));
-		break;
-	}
+	std::shared_ptr<Pannable> pannable (_panner->pannable());
+	pan_automation_state_button.set_label (GainMeterBase::short_astate_string(pannable->automation_state()));
 
 	bool x = (pannable->automation_state() != ARDOUR::Off);
 
 	if (pan_automation_state_button.get_active() != x) {
-		ignore_toggle = true;
 		pan_automation_state_button.set_active (x);
-		ignore_toggle = false;
 	}
 
 	update_pan_sensitive ();
-}
-
-string
-PannerUI::astate_string (AutoState state)
-{
-	return _astate_string (state, false);
-}
-
-string
-PannerUI::short_astate_string (AutoState state)
-{
-	return _astate_string (state, true);
-}
-
-string
-PannerUI::_astate_string (AutoState state, bool shrt)
-{
-	string sstr;
-
-	switch (state) {
-	case ARDOUR::Off:
-		sstr = (shrt ? "M" : S_("Manual|M"));
-		break;
-	case Play:
-		sstr = (shrt ? "P" : S_("Play|P"));
-		break;
-	case Touch:
-		sstr = (shrt ? "T" : S_("Touch|T"));
-		break;
-	case Latch:
-		sstr = (shrt ? "L" : S_("Latch|L"));
-		break;
-	case Write:
-		sstr = (shrt ? "W" : S_("Write|W"));
-		break;
-	}
-
-	return sstr;
 }
 
 void

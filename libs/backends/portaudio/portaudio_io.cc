@@ -1,6 +1,6 @@
 /*
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
  * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
- * Copyright (C) 2015 Tim Mayberry <mojofunk@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -12,9 +12,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <stdio.h>
@@ -698,7 +698,9 @@ PortAudioIO::get_input_stream_params(int device_input,
 #else
 	inputParam.sampleFormat = paFloat32 | paNonInterleaved;
 #endif
-	inputParam.suggestedLatency = nfo_in->defaultLowInputLatency;
+	if (!inputParam.suggestedLatency) {
+		inputParam.suggestedLatency = nfo_in->defaultLowInputLatency;
+	}
 	inputParam.hostApiSpecificStreamInfo = NULL;
 
 	return true;
@@ -732,7 +734,9 @@ PortAudioIO::get_output_stream_params(int device_output,
 #else
 	outputParam.sampleFormat = paFloat32 | paNonInterleaved;
 #endif
-	outputParam.suggestedLatency = nfo_out->defaultLowOutputLatency;
+	if (!outputParam.suggestedLatency) {
+		outputParam.suggestedLatency = nfo_out->defaultLowOutputLatency;
+	}
 	outputParam.hostApiSpecificStreamInfo = NULL;
 
 	return true;
@@ -742,7 +746,9 @@ PaErrorCode
 PortAudioIO::pre_stream_open(int device_input,
                              PaStreamParameters& inputParam,
                              int device_output,
-                             PaStreamParameters& outputParam)
+                             PaStreamParameters& outputParam,
+                             uint32_t sample_rate,
+                             uint32_t samples_per_period)
 {
 	if (!pa_initialize()) {
 		DEBUG_AUDIO ("PortAudio Initialization Failed\n");
@@ -756,6 +762,12 @@ PortAudioIO::pre_stream_open(int device_input,
 
 	if (device_input == DeviceNone && device_output == DeviceNone) {
 		return paBadIODeviceCombination;
+	}
+
+	if ((get_current_host_api_type() == paASIO) && sample_rate) {
+		outputParam.suggestedLatency = inputParam.suggestedLatency = ((double)samples_per_period / (double)sample_rate);
+	} else {
+		outputParam.suggestedLatency = inputParam.suggestedLatency = 0;
 	}
 
 	if (get_input_stream_params(device_input, inputParam)) {
@@ -790,7 +802,7 @@ PortAudioIO::open_callback_stream(int device_input,
 	PaStreamParameters outputParam;
 
 	PaErrorCode error_code =
-	    pre_stream_open(device_input, inputParam, device_output, outputParam);
+	    pre_stream_open(device_input, inputParam, device_output, outputParam, sample_rate, samples_per_period);
 
 	if (error_code != paNoError) return error_code;
 
@@ -832,7 +844,7 @@ PortAudioIO::open_blocking_stream(int device_input,
 	PaStreamParameters outputParam;
 
 	PaErrorCode error_code =
-	    pre_stream_open(device_input, inputParam, device_output, outputParam);
+	    pre_stream_open(device_input, inputParam, device_output, outputParam, sample_rate, samples_per_period);
 
 	if (error_code != paNoError) return error_code;
 

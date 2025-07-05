@@ -1,20 +1,20 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016-2018 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_push2_mix_layout_h__
 #define __ardour_push2_mix_layout_h__
@@ -63,17 +63,17 @@ class MixLayout : public Push2Layout
 	void update_meters ();
 
   private:
-	ArdourCanvas::Rectangle* bg;
-	ArdourCanvas::Line* upper_line;
-	std::vector<ArdourCanvas::Text*> upper_text;
-	std::vector<ArdourCanvas::Text*> lower_text;
-	std::vector<ArdourCanvas::Rectangle*> upper_backgrounds;
-	std::vector<ArdourCanvas::Rectangle*> lower_backgrounds;
+	ArdourCanvas::Rectangle*              _bg;
+	ArdourCanvas::Line*                   _upper_line;
+	std::vector<ArdourCanvas::Text*>      _upper_text;
+	std::vector<ArdourCanvas::Text*>      _lower_text;
+	std::vector<ArdourCanvas::Rectangle*> _upper_backgrounds;
+	std::vector<ArdourCanvas::Rectangle*> _lower_backgrounds;
 
 	struct GainMeter : public ArdourCanvas::Container {
 		GainMeter (Item* parent, Push2&);
 
-		Push2Knob* knob;
+		Push2Knob*  knob;
 		LevelMeter* meter;
 	};
 
@@ -81,13 +81,12 @@ class MixLayout : public Push2Layout
 
 	/* stripables */
 
-	int32_t bank_start;
-	PBD::ScopedConnectionList stripable_connections;
-	boost::shared_ptr<ARDOUR::Stripable> stripable[8];
+	int32_t                              _bank_start;
+	PBD::ScopedConnectionList            _stripable_connections;
+	std::shared_ptr<ARDOUR::Stripable> _stripable[8];
+	PBD::ScopedConnectionList            _session_connections;
 
-	PBD::ScopedConnectionList session_connections;
 	void stripables_added ();
-
 	void stripable_property_change (PBD::PropertyChange const& what_changed, uint32_t which);
 
 	void switch_bank (uint32_t base);
@@ -99,8 +98,9 @@ class MixLayout : public Push2Layout
 		Send1, Send2, Send3, Send4, Send5
 	};
 
-	Push2::Button* mode_button;
-	VPotMode vpot_mode;
+	std::shared_ptr<Push2::Button> _mode_button;
+	VPotMode                         _vpot_mode;
+
 	void show_vpot_mode ();
 
 	void solo_changed (uint32_t n);

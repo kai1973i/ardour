@@ -1,20 +1,26 @@
 /*
-    Copyright (C) 2006 Paul Davis
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2007-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2018 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2016 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
 #include "pbd/error.h"
 
 #include "ardour/amp.h"
@@ -34,6 +40,7 @@
 #include "ardour/monitor_control.h"
 #include "ardour/playlist.h"
 #include "ardour/playlist_factory.h"
+#include "ardour/polarity_processor.h"
 #include "ardour/port.h"
 #include "ardour/processor.h"
 #include "ardour/profile.h"
@@ -45,6 +52,7 @@
 #include "ardour/session_playlists.h"
 #include "ardour/smf_source.h"
 #include "ardour/track.h"
+#include "ardour/triggerbox.h"
 #include "ardour/types_convert.h"
 #include "ardour/utils.h"
 
@@ -56,26 +64,29 @@ using namespace PBD;
 
 Track::Track (Session& sess, string name, PresentationInfo::Flag flag, TrackMode mode, DataType default_type)
 	: Route (sess, name, flag, default_type)
-	, _saved_meter_point (_meter_point)
+	, _record_prepared (false)
 	, _mode (mode)
 	, _alignment_choice (Automatic)
+	, _pending_name_change (false)
 {
 	_freeze_record.state = NoFreeze;
-	_declickable = true;
-
 }
 
 Track::~Track ()
 {
 	DEBUG_TRACE (DEBUG::Destruction, string_compose ("track %1 destructor\n", _name));
 
+	for (auto const& p : _playlists) {
+		if (p) {
+			p->clear_time_domain_parent ();
+		}
+	}
+
 	if (_disk_reader) {
-		_disk_reader->set_route (boost::shared_ptr<Route>());
 		_disk_reader.reset ();
 	}
 
 	if (_disk_writer) {
-		_disk_writer->set_route (boost::shared_ptr<Route>());
 		_disk_writer.reset ();
 	}
 }
@@ -83,49 +94,64 @@ Track::~Track ()
 int
 Track::init ()
 {
+	if (!is_auditioner()) {
+		_triggerbox = std::shared_ptr<TriggerBox> (new TriggerBox (_session, data_type ()));
+		_triggerbox->set_owner (this);
+	}
+
 	if (Route::init ()) {
 		return -1;
 	}
 
 	DiskIOProcessor::Flag dflags = DiskIOProcessor::Recordable;
 
-	if (_mode == Destructive && !Profile->get_trx()) {
-		dflags = DiskIOProcessor::Flag (dflags | DiskIOProcessor::Destructive);
-	}
-
-	_disk_reader.reset (new DiskReader (_session, name(), dflags));
+	_disk_reader.reset (new DiskReader (_session, *this, name(), Temporal::TimeDomainProvider (Config->get_default_automation_time_domain()), dflags));
 	_disk_reader->set_block_size (_session.get_block_size ());
-	_disk_reader->set_route (boost::dynamic_pointer_cast<Route> (shared_from_this()));
 	_disk_reader->set_owner (this);
 
-	_disk_writer.reset (new DiskWriter (_session, name(), dflags));
+	_disk_writer.reset (new DiskWriter (_session, *this, name(), dflags));
 	_disk_writer->set_block_size (_session.get_block_size ());
-	_disk_writer->set_route (boost::dynamic_pointer_cast<Route> (shared_from_this()));
 	_disk_writer->set_owner (this);
+
+	/* no triggerbox for the auditioner, to avoid visual clutter in
+	 * patchbays and elsewhere (or special-case code in those places)
+	 */
 
 	set_align_choice_from_io ();
 
-	use_new_playlist (data_type());
+	std::shared_ptr<Route> rp (std::dynamic_pointer_cast<Route> (shared_from_this()));
+	std::shared_ptr<Track> rt = std::dynamic_pointer_cast<Track> (rp);
 
-	boost::shared_ptr<Route> rp (boost::dynamic_pointer_cast<Route> (shared_from_this()));
-	boost::shared_ptr<Track> rt = boost::dynamic_pointer_cast<Track> (rp);
-
-	_record_enable_control.reset (new RecordEnableControl (_session, EventTypeMap::instance().to_symbol (RecEnableAutomation), *this));
+	_record_enable_control.reset (new RecordEnableControl (_session, EventTypeMap::instance().to_symbol (RecEnableAutomation), *this, *this));
 	add_control (_record_enable_control);
 
-	_record_safe_control.reset (new RecordSafeControl (_session, EventTypeMap::instance().to_symbol (RecSafeAutomation), *this));
+	_record_safe_control.reset (new RecordSafeControl (_session, EventTypeMap::instance().to_symbol (RecSafeAutomation), *this, *this));
 	add_control (_record_safe_control);
 
-	_monitoring_control.reset (new MonitorControl (_session, EventTypeMap::instance().to_symbol (MonitoringAutomation), *this));
+	_monitoring_control.reset (new MonitorControl (_session, EventTypeMap::instance().to_symbol (MonitoringAutomation), *this, *this));
 	add_control (_monitoring_control);
 
-	_session.config.ParameterChanged.connect_same_thread (*this, boost::bind (&Track::parameter_changed, this, _1));
+	if (!name().empty()) {
+		/* an empty name means that we are being constructed via
+		 * serialized state (XML). Don't create a playlist, because one
+		 * will be created or discovered during ::set_state().
+		 */
+		use_new_playlist (data_type());
+		/* set disk-I/O and diskstream name */
+		set_name (name ());
+	}
 
-	_monitoring_control->Changed.connect_same_thread (*this, boost::bind (&Track::monitoring_changed, this, _1, _2));
-	_record_safe_control->Changed.connect_same_thread (*this, boost::bind (&Track::record_safe_changed, this, _1, _2));
-	_record_enable_control->Changed.connect_same_thread (*this, boost::bind (&Track::record_enable_changed, this, _1, _2));
+	_session.config.ParameterChanged.connect_same_thread (*this, std::bind (&Track::parameter_changed, this, _1));
+	_session.RecordStateChanged.connect_same_thread (*this, std::bind (&Track::update_input_meter, this));
+	_session.TransportStateChange.connect_same_thread (*this, std::bind (&Track::update_input_meter, this));
 
-	_input->changed.connect_same_thread (*this, boost::bind (&Track::input_changed, this));
+	_monitoring_control->Changed.connect_same_thread (*this, std::bind (&Track::monitoring_changed, this, _1, _2));
+	_record_safe_control->Changed.connect_same_thread (*this, std::bind (&Track::record_safe_changed, this, _1, _2));
+	_record_enable_control->Changed.connect_same_thread (*this, std::bind (&Track::record_enable_changed, this, _1, _2));
+
+	_input->changed.connect_same_thread (*this, std::bind (&Track::input_changed, this));
+
+	_disk_reader->ConfigurationChanged.connect_same_thread (*this, std::bind (&Track::chan_count_changed, this));
 
 	return 0;
 }
@@ -138,8 +164,31 @@ Track::input_changed ()
 	}
 }
 
+void
+Track::chan_count_changed ()
+{
+	ChanCountChanged (); /* EMIT SIGNAL */
+}
+
 XMLNode&
-Track::state (bool save_template)
+Track::playlist_state () const
+{
+	XMLNode* node = new XMLNode("Route");
+	node->set_property("version", CURRENT_SESSION_FILE_VERSION);
+
+	if (_playlists[DataType::AUDIO]) {
+		node->set_property (X_("audio-playlist"), _playlists[DataType::AUDIO]->id().to_s());
+	}
+
+	if (_playlists[DataType::MIDI]) {
+		node->set_property (X_("midi-playlist"), _playlists[DataType::MIDI]->id().to_s());
+	}
+
+	return *node;
+}
+
+XMLNode&
+Track::state (bool save_template) const
 {
 	XMLNode& root (Route::state (save_template));
 
@@ -155,7 +204,9 @@ Track::state (bool save_template)
 	root.add_child_nocopy (_record_safe_control->get_state ());
 	root.add_child_nocopy (_record_enable_control->get_state ());
 
-	root.set_property (X_("saved-meter-point"), _saved_meter_point);
+	if (_saved_meter_point) {
+		root.set_property (X_("saved-meter-point"), _saved_meter_point.value ());
+	}
 	root.set_property (X_("alignment-choice"), _alignment_choice);
 
 	return root;
@@ -171,7 +222,7 @@ Track::set_state (const XMLNode& node, int version)
 	if (version >= 3000 && version < 6000) {
 		if (XMLNode* ds_node = find_named_node (node, "Diskstream")) {
 			std::string name;
-			if (ds_node->get_property ("name", name)) {
+			if (ds_node->get_property ("playlist", name)) {
 
 				ds_node->set_property ("active", true);
 
@@ -183,11 +234,11 @@ Track::set_state (const XMLNode& node, int version)
 					set_align_choice (ac, true);
 				}
 
-				if (boost::shared_ptr<AudioPlaylist> pl = boost::dynamic_pointer_cast<AudioPlaylist> (_session.playlists->by_name (name))) {
+				if (std::shared_ptr<AudioPlaylist> pl = std::dynamic_pointer_cast<AudioPlaylist> (_session.playlists()->by_name (name))) {
 					use_playlist (DataType::AUDIO, pl);
 				}
 
-				if (boost::shared_ptr<MidiPlaylist> pl = boost::dynamic_pointer_cast<MidiPlaylist> (_session.playlists->by_name (name))) {
+				if (std::shared_ptr<MidiPlaylist> pl = std::dynamic_pointer_cast<MidiPlaylist> (_session.playlists()->by_name (name))) {
 					use_playlist (DataType::MIDI, pl);
 				}
 			}
@@ -221,14 +272,19 @@ Track::set_state (const XMLNode& node, int version)
 				_record_safe_control->set_state (*child, version);
 			} else if (name == _monitoring_control->name()) {
 				_monitoring_control->set_state (*child, version);
+			} else if (name == "recenable" && version <= 3002) {
+				float value;
+				if (child->get_property ("value", value)) {
+					_record_enable_control->set_value (value, Controllable::NoGroup);
+				}
 			}
 		}
 	}
 
-	if (!node.get_property (X_("saved-meter-point"), _saved_meter_point)) {
-		_saved_meter_point = _meter_point;
+	MeterPoint mp;
+	if (node.get_property (X_("saved-meter-point"), mp)) {
+		_saved_meter_point = mp;
 	}
-
 
 	AlignChoice ac;
 
@@ -253,14 +309,21 @@ Track::freeze_state() const
 }
 
 bool
+Track::declick_in_progress () const
+{
+	return active() && _disk_reader->declick_in_progress ();
+}
+
+bool
 Track::can_record()
 {
 	bool will_record = true;
-	for (PortSet::iterator i = _input->ports().begin(); i != _input->ports().end() && will_record; ++i) {
-		if (!i->connected())
+	for (auto const& p : *_input->ports()) {
+		if (!p->connected()) {
 			will_record = false;
+			break;
+		}
 	}
-
 	return will_record;
 }
 
@@ -271,13 +334,8 @@ Track::prep_record_enabled (bool yn)
 		return -1;
 	}
 
-	if (!can_be_record_enabled()) {
+	if (yn && !can_be_record_enabled()) {
 		return -1;
-	}
-
-	/* keep track of the meter point as it was before we rec-enabled */
-	if (!_disk_writer->record_enabled()) {
-		_saved_meter_point = _meter_point;
 	}
 
 	bool will_follow;
@@ -288,23 +346,74 @@ Track::prep_record_enabled (bool yn)
 		will_follow = _disk_writer->prep_record_disable ();
 	}
 
-	if (will_follow) {
-		if (yn) {
-			if (_meter_point != MeterCustom) {
-				set_meter_point (MeterInput);
-			}
-		} else {
-			set_meter_point (_saved_meter_point);
-		}
+	if (!will_follow) {
+		return -1;
 	}
+
+	_record_prepared = yn;
+	update_input_meter ();
 
 	return 0;
 }
 
 void
+Track::update_input_meter ()
+{
+	if (_session.loading ()) {
+		return;
+	}
+	/* meter input if _record_prepared,
+	 * except if Rolling, but not recording (master-rec-enable is off) and auto-input is enabled
+	 */
+	bool monitor_input = false;
+
+	if (_record_prepared) {
+		/* actually rolling (no count-in, pre-roll) */
+		bool const rolling     = 0 != _session.transport_speed();
+		bool const recording   = _session.actively_recording ();
+		bool const auto_input  = _session.config.get_auto_input ();
+
+		if (!(rolling && !recording && auto_input)) {
+			monitor_input = true;
+		}
+	}
+
+	if (monitor_input) {
+		if (_saved_meter_point) {
+			/* already monitoring input */
+			return;
+		}
+		MeterPoint mp = meter_point ();
+		if (mp == MeterInput) {
+			/* user explicitly monitors input, do nothing */
+			return;
+		}
+
+		/* keep track of the meter point as it was before we rec-enabled */
+		_saved_meter_point = mp;
+
+		if (mp != MeterCustom) {
+			set_meter_point (MeterInput);
+		}
+
+	} else {
+		if (!_saved_meter_point) {
+			return;
+		}
+		if (_saved_meter_point != MeterCustom) {
+			set_meter_point (_saved_meter_point.value ());
+		}
+		_saved_meter_point.reset ();
+	}
+}
+
+void
 Track::record_enable_changed (bool, Controllable::GroupControlDisposition)
 {
-	_disk_writer->set_record_enabled (_record_enable_control->get_value());
+	bool yn = _record_enable_control->get_value();
+
+	_disk_writer->set_record_enabled (yn);
+	_triggerbox->set_record_enabled (yn);
 }
 
 void
@@ -322,43 +431,37 @@ Track::can_be_record_safe ()
 bool
 Track::can_be_record_enabled ()
 {
-	return !_record_safe_control->get_value() && _disk_writer && !_disk_writer->record_safe() && _session.writable() && (_freeze_record.state != Frozen);
+	return !_record_safe_control->get_value() && _disk_writer && !_disk_writer->record_safe() && _session.writable() && (_freeze_record.state != Frozen) && (!_triggerbox || !_triggerbox->record_enabled());
 }
 
 void
 Track::parameter_changed (string const & p)
 {
 	if (p == "track-name-number") {
-		resync_track_name ();
+		resync_take_name ();
 	}
 	else if (p == "track-name-take") {
-		resync_track_name ();
+		resync_take_name ();
 	}
 	else if (p == "take-name") {
 		if (_session.config.get_track_name_take()) {
-			resync_track_name ();
+			resync_take_name ();
 		}
+	} else if (p == "auto-input") {
+		update_input_meter ();
 	}
 }
 
-void
-Track::resync_track_name ()
+int
+Track::resync_take_name (std::string n)
 {
-	set_name(name());
-}
-
-bool
-Track::set_name (const string& str)
-{
-	bool ret;
-
-	if (str.empty ()) {
-		return false;
+	if (n.empty ()) {
+		n = name ();
 	}
 
-	if (_record_enable_control->get_value()) {
-		/* when re-arm'ed the file (named after the track) is already ready to rolll */
-		return false;
+	if (_record_enable_control->get_value() && _session.actively_recording ()) {
+		_pending_name_change = true;
+		return -1;
 	}
 
 	string diskstream_name = "";
@@ -375,49 +478,86 @@ Track::set_name (const string& str)
 		diskstream_name += num;
 		diskstream_name += "_";
 	}
-	diskstream_name += str;
+
+	diskstream_name += n;
 
 	if (diskstream_name == _diskstream_name) {
+		return 1;
+	}
+
+	_diskstream_name = diskstream_name;
+	_disk_writer->set_write_source_name (diskstream_name);
+	return 0;
+}
+
+bool
+Track::set_name (const string& str)
+{
+	if (_record_enable_control->get_value()) {
+		/* cannot rename rec-armed track - see also Track::resync_take_name */
+		return false;
+	}
+
+	if (str.empty ()) {
+		return false;
+	}
+
+	string newname = Route::ensure_track_or_route_name (str);
+
+	if (newname == name()) {
 		return true;
 	}
-	_diskstream_name = diskstream_name;
 
-	_disk_writer->set_write_source_name (diskstream_name);
+	switch (resync_take_name (newname)) {
+		case -1:
+			return false;
+		case 1:
+			return true;
+		default:
+			break;
+	}
 
-	boost::shared_ptr<Track> me = boost::dynamic_pointer_cast<Track> (shared_from_this ());
+	std::shared_ptr<Track> me = std::dynamic_pointer_cast<Track> (shared_from_this ());
 
-	if (_playlists[data_type()]->all_regions_empty () && _session.playlists->playlists_for_track (me).size() == 1) {
-		/* Only rename the diskstream (and therefore the playlist) if
-		   a) the playlist has never had a region added to it and
-		   b) there is only one playlist for this track.
+	_disk_reader->set_name (newname);
+	_disk_writer->set_name (newname);
 
-		   If (a) is not followed, people can get confused if, say,
-		   they have notes about a playlist with a given name and then
-		   it changes (see mantis #4759).
 
-		   If (b) is not followed, we rename the current playlist and not
-		   the other ones, which is a bit confusing (see mantis #4977).
-		*/
-		_disk_reader->set_name (str);
-		_disk_writer->set_name (str);
+	/* When creating a track during session-load, do not change playlist's name.
+	 *
+	 * Changing the playlist name from 'toBeResetFroXML' breaks loading
+	 * Ardour v2..5 sessions. Older versions of Arodur identified playlist
+	 * by name, and this causes duplicate names and name conflicts.
+	 * (new track name -> new playlist name  != old playlist)
+	 */
+	if (_session.loading ()) {
+		return Route::set_name (newname);
 	}
 
 	for (uint32_t n = 0; n < DataType::num_types; ++n) {
-		if (_playlists[n]) {
-			_playlists[n]->set_name (str);
+		if (!_playlists[n]) {
+			continue;
+		}
+		if (_playlists[n]->all_regions_empty () && _session.playlists()->playlists_for_track (me).size() == 1) {
+			/* Only rename the the playlist if
+			 * a) the playlist has never had a region added to it and
+			 * b) there is only one playlist for this track.
+			 *
+			 * If (a) is not followed, people can get confused if, say,
+			 * they have notes about a playlist with a given name and then
+			 * it changes (see mantis #4759).
+			 *
+			 * If (b) is not followed, we rename the current playlist and not
+			 * the other ones, which is a bit confusing (see mantis #4977).
+			 */
+			_playlists[n]->set_name (newname);
 		}
 	}
 
-	/* save state so that the statefile fully reflects any filename changes */
-
-	if ((ret = Route::set_name (str)) == 0) {
-		_session.save_state ("");
-	}
-
-	return ret;
+	return Route::set_name (newname);
 }
 
-boost::shared_ptr<Playlist>
+std::shared_ptr<Playlist>
 Track::playlist ()
 {
 	return _playlists[data_type()];
@@ -426,29 +566,29 @@ Track::playlist ()
 void
 Track::request_input_monitoring (bool m)
 {
-	for (PortSet::iterator i = _input->ports().begin(); i != _input->ports().end(); ++i) {
-		AudioEngine::instance()->request_input_monitoring ((*i)->name(), m);
+	for (auto const& p : *_input->ports()) {
+		AudioEngine::instance()->request_input_monitoring (p->name(), m);
 	}
 }
 
 void
 Track::ensure_input_monitoring (bool m)
 {
-	for (PortSet::iterator i = _input->ports().begin(); i != _input->ports().end(); ++i) {
-		AudioEngine::instance()->ensure_input_monitoring ((*i)->name(), m);
+	for (auto const& p : *_input->ports()) {
+		AudioEngine::instance()->ensure_input_monitoring (p->name(), m);
 	}
 }
 
-bool
-Track::destructive () const
-{
-	return _disk_writer->destructive ();
-}
-
-list<boost::shared_ptr<Source> > &
+list<std::shared_ptr<Source> > &
 Track::last_capture_sources ()
 {
 	return _disk_writer->last_capture_sources ();
+}
+
+void
+Track::reset_last_capture_sources ()
+{
+	_disk_writer->reset_last_capture_sources ();
 }
 
 std::string
@@ -458,9 +598,9 @@ Track::steal_write_source_name()
 }
 
 void
-Track::reset_write_sources (bool r, bool force)
+Track::reset_write_sources (bool mark_write_complete)
 {
-	_disk_writer->reset_write_sources (r, force);
+	_disk_writer->reset_write_sources (mark_write_complete);
 }
 
 float
@@ -488,9 +628,9 @@ Track::do_flush (RunContext c, bool force)
 }
 
 void
-Track::set_pending_overwrite (bool o)
+Track::set_pending_overwrite (OverwriteReason why)
 {
-	_disk_reader->set_pending_overwrite (o);
+	_disk_reader->set_pending_overwrite (why);
 }
 
 int
@@ -502,13 +642,13 @@ Track::seek (samplepos_t p, bool complete_refill)
 	return _disk_writer->seek (p, complete_refill);
 }
 
-int
+bool
 Track::can_internal_playback_seek (samplecnt_t p)
 {
 	return _disk_reader->can_internal_playback_seek (p);
 }
 
-int
+void
 Track::internal_playback_seek (samplecnt_t p)
 {
 	return _disk_reader->internal_playback_seek (p);
@@ -520,13 +660,7 @@ Track::non_realtime_locate (samplepos_t p)
 	Route::non_realtime_locate (p);
 }
 
-void
-Track::non_realtime_speed_change ()
-{
-	_disk_reader->non_realtime_speed_change ();
-}
-
-int
+bool
 Track::overwrite_existing_buffers ()
 {
 	return _disk_reader->overwrite_existing_buffers ();
@@ -545,23 +679,22 @@ Track::transport_looped (samplepos_t p)
 }
 
 void
-Track::realtime_handle_transport_stopped ()
+Track::transport_stopped_wallclock (struct tm & n, time_t t, bool g)
 {
-	Glib::Threads::RWLock::ReaderLock lm (_processor_lock, Glib::Threads::TRY_LOCK);
+	_disk_writer->transport_stopped_wallclock (n, t, g);
 
-	if (!lm.locked ()) {
-		return;
-	}
-
-	for (ProcessorList::iterator i = _processors.begin(); i != _processors.end(); ++i) {
-		(*i)->realtime_handle_transport_stopped ();
+	if (_pending_name_change) {
+		resync_take_name ();
+		_pending_name_change = false;
 	}
 }
 
 void
-Track::transport_stopped_wallclock (struct tm & n, time_t t, bool g)
+Track::mark_capture_xrun ()
 {
-	_disk_writer->transport_stopped_wallclock (n, t, g);
+	if (_disk_writer->record_enabled ()) {
+		_disk_writer->mark_capture_xrun ();
+	}
 }
 
 bool
@@ -622,9 +755,9 @@ Track::playlist_modified ()
 int
 Track::find_and_use_playlist (DataType dt, PBD::ID const & id)
 {
-	boost::shared_ptr<Playlist> playlist;
+	std::shared_ptr<Playlist> playlist;
 
-	if ((playlist = _session.playlists->by_id (id)) == 0) {
+	if ((playlist = _session.playlists()->by_id (id)) == 0) {
 		return -1;
 	}
 
@@ -637,18 +770,55 @@ Track::find_and_use_playlist (DataType dt, PBD::ID const & id)
 }
 
 int
-Track::use_playlist (DataType dt, boost::shared_ptr<Playlist> p)
+Track::use_playlist (DataType dt, std::shared_ptr<Playlist> p, bool set_orig)
 {
 	int ret;
 
 	if ((ret = _disk_reader->use_playlist (dt, p)) == 0) {
 		if ((ret = _disk_writer->use_playlist (dt, p)) == 0) {
-			p->set_orig_track_id (id());
+			if (set_orig) {
+				p->set_orig_track_id (id());
+			}
 		}
 	}
 
+	std::shared_ptr<Playlist> old = _playlists[dt];
+
 	if (ret == 0) {
 		_playlists[dt] = p;
+	}
+
+	if (old) {
+		std::shared_ptr<RegionList> rl (new RegionList (old->region_list_property ().rlist ()));
+		if (rl->size () > 0) {
+			Region::RegionsPropertyChanged (rl, Properties::hidden);
+		}
+		/* we don't know for certain that we controlled the old
+		 * playlist's time domain, but it's a pretty good guess. If it
+		 * has an actual parent, revert to using its parent's domain
+		 */
+		if (old->time_domain_parent()) {
+			old->clear_time_domain_parent ();
+		}
+	}
+
+	if (p) {
+		std::shared_ptr<RegionList> rl (new RegionList (p->region_list_property ().rlist ()));
+		if (rl->size () > 0) {
+			Region::RegionsPropertyChanged (rl, Properties::hidden);
+		}
+
+		/* If the playlist has no time domain parent or its parent is
+		 * the session, reset to the explicit time domain of this
+		 * track.
+		 */
+
+		if (!p->time_domain_parent() || p->time_domain_parent() == &_session) {
+			/* XXX DANGER : track could go away leaving playlist
+			 * with dead parent time domain provider
+			 */
+			p->set_time_domain_parent (*this);
+		}
 	}
 
 	_session.set_dirty ();
@@ -668,7 +838,7 @@ Track::use_copy_playlist ()
 	}
 
 	string newname;
-	boost::shared_ptr<Playlist> playlist;
+	std::shared_ptr<Playlist> playlist;
 
 	newname = Playlist::bump_name (_playlists[data_type()]->name(), _session);
 
@@ -678,14 +848,16 @@ Track::use_copy_playlist ()
 
 	playlist->reset_shares();
 
-	return use_playlist (data_type(), playlist);
+	int rv = use_playlist (data_type(), playlist);
+	PlaylistAdded (); /* EMIT SIGNAL */
+	return rv;
 }
 
 int
 Track::use_new_playlist (DataType dt)
 {
 	string newname;
-	boost::shared_ptr<Playlist> playlist = _playlists[dt];
+	std::shared_ptr<Playlist> playlist = _playlists[dt];
 
 	if (playlist) {
 		newname = Playlist::bump_name (playlist->name(), _session);
@@ -699,7 +871,9 @@ Track::use_new_playlist (DataType dt)
 		return -1;
 	}
 
-	return use_playlist (dt, playlist);
+	int rv = use_playlist (dt, playlist);
+	PlaylistAdded (); /* EMIT SIGNAL */
+	return rv;
 }
 
 void
@@ -732,25 +906,20 @@ Track::set_align_choice_from_io ()
 
 	if (_input) {
 		uint32_t n = 0;
-		vector<string> connections;
-		boost::shared_ptr<Port> p;
+		std::shared_ptr<Port> p;
 
-		while (true) {
-
-			p = _input->nth (n++);
-
-			if (!p) {
+		while (0 != (p = _input->nth (n++))) {
+			/* In case of JACK all ports not owned by Ardour may be re-sampled,
+			 * and latency is added. External JACK ports need to be treated
+			 * like physical ports: I/O latency needs to be taken into account.
+			 *
+			 * When not using JACK, all external ports are physical ports
+			 * so this is a NO-OP for other backends.
+			 */
+			if (p->externally_connected () || p->physically_connected ()) {
+				have_physical = true;
 				break;
 			}
-
-			if (p->get_connections (connections) != 0) {
-				if (AudioEngine::instance()->port_is_physical (connections[0])) {
-					have_physical = true;
-					break;
-				}
-			}
-
-			connections.clear ();
 		}
 	}
 
@@ -769,6 +938,7 @@ Track::set_align_choice_from_io ()
 		}
 	}
 #endif
+
 
 	if (have_physical) {
 		_disk_writer->set_align_style (ExistingMaterial);
@@ -801,29 +971,6 @@ Track::adjust_capture_buffering ()
         }
 }
 
-
-void
-Track::maybe_declick (BufferSet& bufs, samplecnt_t nframes, int declick)
-{
-        /* never declick if there is an internal generator - we just want it to
-           keep generating sound without interruption.
-
-	   ditto if we are monitoring inputs.
-        */
-
-	if (_have_internal_generator || (_monitoring_control->monitoring_choice() == MonitorInput)) {
-                return;
-        }
-
-        if (!declick) {
-		declick = _pending_declick;
-	}
-
-	if (declick != 0) {
-		Amp::declick (bufs, nframes, declick);
-	}
-}
-
 void
 Track::monitoring_changed (bool, Controllable::GroupControlDisposition)
 {
@@ -832,38 +979,22 @@ Track::monitoring_changed (bool, Controllable::GroupControlDisposition)
 	}
 }
 
-MeterState
-Track::metering_state () const
-{
-	bool rv;
-	if (_session.transport_rolling ()) {
-		// audio_track.cc || midi_track.cc roll() runs meter IFF:
-		rv = _meter_point == MeterInput && ((_monitoring_control->monitoring_choice() & MonitorInput) || _disk_writer->record_enabled());
-	} else {
-		// track no_roll() always metering if
-		rv = _meter_point == MeterInput;
-	}
-	return rv ? MeteringInput : MeteringRoute;
-}
-
 bool
-Track::set_processor_state (XMLNode const & node, XMLProperty const* prop, ProcessorList& new_order, bool& must_configure)
+Track::set_processor_state (XMLNode const& node, int version, XMLProperty const* prop, ProcessorList& new_order, bool& must_configure)
 {
-	if (Route::set_processor_state (node, prop, new_order, must_configure)) {
+	if (Route::set_processor_state (node, version, prop, new_order, must_configure)) {
 		return true;
 	}
 
-	cerr << name() << " looking for state for track procs, DR = " << _disk_reader << endl;
-
 	if (prop->value() == "diskreader") {
 		if (_disk_reader) {
-			_disk_reader->set_state (node, Stateful::current_state_version);
+			_disk_reader->set_state (node, version);
 			new_order.push_back (_disk_reader);
 			return true;
 		}
 	} else if (prop->value() == "diskwriter") {
 		if (_disk_writer) {
-			_disk_writer->set_state (node, Stateful::current_state_version);
+			_disk_writer->set_state (node, version);
 			new_order.push_back (_disk_writer);
 			return true;
 		}
@@ -873,6 +1004,32 @@ Track::set_processor_state (XMLNode const & node, XMLProperty const* prop, Proce
 	return false;
 }
 
+std::shared_ptr<Region>
+Track::bounce (InterThreadInfo& itt, std::string const& name)
+{
+	return bounce_range (_session.current_start_sample(), _session.current_end_sample(), itt, main_outs(), false, name);
+}
+
+std::shared_ptr<Region>
+Track::bounce_range (samplepos_t start,
+                          samplepos_t end,
+                          InterThreadInfo& itt,
+                          std::shared_ptr<Processor> endpoint,
+                          bool include_endpoint,
+                          std::string const& nm, bool prefix_track_name)
+{
+	std::string source_name;
+
+	if (prefix_track_name && nm.length() > 0) {
+		source_name = string_compose ("%1 - %2", name(), nm);
+	} else {
+		source_name = nm;
+	}
+
+	vector<std::shared_ptr<Source> > srcs;
+	return _session.write_one_track (*this, start, end, false, srcs, itt, endpoint, include_endpoint, false, false, source_name, nm);
+}
+
 void
 Track::use_captured_sources (SourceList& srcs, CaptureInfos const & capture_info)
 {
@@ -880,8 +1037,8 @@ Track::use_captured_sources (SourceList& srcs, CaptureInfos const & capture_info
 		return;
 	}
 
-	boost::shared_ptr<AudioFileSource> afs = boost::dynamic_pointer_cast<AudioFileSource> (srcs.front());
-	boost::shared_ptr<SMFSource> mfs = boost::dynamic_pointer_cast<SMFSource> (srcs.front());
+	std::shared_ptr<AudioFileSource> afs = std::dynamic_pointer_cast<AudioFileSource> (srcs.front());
+	std::shared_ptr<SMFSource> mfs = std::dynamic_pointer_cast<SMFSource> (srcs.front());
 
 	if (afs) {
 		use_captured_audio_sources (srcs, capture_info);
@@ -899,14 +1056,18 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 		return;
 	}
 
-	boost::shared_ptr<SMFSource> mfs = boost::dynamic_pointer_cast<SMFSource> (srcs.front());
-	boost::shared_ptr<Playlist> pl = _playlists[DataType::MIDI];
-	boost::shared_ptr<MidiRegion> midi_region;
+	/* There is an assumption here that we have only a single MIDI file */
+
+	std::shared_ptr<SMFSource> mfs = std::dynamic_pointer_cast<SMFSource> (srcs.front());
+	std::shared_ptr<Playlist> pl = _playlists[DataType::MIDI];
+	std::shared_ptr<MidiRegion> midi_region;
 	CaptureInfos::const_iterator ci;
 
 	if (!mfs || !pl) {
 		return;
 	}
+
+	RecordMode rmode = _session.config.get_record_mode ();
 
 	samplecnt_t total_capture = 0;
 
@@ -937,14 +1098,15 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 		plist.add (Properties::name, whole_file_region_name);
 		plist.add (Properties::whole_file, true);
 		plist.add (Properties::automatic, true);
-		plist.add (Properties::start, 0);
-		plist.add (Properties::length, total_capture);
+		plist.add (Properties::opaque, rmode != RecSoundOnSound);
+		plist.add (Properties::start, timecnt_t (Temporal::BeatTime));
+		plist.add (Properties::length, mfs->length());
 		plist.add (Properties::layer, 0);
 
-		boost::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
+		std::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
 
-		midi_region = boost::dynamic_pointer_cast<MidiRegion> (rx);
-		midi_region->special_set_position (capture_info.front()->start);
+		midi_region = std::dynamic_pointer_cast<MidiRegion> (rx);
+		midi_region->special_set_position (timepos_t (capture_info.front()->start));
 	}
 
 	catch (failed_constructor& err) {
@@ -961,10 +1123,11 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 		initial_capture = capture_info.front()->start;
 	}
 
-	BeatsSamplesConverter converter (_session.tempo_map(), capture_info.front()->start);
 	const samplepos_t preroll_off = _session.preroll_record_trim_len ();
+	const timepos_t cstart (timepos_t (capture_info.front()->start).beats());
 
-	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci) {
+	int cnt = 0;
+	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci, ++cnt) {
 
 		string region_name;
 
@@ -974,32 +1137,67 @@ Track::use_captured_midi_sources (SourceList& srcs, CaptureInfos const & capture
 		                                                      _name, (*ci)->start, (*ci)->samples, region_name));
 
 
-		// cerr << _name << ": based on ci of " << (*ci)->start << " for " << (*ci)->samples << " add a region\n";
+		// cerr << _name << ": based on ci of " << (*ci)->start << " for " << (*ci)->samples << " start: " << (*ci)->loop_offset << " add MIDI region\n";
 
 		try {
 			PropertyList plist;
 
 			/* start of this region is the offset between the start of its capture and the start of the whole pass */
-			plist.add (Properties::start, (*ci)->start - initial_capture);
-			plist.add (Properties::length, (*ci)->samples);
-			plist.add (Properties::length_beats, converter.from((*ci)->samples).to_double());
-			plist.add (Properties::name, region_name);
+			samplecnt_t start_off = (*ci)->start - initial_capture + (*ci)->loop_offset;
+			timepos_t s;
+			timecnt_t l;
 
-			boost::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
-			midi_region = boost::dynamic_pointer_cast<MidiRegion> (rx);
+			if (time_domain() == Temporal::BeatTime) {
+
+				const timepos_t ss (start_off);
+				/* 2nd argument is the timeline position of the
+				 * start of the region in samples. We have to
+				 * get this right so that the conversion of
+				 * the capture duration (samples) to beats is
+				 * using the actual position where the region
+				 * will end up, rather than using its
+				 * source-relative start offset as a timeline position.
+				 *
+				 * This matters if the region ought to cover
+				 * part of the timeline where the tempo is
+				 * different from the value at the natural
+				 * position of the source.
+				 */
+				const timecnt_t ll ((*ci)->samples, timepos_t (initial_capture + start_off));
+
+				s = timepos_t (ss.beats());
+				l = timecnt_t (ll.beats(), s);
+
+			} else {
+
+				s = timepos_t (start_off);
+				l = timecnt_t ((*ci)->samples, s);
+			}
+
+			plist.add (Properties::start, s);
+			plist.add (Properties::length, l);
+			plist.add (Properties::opaque, rmode != RecSoundOnSound);
+			plist.add (Properties::name, region_name);
+			plist.add (Properties::reg_group, Region::get_retained_group_id (cnt));
+
+			std::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
+			midi_region = std::dynamic_pointer_cast<MidiRegion> (rx);
 			if (preroll_off > 0) {
-				midi_region->trim_front ((*ci)->start - initial_capture + preroll_off);
+				midi_region->trim_front (timepos_t ((*ci)->start - initial_capture + preroll_off));
 			}
 		}
 
 		catch (failed_constructor& err) {
-			error << _("MidiDiskstream: could not create region for captured midi!") << endmsg;
+			error << string_compose (_("%1: could not create region for captured data!"), name()) << endmsg;
 			continue; /* XXX is this OK? */
 		}
 
-		cerr << "add new region, len = " << (*ci)->samples << " @ " << (*ci)->start << endl;
-
-		pl->add_region (midi_region, (*ci)->start + preroll_off, 1, _session.config.get_layered_record_mode ());
+		if (time_domain() == Temporal::BeatTime) {
+			const timepos_t b ((*ci)->start + preroll_off);
+			pl->add_region (midi_region, timepos_t (b.beats()), 1, rmode == RecNonLayered);
+		} else {
+			pl->add_region (midi_region, timepos_t ((*ci)->start + preroll_off), 1, rmode == RecNonLayered);
+		}
 	}
 
 	pl->thaw ();
@@ -1013,25 +1211,11 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 		return;
 	}
 
-	boost::shared_ptr<AudioFileSource> afs = boost::dynamic_pointer_cast<AudioFileSource> (srcs.front());
-	boost::shared_ptr<Playlist> pl = _playlists[DataType::AUDIO];
-	boost::shared_ptr<AudioRegion> region;
+	std::shared_ptr<AudioFileSource> afs = std::dynamic_pointer_cast<AudioFileSource> (srcs.front());
+	std::shared_ptr<Playlist> pl = _playlists[DataType::AUDIO];
+	std::shared_ptr<AudioRegion> region;
 
 	if (!afs || !pl) {
-		return;
-	}
-
-	/* destructive tracks have a single, never changing region */
-
-	if (destructive()) {
-
-		/* send a signal that any UI can pick up to do the right thing. there is
-		   a small problem here in that a UI may need the peak data to be ready
-		   for the data that was recorded and this isn't interlocked with that
-		   process. this problem is deferred to the UI.
-		 */
-
-		pl->LayeringChanged(); // XXX this may not get the UI to do the right thing
 		return;
 	}
 
@@ -1044,24 +1228,34 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 	   children of this one (later!)
 	*/
 
+	RecordMode rmode = _session.config.get_record_mode ();
+
 	try {
 		PropertyList plist;
 
-		plist.add (Properties::start, afs->last_capture_start_sample());
-		plist.add (Properties::length, afs->length(0));
+		plist.add (Properties::start, timecnt_t (afs->last_capture_start_sample(), timepos_t (Temporal::AudioTime)));
+		plist.add (Properties::length, afs->length());
 		plist.add (Properties::name, whole_file_region_name);
-		boost::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
+		plist.add (Properties::opaque, rmode != RecSoundOnSound);
+		std::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
 		rx->set_automatic (true);
 		rx->set_whole_file (true);
 
-		region = boost::dynamic_pointer_cast<AudioRegion> (rx);
-		region->special_set_position (afs->natural_position());
+		region = std::dynamic_pointer_cast<AudioRegion> (rx);
+		region->special_set_position (timepos_t (afs->natural_position()));
 	}
 
 
 	catch (failed_constructor& err) {
 		error << string_compose(_("%1: could not create region for complete audio file"), _name) << endmsg;
 		/* XXX what now? */
+	}
+
+	/* If this playlist doesn't already have a pgroup (a new track won't) then
+	 * assign it one, using the take-id of the first recording)
+	 */
+	if (pl->pgroup_id().length() == 0) {
+		pl->set_pgroup_id (afs->take_id ());
 	}
 
 	pl->clear_changes ();
@@ -1072,7 +1266,8 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 	samplecnt_t buffer_position = afs->last_capture_start_sample ();
 	CaptureInfos::const_iterator ci;
 
-	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci) {
+	int cnt = 0;
+	for (ci = capture_info.begin(); ci != capture_info.end(); ++ci, ++cnt) {
 
 		string region_name;
 
@@ -1085,14 +1280,16 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 
 			PropertyList plist;
 
-			plist.add (Properties::start, buffer_position);
-			plist.add (Properties::length, (*ci)->samples);
+			plist.add (Properties::start, timecnt_t (buffer_position, timepos_t::zero (false)));
+			plist.add (Properties::length, timecnt_t ((*ci)->samples, timepos_t::zero (false)));
 			plist.add (Properties::name, region_name);
+			plist.add (Properties::opaque, rmode != RecSoundOnSound);
+			plist.add (Properties::reg_group, Region::get_retained_group_id (cnt));
 
-			boost::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
-			region = boost::dynamic_pointer_cast<AudioRegion> (rx);
+			std::shared_ptr<Region> rx (RegionFactory::create (srcs, plist));
+			region = std::dynamic_pointer_cast<AudioRegion> (rx);
 			if (preroll_off > 0) {
-				region->trim_front (buffer_position + preroll_off);
+				region->trim_front (timepos_t (buffer_position + preroll_off));
 			}
 		}
 
@@ -1101,7 +1298,7 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 			continue; /* XXX is this OK? */
 		}
 
-		pl->add_region (region, (*ci)->start + preroll_off, 1, _session.config.get_layered_record_mode());
+		pl->add_region (region, timepos_t ((*ci)->start + preroll_off), 1, RecNonLayered == rmode);
 		pl->set_layer (region, DBL_MAX);
 
 		buffer_position += (*ci)->samples;
@@ -1112,4 +1309,21 @@ Track::use_captured_audio_sources (SourceList& srcs, CaptureInfos const & captur
 	_session.add_command (new StatefulDiffCommand (pl));
 }
 
+void
+Track::time_domain_changed ()
+{
+	Route::time_domain_changed ();
 
+	std::shared_ptr<Playlist> pl = _playlists[DataType::AUDIO];
+	if (pl) {
+		if (pl->time_domain_parent() == this) {
+			pl->time_domain_changed ();
+		}
+	}
+	pl = _playlists[DataType::MIDI];
+	if (pl) {
+		if (pl->time_domain_parent() == this) {
+			pl->time_domain_changed ();
+		}
+	}
+}

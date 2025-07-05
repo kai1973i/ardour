@@ -1,27 +1,28 @@
 /*
-    Copyright (C) 2011-2013 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef _GTKMM2EXT_COLORS_H_
 #define _GTKMM2EXT_COLORS_H_
 
 #include<stdint.h>
 
+#include <ydkmm/types.h>
 #include <cairomm/context.h>
 
 #include "gtkmm2ext/visibility.h"
@@ -31,12 +32,21 @@ namespace Gtkmm2ext
 
 typedef uint32_t Color;
 
+extern LIBGTKMM2EXT_API Color random_color ();
+
 /* conventient way to use Gtkmm2ext::Color with libcairo */
 extern LIBGTKMM2EXT_API void set_source_rgba (Cairo::RefPtr<Cairo::Context>, Gtkmm2ext::Color);
 extern LIBGTKMM2EXT_API void set_source_rgb_a (Cairo::RefPtr<Cairo::Context>, Gtkmm2ext::Color, float alpha);  //override the color's alpha
 
 extern LIBGTKMM2EXT_API void set_source_rgba (cairo_t*, Gtkmm2ext::Color);
 extern LIBGTKMM2EXT_API void set_source_rgb_a (cairo_t*, Gtkmm2ext::Color, float alpha);  //override the color's alpha
+
+extern LIBGTKMM2EXT_API Gdk::Color gdk_color_from_rgb (uint32_t);
+extern LIBGTKMM2EXT_API Gdk::Color gdk_color_from_rgba (uint32_t);
+extern LIBGTKMM2EXT_API uint32_t gdk_color_to_rgba (Gdk::Color const&);
+
+extern LIBGTKMM2EXT_API void set_color_from_rgb (Gdk::Color&, uint32_t);
+extern LIBGTKMM2EXT_API void set_color_from_rgba (Gdk::Color&, uint32_t);
 
 
 struct LIBGTKMM2EXT_API HSV;
@@ -113,8 +123,8 @@ struct LIBGTKMM2EXT_API HSV
 	double distance (const HSV& other) const;
 	HSV delta (const HSV& other) const;
 
-	HSV darker (double factor = 1.3) const { return shade (factor); }
-	HSV lighter (double factor = 0.7) const { return shade (factor); }
+	HSV darker (double factor = 1.3) const;
+	HSV lighter (double factor = 0.7) const;
 
 	HSV shade (double factor) const;
 	HSV mix (const HSV& other, double amt) const;

@@ -1,29 +1,31 @@
 /*
-    Copyright (C) 2002-2007 Paul Davis
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2008-2013 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2017 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_bundle_h__
-#define __ardour_bundle_h__
-
+#include <memory>
 #include <string>
 #include <vector>
+
 #include <glibmm/threads.h>
-#include <boost/shared_ptr.hpp>
 
 #include "pbd/signals.h"
 
@@ -50,8 +52,11 @@ class LIBARDOUR_API Bundle : public PBD::ScopedConnectionList
 	typedef std::vector<std::string> PortList;
 
 	struct Channel {
+		/* Constructor with no port name(s) */
 		Channel (std::string n, DataType t) : name (n), type (t) {}
+		/* Constructor with list of port names */
 		Channel (std::string n, DataType t, PortList p) : name (n), type (t), ports (p) {}
+		/* Constructor with a port name */
 		Channel (std::string n, DataType t, std::string const & p) : name (n), type (t) {
 			ports.push_back (p);
 		}
@@ -67,7 +72,7 @@ class LIBARDOUR_API Bundle : public PBD::ScopedConnectionList
 
 	Bundle (bool i = true);
 	Bundle (std::string const &, bool i = true);
-	Bundle (boost::shared_ptr<Bundle>);
+	Bundle (std::shared_ptr<Bundle>);
 
 	virtual ~Bundle() {}
 
@@ -75,10 +80,10 @@ class LIBARDOUR_API Bundle : public PBD::ScopedConnectionList
 	ChanCount nchannels () const;
 	uint32_t n_total () const; /* shortcut for nchannels().n_total() */
 
-	/** @param Channel index.
+	/** @param c Channel index.
 	 *  @return Ports associated with this channel.
 	 */
-	PortList const & channel_ports (uint32_t) const;
+	PortList const & channel_ports (uint32_t c) const;
 
 	void add_channel (std::string const &, DataType);
 	void add_channel (std::string const &, DataType, std::string const &);
@@ -96,15 +101,15 @@ class LIBARDOUR_API Bundle : public PBD::ScopedConnectionList
 	bool offers_port_alone (std::string) const;
 	void remove_channel (uint32_t);
 	void remove_channels ();
-	void add_channels_from_bundle (boost::shared_ptr<Bundle>);
-	void connect (boost::shared_ptr<Bundle>, AudioEngine &,
+	void add_channels_from_bundle (std::shared_ptr<Bundle>);
+	void connect (std::shared_ptr<Bundle>, AudioEngine &,
 	              bool allow_partial = false);
-	void disconnect (boost::shared_ptr<Bundle>, AudioEngine &);
-	bool connected_to (boost::shared_ptr<Bundle>, AudioEngine &,
+	void disconnect (std::shared_ptr<Bundle>, AudioEngine &);
+	bool connected_to (std::shared_ptr<Bundle>, AudioEngine &,
 	                   DataType type = DataType::NIL,
 	                   bool exclusive = false);
 	bool connected_to_anything (AudioEngine &);
-	bool has_same_ports (boost::shared_ptr<Bundle>) const;
+	bool has_same_ports (std::shared_ptr<Bundle>) const;
 	uint32_t type_channel_to_overall (DataType, uint32_t) const;
 	uint32_t overall_channel_to_type (DataType, uint32_t) const;
 
@@ -132,7 +137,7 @@ class LIBARDOUR_API Bundle : public PBD::ScopedConnectionList
 		DirectionChanged = 0x10 ///< the direction (whether ports are inputs or outputs) has changed
 	};
 
-	PBD::Signal1<void,Change> Changed;
+	PBD::Signal<void(Change)> Changed;
 
   protected:
 
@@ -158,7 +163,7 @@ class LIBARDOUR_API BundleChannel
 public:
 	BundleChannel () : channel (-1) {}
 
-	BundleChannel (boost::shared_ptr<Bundle> b, int c)
+	BundleChannel (std::shared_ptr<Bundle> b, int c)
 		: bundle (b), channel (c) {}
 
 	bool operator== (BundleChannel const& other) const {
@@ -169,12 +174,21 @@ public:
 		return bundle != other.bundle || channel != other.channel;
 	}
 
-	boost::shared_ptr<Bundle> bundle;
+	ChanCount nchannels () const {
+		if (!_nchannels) {
+			_nchannels = bundle->nchannels ();
+		}
+		return _nchannels.value ();
+	}
+
+	std::shared_ptr<Bundle> bundle;
 	int channel; ///< channel index, or -1 for "all"
+
+private:
+	mutable std::optional<ChanCount> _nchannels;
 };
 
 }
 
 std::ostream & operator<< (std::ostream & o, ARDOUR::Bundle const &);
 
-#endif /* __ardour_bundle_h__ */

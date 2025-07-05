@@ -1,22 +1,23 @@
 /*
-    Copyright (C) 2000 Paul Barton-Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-    $Id$
-*/
+ * Copyright (C) 2000-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2010 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <fcntl.h>
 #include <map>
@@ -31,19 +32,15 @@
 #include "midi++/parser.h"
 
 #ifndef __INT_MAX__   // 'ssize_t' won't be defined yet
+                      // (except in later versions of MSVC)
+#if !defined (_MSC_VER) || (_MSC_VER < 1800)
 typedef long ssize_t;
+#endif
 #endif
 
 using namespace std;
 using namespace MIDI;
 using namespace PBD;
-
-/**
- * As libtimecode is linked statically to libmidi++ this
- * is necessary to pull in all the symbols from libtimecode
- * so they are exported for other users of libtimecode.
- */
-double tmp = Timecode::BBT_Time::ticks_per_beat;
 
 static std::map<int,string> mmc_cmd_map;
 static void build_mmc_cmd_map ()
@@ -223,10 +220,10 @@ MachineControl::set_ports (MIDI::Port* ip, MIDI::Port* op)
 	_input_port = ip;
 	_output_port = op;
 
-	_input_port->parser()->mmc.connect_same_thread (port_connections, boost::bind (&MachineControl::process_mmc_message, this, _1, _2, _3));
-	_input_port->parser()->start.connect_same_thread (port_connections, boost::bind (&MachineControl::spp_start, this));
-	_input_port->parser()->contineu.connect_same_thread (port_connections, boost::bind (&MachineControl::spp_continue, this));
-	_input_port->parser()->stop.connect_same_thread (port_connections, boost::bind (&MachineControl::spp_stop, this));
+	_input_port->parser()->mmc.connect_same_thread (port_connections, std::bind (&MachineControl::process_mmc_message, this, _1, _2, _3));
+	_input_port->parser()->start.connect_same_thread (port_connections, std::bind (&MachineControl::spp_start, this));
+	_input_port->parser()->contineu.connect_same_thread (port_connections, std::bind (&MachineControl::spp_continue, this));
+	_input_port->parser()->stop.connect_same_thread (port_connections, std::bind (&MachineControl::spp_stop, this));
 }
 
 void
@@ -613,7 +610,7 @@ MachineControl::do_step (MIDI::byte *msg, size_t /*msglen*/)
 int
 MachineControl::do_shuttle (MIDI::byte *msg, size_t /*msglen*/)
 {
-	size_t forward;
+	bool forward;
 	byte sh = msg[2];
 	byte sm = msg[3];
 	byte sl = msg[4];

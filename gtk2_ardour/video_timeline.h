@@ -1,24 +1,22 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Author: Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-#ifndef __ardour_video_timeline_h__
-#define __ardour_video_timeline_h__
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+#pragma once
 
 #include <string>
 
@@ -42,7 +40,7 @@ class PublicEditor;
  *
  *  The video-timeline can be displayed in a canvas-group. Given a filename
  *  it queries the video-server about file-information and
- *  creates \ref VideoImageFrame as neccesary (which
+ *  creates \ref VideoImageFrame as necessary (which
  *  query the server for image-data).
  *
  *  This class contains the algorithm to position the single frames
@@ -50,7 +48,7 @@ class PublicEditor;
  *  attributes. see \ref update_video_timeline()
  *
  *  The VideoTimeLine class includes functionality to launch a video-monitor
- *  corresponding to its currently diplayed file.
+ *  corresponding to its currently displayed file.
  */
 class VideoTimeLine : public sigc::trackable, public ARDOUR::SessionHandlePtr, public PBD::ScopedConnectionList, public PBD::StatefulDestructible
 {
@@ -63,7 +61,7 @@ class VideoTimeLine : public sigc::trackable, public ARDOUR::SessionHandlePtr, p
 	void set_height (int);
 
 	void save_undo (void);
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
 	bool video_file_info (std::string, bool);
@@ -73,6 +71,8 @@ class VideoTimeLine : public sigc::trackable, public ARDOUR::SessionHandlePtr, p
 	void set_offset_locked (bool v);
 	void toggle_offset_locked ();
 	bool is_offset_locked () { return video_offset_lock; }
+
+	ARDOUR::sampleoffset_t get_video_start_offset() { return video_start_offset; }
 
 	void open_video_monitor ();
 	void close_video_monitor ();
@@ -141,11 +141,10 @@ class VideoTimeLine : public sigc::trackable, public ARDOUR::SessionHandlePtr, p
 	VideoMonitor *vmonitor;
 	bool reopen_vmonitor;
 
-	PBD::Signal0<void> VtlUpdate;
-	PBD::Signal1<void,std::string> GuiUpdate;
+	PBD::Signal<void()> VtlUpdate;
+	PBD::Signal<void(std::string)> GuiUpdate;
 	void gui_update (const std::string &);
 
 	PBD::ScopedConnection sessionsave;
 };
 
-#endif /* __ardour_video_timeline_h__ */

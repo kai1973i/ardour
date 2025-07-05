@@ -1,31 +1,29 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2009 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_audio_region_importer_h__
-#define __ardour_audio_region_importer_h__
+#pragma once
 
 #include <list>
 #include <map>
+#include <memory>
 #include <utility>
 
-#include <boost/shared_ptr.hpp>
 
 #include "pbd/xml++.h"
 #include "pbd/id.h"
@@ -50,8 +48,8 @@ class LIBARDOUR_API AudioRegionImportHandler : public ElementImportHandler
 
 	// Source management
 	bool check_source (std::string const & filename) const;
-	void add_source (std::string const & filename, boost::shared_ptr<Source> const & source);
-	boost::shared_ptr<Source> const & get_source (std::string const & filename) const;
+	void add_source (std::string const & filename, std::shared_ptr<Source> const & source);
+	std::shared_ptr<Source> const & get_source (std::string const & filename) const;
 
 	// Id management
 	void register_id (PBD::ID & old_id, PBD::ID & new_id);
@@ -59,8 +57,8 @@ class LIBARDOUR_API AudioRegionImportHandler : public ElementImportHandler
 
   private:
 	// Source management
-	typedef std::map<std::string, boost::shared_ptr<Source> > SourceMap;
-	typedef std::pair<std::string, boost::shared_ptr<Source> > SourcePair;
+	typedef std::map<std::string, std::shared_ptr<Source> > SourceMap;
+	typedef std::pair<std::string, std::shared_ptr<Source> > SourcePair;
 	SourceMap sources;
 
 	// Id management
@@ -103,11 +101,10 @@ class LIBARDOUR_API AudioRegionImporter : public ElementImporter
 
 	void prepare_region ();
 	void prepare_sources ();
-	std::vector<boost::shared_ptr<Region> > region;
+	std::vector<std::shared_ptr<Region> > region;
 	bool region_prepared;
 	bool sources_prepared;
 };
 
 } // namespace ARDOUR
 
-#endif

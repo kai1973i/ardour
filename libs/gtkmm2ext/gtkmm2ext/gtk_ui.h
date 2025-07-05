@@ -1,24 +1,27 @@
 /*
-    Copyright (C) 1999 Paul Barton-Davis
+ * Copyright (C) 1999-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2007-2008 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2007-2013 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2009-2010 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __pbd_gtk_ui_h__
-#define __pbd_gtk_ui_h__
+#pragma once
 
 #include <string>
 #include <map>
@@ -33,14 +36,14 @@
 
 #include <glibmm/thread.h>
 
-#include <gtkmm/widget.h>
-#include <gtkmm/style.h>
+#include <ytkmm/widget.h>
+#include <ytkmm/style.h>
 #ifndef GTK_NEW_TOOLTIP_API
-#include <gtkmm/tooltips.h>
+#include <ytkmm/tooltips.h>
 #endif
-#include <gtkmm/textbuffer.h>
-#include <gtkmm/main.h>
-#include <gdkmm/color.h>
+#include <ytkmm/textbuffer.h>
+#include <ytkmm/main.h>
+#include <ydkmm/color.h>
 
 #ifndef ABSTRACT_UI_EXPORTS
 #define ABSTRACT_UI_EXPORTS
@@ -125,7 +128,7 @@ public:
 
 	/* Abstract UI interfaces */
 
-	bool caller_is_ui_thread ();
+	bool caller_is_ui_thread () const;
 
 	/* Gtk-UI specific interfaces */
 
@@ -139,7 +142,8 @@ public:
 	void flush_pending (float timeout = 0);
 	void toggle_errors ();
 	void show_errors ();
-	void dump_errors (std::ostream&);
+	void dump_errors (std::ostream&, size_t limit = 0);
+	void clear_errors () { error_stack.clear (); }
 	void touch_display (Touchable *);
 	void set_tip (Gtk::Widget &w, const gchar *tip);
 	void set_tip (Gtk::Widget &w, const std::string &tip);
@@ -147,16 +151,6 @@ public:
 	void idle_add (int (*func)(void *), void *arg);
 
 	Gtk::Main& main() const { return *theMain; }
-
-	template<class T> static bool idle_delete (T *obj) { delete obj; return false; }
-	template<class T> static void delete_when_idle (T *obj) {
-		Glib::signal_idle().connect (bind (slot (&UI::idle_delete<T>), obj));
-	}
-
-	template<class T> void delete_in_self (T *obj) {
-		call_slot (boost::bind (&UI::delete_in_self, this, obj));
-	}
-
 
 	/* starting is sent just before we enter the main loop,
 	 * stopping just after we return from it (at the top level)
@@ -184,14 +178,16 @@ private:
 	Gtk::Tooltips *tips;
 #endif
 	TextViewer *errors;
-	Glib::RefPtr<Gtk::TextBuffer::Tag> error_ptag;
-	Glib::RefPtr<Gtk::TextBuffer::Tag> error_mtag;
 	Glib::RefPtr<Gtk::TextBuffer::Tag> fatal_ptag;
 	Glib::RefPtr<Gtk::TextBuffer::Tag> fatal_mtag;
-	Glib::RefPtr<Gtk::TextBuffer::Tag> info_ptag;
-	Glib::RefPtr<Gtk::TextBuffer::Tag> info_mtag;
+	Glib::RefPtr<Gtk::TextBuffer::Tag> error_ptag;
+	Glib::RefPtr<Gtk::TextBuffer::Tag> error_mtag;
 	Glib::RefPtr<Gtk::TextBuffer::Tag> warning_ptag;
 	Glib::RefPtr<Gtk::TextBuffer::Tag> warning_mtag;
+	Glib::RefPtr<Gtk::TextBuffer::Tag> info_ptag;
+	Glib::RefPtr<Gtk::TextBuffer::Tag> info_mtag;
+	Glib::RefPtr<Gtk::TextBuffer::Tag> debug_ptag;
+	Glib::RefPtr<Gtk::TextBuffer::Tag> debug_mtag;
 
 	static void signal_pipe_callback (void *, gint, GdkInputCondition);
 	void process_error_message (Transmitter::Channel, const char *);
@@ -205,9 +201,7 @@ private:
 	bool color_picked;
 
 	void do_request (UIRequest*);
-
 };
 
 } /* namespace */
 
-#endif /* __pbd_gtk_ui_h__ */

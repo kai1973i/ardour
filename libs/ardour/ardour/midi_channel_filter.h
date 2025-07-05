@@ -1,31 +1,31 @@
 /*
-    Copyright (C) 2006-2015 Paul Davis
-    Author: David Robillard
+ * Copyright (C) 2015 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __ardour_channel_filter_h__
-#define __ardour_channel_filter_h__
-
-#include <stdint.h>
+#include <atomic>
+#include <cstdint>
 
 #include <glib.h>
 
-#include "ardour/types.h"
 #include "pbd/signals.h"
+
+#include "ardour/types.h"
 
 namespace ARDOUR
 {
@@ -72,26 +72,25 @@ public:
 
 	/** Atomically get both the channel mode and mask. */
 	void get_mode_and_mask(ChannelMode* mode, uint16_t* mask) const {
-		const uint32_t mm = g_atomic_int_get(&_mode_mask);
+		const uint32_t mm = _mode_mask.load();
 		*mode = static_cast<ChannelMode>((mm & 0xFFFF0000) >> 16);
 		*mask = (mm & 0x0000FFFF);
 	}
 
 	ChannelMode get_channel_mode() const {
-		return static_cast<ChannelMode>((g_atomic_int_get(&_mode_mask) & 0xFFFF0000) >> 16);
+		return static_cast<ChannelMode> ((_mode_mask.load() & 0xFFFF0000) >> 16);
 	}
 
 	uint16_t get_channel_mask() const {
-		return g_atomic_int_get(&_mode_mask) & 0x0000FFFF;
+		return _mode_mask.load() & 0x0000FFFF;
 	}
 
-	PBD::Signal0<void> ChannelMaskChanged;
-	PBD::Signal0<void> ChannelModeChanged;
+	PBD::Signal<void()> ChannelMaskChanged;
+	PBD::Signal<void()> ChannelModeChanged;
 
 private:
-	uint32_t _mode_mask;  ///< 16 bits mode, 16 bits mask
+	std::atomic<uint32_t> _mode_mask;  ///< 16 bits mode, 16 bits mask
 };
 
 } /* namespace ARDOUR */
 
-#endif /* __ardour_channel_filter_h__ */

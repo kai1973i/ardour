@@ -1,21 +1,27 @@
 /*
-    Copyright (C) 2000-2002 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006 Jesse Chappell <jesse@essej.net>
+ * Copyright (C) 2007-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2017 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2015 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -47,6 +53,7 @@
 #include "ardour/chan_mapping.h"
 #include "ardour/data_type.h"
 #include "ardour/luaproc.h"
+#include "ardour/lv2_plugin.h"
 #include "ardour/midi_buffer.h"
 #include "ardour/midi_state_tracker.h"
 #include "ardour/plugin.h"
@@ -57,10 +64,6 @@
 
 #ifdef AUDIOUNIT_SUPPORT
 #include "ardour/audio_unit.h"
-#endif
-
-#ifdef LV2_SUPPORT
-#include "ardour/lv2_plugin.h"
 #endif
 
 #include "pbd/stl_delete.h"
@@ -74,12 +77,7 @@ using namespace PBD;
 
 namespace ARDOUR { class AudioEngine; }
 
-#ifdef NO_PLUGIN_STATE
-static bool seen_get_state_message = false;
-static bool seen_set_state_message = false;
-#endif
-
-PBD::Signal2<void, std::string, Plugin*> Plugin::PresetsChanged;
+PBD::Signal<void(std::string, Plugin*, bool)> Plugin::PresetsChanged;
 
 bool
 PluginInfo::needs_midi_input () const
@@ -92,28 +90,40 @@ Plugin::Plugin (AudioEngine& e, Session& s)
 	, _session (s)
 	, _cycles (0)
 	, _owner (0)
+	, _for_impulse_analysis (false)
 	, _have_presets (false)
 	, _have_pending_stop_events (false)
 	, _parameter_changed_since_last_preset (false)
 	, _immediate_events(6096) // FIXME: size?
+	, _resolve_midi (false)
+	, _pib (0)
+	, _num (0)
 {
 	_pending_stop_events.ensure_buffers (DataType::MIDI, 1, 4096);
+	PresetsChanged.connect_same_thread(_preset_connection, std::bind (&Plugin::invalidate_preset_cache, this, _1, _2, _3));
 }
 
 Plugin::Plugin (const Plugin& other)
 	: StatefulDestructible()
-	, Latent()
+	, HasLatency()
 	, _engine (other._engine)
 	, _session (other._session)
 	, _info (other._info)
 	, _cycles (0)
 	, _owner (other._owner)
+	, _for_impulse_analysis (false)
 	, _have_presets (false)
 	, _have_pending_stop_events (false)
+	, _last_preset (other._last_preset)
 	, _parameter_changed_since_last_preset (false)
 	, _immediate_events(6096) // FIXME: size?
+	, _resolve_midi (false)
+	, _pib (other._pib)
+	, _num (other._num)
 {
 	_pending_stop_events.ensure_buffers (DataType::MIDI, 1, 4096);
+
+	PresetsChanged.connect_same_thread(_preset_connection, std::bind (&Plugin::invalidate_preset_cache, this, _1, _2, _3));
 }
 
 Plugin::~Plugin ()
@@ -139,29 +149,58 @@ Plugin::remove_preset (string name)
 	_last_preset.uri = "";
 	_parameter_changed_since_last_preset = false;
 	_have_presets = false;
-	PresetsChanged (unique_id(), this); /* EMIT SIGNAL */
+	PresetsChanged (unique_id(), this, false); /* EMIT SIGNAL */
 	PresetRemoved (); /* EMIT SIGNAL */
 }
 
-/** @return PresetRecord with empty URI on failure */
 Plugin::PresetRecord
 Plugin::save_preset (string name)
 {
-	if (preset_by_label (name)) {
-		PBD::error << _("Preset with given name already exists.") << endmsg;
+	Plugin::PresetRecord const* p = preset_by_label (name);
+	if (p && !p->user) {
+		PBD::error << _("A factory presets with given name already exists.") << endmsg;
 		return Plugin::PresetRecord ();
 	}
 
 	string const uri = do_save_preset (name);
 
-	if (!uri.empty()) {
-		_presets.insert (make_pair (uri, PresetRecord (uri, name)));
-		_have_presets = false;
-		PresetsChanged (unique_id(), this); /* EMIT SIGNAL */
-		PresetAdded (); /* EMIT SIGNAL */
+	if (uri.empty()) {
+		/* save failed, clean up preset */
+		do_remove_preset (name);
+		PBD::error << _("Failed to save plugin preset.") << endmsg;
+		return Plugin::PresetRecord ();
 	}
 
+	if (p) {
+		_presets.erase (p->uri);
+		_parameter_changed_since_last_preset = false;
+	}
+
+	_presets.insert (make_pair (uri, PresetRecord (uri, name)));
+	_have_presets = false;
+	PresetsChanged (unique_id(), this, true); /* EMIT SIGNAL */
+	PresetAdded (); /* EMIT SIGNAL */
+
 	return PresetRecord (uri, name);
+}
+
+void
+Plugin::invalidate_preset_cache (std::string const& id, Plugin* plugin, bool added)
+{
+	if (this == plugin || id != unique_id ()) {
+		return;
+	}
+
+	// TODO: use a shared cache in _info (via PluginInfo::get_presets)
+
+	_presets.clear ();
+	_have_presets = false;
+
+	if (added) {
+		PresetAdded (); /* EMIT SIGNAL */
+	} else {
+		PresetRemoved (); /* EMIT SIGNAL */
+	}
 }
 
 PluginPtr
@@ -179,11 +218,9 @@ ARDOUR::find_plugin(Session& session, string identifier, PluginType type)
 		plugs = mgr.ladspa_plugin_info();
 		break;
 
-#ifdef LV2_SUPPORT
 	case ARDOUR::LV2:
 		plugs = mgr.lv2_plugin_info();
 		break;
-#endif
 
 #ifdef WINDOWS_VST_SUPPORT
 	case ARDOUR::Windows_VST:
@@ -200,6 +237,12 @@ ARDOUR::find_plugin(Session& session, string identifier, PluginType type)
 #ifdef MACVST_SUPPORT
 	case ARDOUR::MacVST:
 		plugs = mgr.mac_vst_plugin_info();
+		break;
+#endif
+
+#ifdef VST3_SUPPORT
+	case ARDOUR::VST3:
+		plugs = mgr.vst3_plugin_info();
 		break;
 #endif
 
@@ -221,33 +264,39 @@ ARDOUR::find_plugin(Session& session, string identifier, PluginType type)
 		}
 	}
 
-#ifdef WINDOWS_VST_SUPPORT
+#if defined WINDOWS_VST_SUPPORT || defined LXVST_SUPPORT
 	/* hmm, we didn't find it. could be because in older versions of Ardour.
-	   we used to store the name of a VST plugin, not its unique ID. so try
-	   again.
-	*/
+	 * we used to store the name of a VST plugin, not its unique ID. so try
+	 * again.
+	 */
 
-	for (i = plugs.begin(); i != plugs.end(); ++i) {
-		if (identifier == (*i)->name){
-			return (*i)->load (session);
+	if (type == ARDOUR::LXVST || type == ARDOUR::Windows_VST) {
+		for (i = plugs.begin(); i != plugs.end(); ++i) {
+			if (identifier == (*i)->name){
+				return (*i)->load (session);
+			}
 		}
 	}
 #endif
 
-#ifdef LXVST_SUPPORT
-	/* hmm, we didn't find it. could be because in older versions of Ardour.
-	   we used to store the name of a VST plugin, not its unique ID. so try
-	   again.
-	*/
-
-	for (i = plugs.begin(); i != plugs.end(); ++i) {
-		if (identifier == (*i)->name){
-			return (*i)->load (session);
+#ifdef AUDIOUNIT_SUPPORT
+	if (type == ARDOUR::AudioUnit) {
+		/* old versions saved three 32bit (really OSType) integers
+		 * e.g. 112233-445566-778899 (due to stringstream misinterpreting OSType)
+		 * instead of using Apple's UTCreateStringForOSType, which results in
+		 * "aaaa - bbbb - cccc"
+		 */
+		identifier = AUPluginInfo::convert_old_unique_id (identifier);
+		for (i = plugs.begin(); i != plugs.end(); ++i) {
+			if (identifier == (*i)->unique_id){
+				return (*i)->load (session);
+			}
 		}
 	}
+
 #endif
 
-	return PluginPtr ((Plugin*) 0);
+	return PluginPtr ();
 }
 
 ChanCount
@@ -268,6 +317,12 @@ Plugin::input_streams () const
 	return ChanCount::ZERO;
 }
 
+samplecnt_t
+Plugin::plugin_tailtime () const
+{
+	return _session.sample_rate () * Config->get_tail_duration_sec ();
+}
+
 Plugin::IOPortDescription
 Plugin::describe_io_port (ARDOUR::DataType dt, bool input, uint32_t id) const
 {
@@ -284,14 +339,20 @@ Plugin::describe_io_port (ARDOUR::DataType dt, bool input, uint32_t id) const
 			break;
 	}
 	if (input) {
-		ss << _("In") << " ";
+		ss << S_("IO|In") << " ";
 	} else {
-		ss << _("Out") << " ";
+		ss << S_("IO|Out") << " ";
 	}
 
+	std::stringstream gn;
+	gn << ss.str();
+
 	ss << (id + 1);
+	gn << (id / 2 + 1) << " L/R";
 
 	Plugin::IOPortDescription iod (ss.str());
+	iod.group_name = gn.str();
+	iod.group_channel = id % 2;
 	return iod;
 }
 
@@ -308,12 +369,12 @@ Plugin::possible_output () const
 const Plugin::PresetRecord *
 Plugin::preset_by_label (const string& label)
 {
-#ifndef NO_PLUGIN_STATE
 	if (!_have_presets) {
+		_presets.clear ();
 		find_presets ();
 		_have_presets = true;
 	}
-#endif
+
 	// FIXME: O(n)
 	for (map<string, PresetRecord>::const_iterator i = _presets.begin(); i != _presets.end(); ++i) {
 		if (i->second.label == label) {
@@ -327,12 +388,15 @@ Plugin::preset_by_label (const string& label)
 const Plugin::PresetRecord *
 Plugin::preset_by_uri (const string& uri)
 {
-#ifndef NO_PLUGIN_STATE
+	if (uri.empty ()) {
+		return 0;
+	}
 	if (!_have_presets) {
+		_presets.clear ();
 		find_presets ();
 		_have_presets = true;
 	}
-#endif
+
 	map<string, PresetRecord>::const_iterator pr = _presets.find (uri);
 	if (pr != _presets.end()) {
 		return &pr->second;
@@ -342,19 +406,19 @@ Plugin::preset_by_uri (const string& uri)
 }
 
 bool
-Plugin::write_immediate_event (size_t size, const uint8_t* buf)
+Plugin::write_immediate_event (Evoral::EventType event_type, size_t size, const uint8_t* buf)
 {
 	if (!Evoral::midi_event_is_valid (buf, size)) {
 		return false;
 	}
-	return (_immediate_events.write (0, Evoral::MIDI_EVENT, size, buf) == size);
+	return (_immediate_events.write (0, event_type, size, buf) == size);
 }
 
 int
 Plugin::connect_and_run (BufferSet& bufs,
 		samplepos_t /*start*/, samplepos_t /*end*/, double /*speed*/,
-		ChanMapping /*in_map*/, ChanMapping /*out_map*/,
-		pframes_t nframes, samplecnt_t /*offset*/)
+		ChanMapping const& /*in_map*/, ChanMapping const& /*out_map*/,
+		pframes_t nframes, samplecnt_t offset)
 {
 	if (bufs.count().n_midi() > 0) {
 
@@ -365,7 +429,16 @@ Plugin::connect_and_run (BufferSet& bufs,
 		/* Track notes that we are sending to the plugin */
 		const MidiBuffer& b = bufs.get_midi (0);
 
-		_tracker.track (b.begin(), b.end());
+		for (auto const ev : b) {
+			if (ev.time () >= offset && ev.time () < nframes + offset) {
+				_tracker.track (ev);
+			}
+		}
+
+		bool canderef (true);
+		if (_resolve_midi.compare_exchange_strong (canderef, false)) {
+			resolve_midi ();
+		}
 
 		if (_have_pending_stop_events) {
 			/* Transmit note-offs that are pending from the last transport stop */
@@ -380,19 +453,21 @@ Plugin::connect_and_run (BufferSet& bufs,
 void
 Plugin::realtime_handle_transport_stopped ()
 {
-	resolve_midi ();
+	_resolve_midi = true;
 }
 
 void
-Plugin::realtime_locate ()
+Plugin::realtime_locate (bool for_loop_end)
 {
-	resolve_midi ();
+	if (!for_loop_end) {
+		_resolve_midi = true;
+	}
 }
 
 void
 Plugin::monitoring_changed ()
 {
-	resolve_midi ();
+	_resolve_midi = true;
 }
 
 void
@@ -412,8 +487,8 @@ Plugin::get_presets ()
 {
 	vector<PresetRecord> p;
 
-#ifndef NO_PLUGIN_STATE
 	if (!_have_presets) {
+		_presets.clear ();
 		find_presets ();
 		_have_presets = true;
 	}
@@ -421,19 +496,12 @@ Plugin::get_presets ()
 	for (map<string, PresetRecord>::const_iterator i = _presets.begin(); i != _presets.end(); ++i) {
 		p.push_back (i->second);
 	}
-#else
-	if (!seen_set_state_message) {
-		info << string_compose (_("Plugin presets are not supported in this build of %1. Consider paying for a full version"),
-					PROGRAM_NAME)
-		     << endmsg;
-		seen_set_state_message = true;
-	}
-#endif
+
+	std::sort (p.begin(), p.end());
 
 	return p;
 }
 
-/** Set parameters using a preset */
 bool
 Plugin::load_preset (PresetRecord r)
 {
@@ -457,7 +525,7 @@ Plugin::clear_preset ()
 }
 
 void
-Plugin::set_parameter (uint32_t /* which */, float /* value */)
+Plugin::set_parameter (uint32_t /* which */, float /* value */, sampleoffset_t /* when */)
 {
 	_parameter_changed_since_last_preset = true;
 	PresetDirty (); /* EMIT SIGNAL */
@@ -472,17 +540,34 @@ Plugin::parameter_changed_externally (uint32_t which, float /* value */)
 	PresetDirty (); /* EMIT SIGNAL */
 }
 
+void
+Plugin::state_changed ()
+{
+	_parameter_changed_since_last_preset = true;
+	_session.set_dirty ();
+	PresetDirty (); /* EMIT SIGNAL */
+}
+
 int
 Plugin::set_state (const XMLNode& node, int /*version*/)
 {
-	node.get_property (X_("last-preset-uri"), _last_preset.uri);
-	node.get_property (X_("last-preset-label"), _last_preset.label);
-	node.get_property (X_("parameter-changed-since-last-preset"), _parameter_changed_since_last_preset);
+	std::string preset_uri;
+	const Plugin::PresetRecord* r = 0;
+	if (node.get_property (X_("last-preset-uri"), preset_uri)) {
+		r = preset_by_uri (preset_uri);
+	}
+	if (r) {
+		_last_preset = *r;
+		node.get_property (X_("parameter-changed-since-last-preset"), _parameter_changed_since_last_preset); // XXX
+	} else {
+		_last_preset.uri = "";
+		_last_preset.valid = false;
+	}
 	return 0;
 }
 
 XMLNode &
-Plugin::get_state ()
+Plugin::get_state () const
 {
 	XMLNode* root = new XMLNode (state_node_name ());
 
@@ -490,24 +575,9 @@ Plugin::get_state ()
 	root->set_property (X_("last-preset-label"), _last_preset.label);
 	root->set_property (X_("parameter-changed-since-last-preset"), _parameter_changed_since_last_preset);
 
-#ifndef NO_PLUGIN_STATE
 	add_state (root);
-#else
-	if (!seen_get_state_message) {
-		info << string_compose (_("Saving plugin settings is not supported in this build of %1. Consider paying for the full version"),
-					PROGRAM_NAME)
-		     << endmsg;
-		seen_get_state_message = true;
-	}
-#endif
 
 	return *root;
-}
-
-void
-Plugin::set_info (PluginInfoPtr info)
-{
-	_info = info;
 }
 
 std::string
@@ -548,5 +618,5 @@ PluginInfo::is_utility () const
 bool
 PluginInfo::is_analyzer () const
 {
-	return (category == "Analyser" || category == "Anaylsis" || category == "Analyzer");
+	return (category == "Analyser" || category == "Analysis" || category == "Analyzer");
 }

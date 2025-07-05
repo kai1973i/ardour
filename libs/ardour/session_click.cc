@@ -1,21 +1,23 @@
 /*
-    Copyright (C) 2002 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2002-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <list>
 #include <cerrno>
@@ -36,8 +38,18 @@
 using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
+using namespace Temporal;
 
 Pool Click::pool ("click", sizeof (Click), 1024);
+
+/* pre-allocated vector for grid-point-lookup.
+ *
+ * Since Session::click() is never called concurrently
+ * from different threads, this can be static-global.
+ * (session.h does not include tempo.h so making this
+ *  a Session member variable is tricky.)
+ */
+static TempoMapPoints _click_points;
 
 void
 Session::add_click (samplepos_t pos, bool emphasis)
@@ -56,8 +68,6 @@ Session::add_click (samplepos_t pos, bool emphasis)
 void
 Session::click (samplepos_t cycle_start, samplecnt_t nframes)
 {
-	vector<TempoMap::BBTPoint> points; // TODO use mempool allocator
-
 	if (_click_io == 0) {
 		return;
 	}
@@ -67,7 +77,7 @@ Session::click (samplepos_t cycle_start, samplecnt_t nframes)
 	 * we need to prepare frames that the user will hear
 	 * in "output latency's" worth of time.
 	 */
-	samplecnt_t offset = _click_io->connected_latency (true);
+	samplecnt_t offset = _click_io_latency;
 
 	Glib::Threads::RWLock::WriterLock clickm (click_lock, Glib::Threads::TRY_LOCK);
 
@@ -85,32 +95,63 @@ Session::click (samplepos_t cycle_start, samplecnt_t nframes)
 
 	/* range to check for clicks */
 	samplepos_t start = cycle_start + offset;
-	const samplepos_t end = start + nframes;
 	/* correct start, potentially */
 	start = max (start, (samplepos_t) 0);
 
-	if (end > start) {
-		_tempo_map->get_grid (points, start, end);
-	}
+	samplecnt_t remain = nframes;
 
-	if (distance (points.begin(), points.end()) == 0) {
-		goto run_clicks;
-	}
+	while (remain > 0) {
+		samplecnt_t move = remain;
 
-	for (vector<TempoMap::BBTPoint>::iterator i = points.begin(); i != points.end(); ++i) {
-		switch ((*i).beat) {
-		case 1:
-			add_click ((*i).sample, true);
-			break;
-		default:
-			if (click_emphasis_data == 0 || (Config->get_use_click_emphasis () == false) || (click_emphasis_data && (*i).beat != 1)) { // XXX why is this check needed ??  (*i).beat !=1 must be true here
-				add_click ((*i).sample, false);
+		Location* loop_location = get_play_loop () ? locations()->auto_loop_location () : NULL;
+		if (loop_location) {
+			const samplepos_t loop_start = loop_location->start_sample();
+			const samplepos_t loop_end = loop_location->end_sample();
+			if (start >= loop_end) {
+				samplecnt_t off = (start - loop_end) % (loop_end - loop_start);
+				start = loop_start + off;
+				move = std::min (remain, loop_end - start);
+			} else if (start + move >= loop_end) {
+				move = std::min (remain, loop_end - start);
 			}
-			break;
+			if (move == 0) {
+				start = loop_start;
+				const samplecnt_t looplen = loop_end - loop_start;
+				move = std::min (remain, looplen);
+			}
 		}
+
+		const samplepos_t end = start + move;
+
+		_click_points.clear ();
+		assert (_click_points.capacity() > 0);
+		TempoMap::use()->get_grid (_click_iterator, _click_points, samples_to_superclock (start, sample_rate()), samples_to_superclock (end, sample_rate()));
+
+		if (_click_points.empty()) {
+			start += move;
+			remain -= move;
+			continue;
+		}
+
+		for (auto const & p : _click_points) {
+
+			if (superclock_to_samples (p.sclock(), sample_rate()) < start) {
+				continue;
+			}
+
+			assert (superclock_to_samples (p.sclock(), sample_rate()) < end);
+
+			if (p.bbt().is_bar() && (click_emphasis_data && Config->get_use_click_emphasis())) {
+				add_click (p.sample (sample_rate()), true);
+			} else {
+				add_click (p.sample (sample_rate()), false);
+			}
+		}
+
+		start += move;
+		remain -= move;
 	}
 
-  run_clicks:
 	clickm.release ();
 	run_click (cycle_start, nframes);
 }
@@ -121,7 +162,7 @@ Session::run_click (samplepos_t start, samplepos_t nframes)
 	Glib::Threads::RWLock::ReaderLock clickm (click_lock, Glib::Threads::TRY_LOCK);
 
 	/* align to output */
-	start += _click_io->connected_latency (true);
+	start += _click_io_latency;
 
 	if (!clickm.locked() || click_data == 0) {
 		_click_io->silence (nframes);
@@ -133,31 +174,71 @@ Session::run_click (samplepos_t start, samplepos_t nframes)
 	buf = bufs.get_audio(0).data();
 	memset (buf, 0, sizeof (Sample) * nframes);
 
+	/* given a large output latency, `start' can be offset by by > 1 cycle.
+	 * and needs to be mapped back into the loop-range */
+	Location* loop_location = get_play_loop () ? locations()->auto_loop_location () : NULL;
+	if (_count_in_samples > 0) {
+		loop_location = NULL;
+	}
+	bool crossloop = false;
+	samplecnt_t span = nframes;
+	if (loop_location) {
+		const samplepos_t loop_start = loop_location->start_sample ();
+		const samplepos_t loop_end = loop_location->end_sample ();
+		if (start >= loop_end) {
+			samplecnt_t off = (start - loop_end) % (loop_end - loop_start);
+			start = loop_start + off;
+			span = std::min (nframes, loop_end - start);
+		} else if (start + nframes >= loop_end) {
+			crossloop = true;
+			span = std::min (nframes, loop_end - start);
+		}
+	}
+
 	for (list<Click*>::iterator i = clicks.begin(); i != clicks.end(); ) {
 
-		samplecnt_t copy;
+		Click *clk = *i;
+
+		if (loop_location) {
+			const samplepos_t loop_start = loop_location->start_sample ();
+			const samplepos_t loop_end = loop_location->end_sample ();
+			/* remove any clicks that are outside loop location, and not currently playing */
+			if ((clk->start < loop_start || clk->start >= loop_end) && clk->offset == 0) {
+				delete clk;
+				i = clicks.erase (i);
+				continue;
+			}
+		}
+
 		samplecnt_t internal_offset;
-		Click *clk;
 
-		clk = *i;
-
-		if (clk->start < start) {
+		if (clk->start <= start || clk->offset > 0) {
 			internal_offset = 0;
-		} else {
+		} else if (clk->start < start + span) {
+			/* queue click at offset in current cycle */
 			internal_offset = clk->start - start;
+		} else if (crossloop) {
+			/* When loop wraps around in current cycle, take
+			 * clicks at loop-start into account */
+			const samplepos_t loop_start = loop_location->start_sample ();
+			internal_offset = clk->start - loop_start + span;
+		} else if (_count_in_samples > 0) {
+			++i;
+			continue;
+		} else {
+			/* this can happen when locating
+			 * with an active click */
+			delete clk;
+			i = clicks.erase (i);
+			continue;
 		}
 
-		if (nframes < internal_offset) {
-		         /* we've just located or something..
-			    effectively going backwards.
-			    lets get the flock out of here */
-		        break;
+		if (internal_offset >= nframes) {
+			break;
 		}
 
-		copy = min (clk->duration - clk->offset, nframes - internal_offset);
-
+		samplecnt_t copy = min (clk->duration - clk->offset, nframes - internal_offset);
 		memcpy (buf + internal_offset, &clk->data[clk->offset], copy * sizeof (Sample));
-
 		clk->offset += copy;
 
 		if (clk->offset >= clk->duration) {
@@ -170,6 +251,7 @@ Session::run_click (samplepos_t start, samplepos_t nframes)
 
 	_click_gain->run (bufs, 0, 0, 1.0, nframes, false);
 	_click_io->copy_to_outputs (bufs, DataType::AUDIO, nframes, 0);
+	_click_io->flush_buffers (nframes);
 }
 
 void
@@ -230,6 +312,12 @@ Session::setup_click_sounds (Sample** data, Sample const * default_data, samplec
 		delete[] tmp;
 		sf_close (sndfile);
 	}
+
+	/* Overwhelmingly likely that we will have zero or 1 click grid point
+	 * per cycle. So this is really overkill. If it is too low, it just
+	 * causes RT memory allocation inside TempoMap::get_grid().
+	 */
+	_click_points.reserve (16);
 }
 
 void
@@ -269,4 +357,14 @@ Session::clear_clicks ()
 
 	clicks.clear ();
 	_clicks_cleared = _transport_sample;
+}
+
+void
+Session::click_io_resync_latency (bool playback)
+{
+	if (deletion_in_progress() || !playback) {
+		return;
+	}
+
+	_click_io_latency = _click_io->connected_latency (true);
 }

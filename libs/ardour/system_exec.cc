@@ -1,82 +1,79 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Copyright (C) 2010-2014 Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2015 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <glibmm/miscutils.h>
-#include "pbd/file_utils.h"
+
 #include "pbd/error.h"
+#include "pbd/file_utils.h"
 
 #include "ardour/filesystem_paths.h"
 #include "ardour/system_exec.h"
 
 namespace ARDOUR {
 
-char * SystemExec::_vfork_exec_wrapper = NULL;
+bool                 SystemExec::_initialized = false;
+Glib::Threads::Mutex SystemExec::_init_mutex;
+std::string          SystemExec::_vfork_exec;
 
-static char *vfork_exec_wrapper_path() {
-#ifdef PLATFORM_WINDOWS
-	return NULL;
-#else
-	std::string vfork_exec_wrapper;
-	if (!PBD::find_file (
-				PBD::Searchpath(
-					ARDOUR::ardour_dll_directory() // deployed
-					+ G_SEARCHPATH_SEPARATOR_S + Glib::build_filename(ARDOUR::ardour_dll_directory(), "vfork") // src, build (ardev, etc)
-					),
-				"ardour-exec-wrapper", vfork_exec_wrapper)) {
-		PBD::fatal << "vfork exec wrapper 'ardour-exec-wrapper' was not found in $PATH." << endmsg;
-		abort(); /*NOTREACHED*/
-	}
-	return strdup(vfork_exec_wrapper.c_str());
-#endif
-}
-
-SystemExec::SystemExec (std::string c, char ** a)
-	: PBD::SystemExec(c, a)
+void
+SystemExec::initialize ()
 {
+	if (_initialized) {
+		return;
+	}
 #ifndef PLATFORM_WINDOWS
-	if (!_vfork_exec_wrapper) {
-		_vfork_exec_wrapper = vfork_exec_wrapper_path();
+	Glib::Threads::Mutex::Lock lk (_init_mutex);
+	if (_initialized) {
+		return;
+	}
+	PBD::Searchpath vfsp (
+	    ARDOUR::ardour_dll_directory () //< deployed
+	    + G_SEARCHPATH_SEPARATOR_S + Glib::build_filename (ARDOUR::ardour_dll_directory (), "vfork") //< src-tree (ardev, etc)
+	);
+
+	if (!PBD::find_file (vfsp, "ardour-exec-wrapper", _vfork_exec)) {
+		PBD::fatal << "child process app 'ardour-exec-wrapper' was not found in search path:\n"
+		           << vfsp.to_string () << endmsg;
+		abort (); /*NOTREACHED*/
 	}
 #endif
+	_initialized = true;
 }
 
-SystemExec::SystemExec (std::string c, std::string a)
-	: PBD::SystemExec(c, a)
+SystemExec::SystemExec (std::string cmd, char** argv, bool supress_ld_env)
+	: PBD::SystemExec (cmd, argv, supress_ld_env)
 {
-#ifndef PLATFORM_WINDOWS
-	if (!_vfork_exec_wrapper) {
-		_vfork_exec_wrapper = vfork_exec_wrapper_path();
-	}
-#endif
+	initialize ();
 }
 
-SystemExec::SystemExec (std::string c, const std::map<char, std::string> subs)
-	: PBD::SystemExec(c, subs)
+SystemExec::SystemExec (std::string cmd, std::string argv, bool supress_ld_env)
+	: PBD::SystemExec (cmd, argv, supress_ld_env)
 {
-#ifndef PLATFORM_WINDOWS
-	if (!_vfork_exec_wrapper) {
-		_vfork_exec_wrapper = vfork_exec_wrapper_path();
-	}
-#endif
+	initialize ();
 }
 
-SystemExec::~SystemExec() { }
+SystemExec::SystemExec (std::string cmd, const std::map<char, std::string> subs, bool supress_ld_env)
+	: PBD::SystemExec (cmd, subs, supress_ld_env)
+{
+	initialize ();
+}
+
+SystemExec::~SystemExec () {}
 
 } // namespace ARDOUR

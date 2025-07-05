@@ -1,14 +1,19 @@
 #ifndef AUDIOGRAPHER_THREADER_H
 #define AUDIOGRAPHER_THREADER_H
 
+#include <atomic>
+#include <vector>
+#include <algorithm>
+
+#include "glibmm/threads.h"
 #include <glibmm/threadpool.h>
 #include <glibmm/timeval.h>
 #include <sigc++/slot.h>
-#include <boost/format.hpp>
 
 #include <glib.h>
-#include <vector>
-#include <algorithm>
+
+#include "pbd/atomic.h"
+#include "pbd/compose.h"
 
 #include "audiographer/visibility.h"
 #include "audiographer/source.h"
@@ -24,10 +29,7 @@ class /*LIBAUDIOGRAPHER_API*/ ThreaderException : public Exception
   public:
 	template<typename T>
 	ThreaderException (T const & thrower, std::exception const & e)
-		: Exception (thrower,
-			boost::str ( boost::format
-			("\n\t- Dynamic type: %1%\n\t- what(): %2%")
-			% DebugUtils::demangled_name (e) % e.what() ))
+		: Exception (thrower, string_compose ("\n\t- Dynamic type: %1\n\t- what(): %2", DebugUtils::demangled_name (e), e.what()))
 	{ }
 };
 
@@ -47,9 +49,10 @@ class /*LIBAUDIOGRAPHER_API*/ Threader : public Source<T>, public Sink<T>
 	  */
 	Threader (Glib::ThreadPool & thread_pool, long wait_timeout_milliseconds = 500)
 	  : thread_pool (thread_pool)
-	  , readers (0)
 	  , wait_timeout (wait_timeout_milliseconds)
-	{ }
+	{
+		readers.store (0);
+	}
 
 	virtual ~Threader () {}
 
@@ -73,7 +76,7 @@ class /*LIBAUDIOGRAPHER_API*/ Threader : public Source<T>, public Sink<T>
 		exception.reset();
 
 		unsigned int outs = outputs.size();
-		g_atomic_int_add (&readers, outs);
+		(void) readers.fetch_add (outs);
 		for (unsigned int i = 0; i < outs; ++i) {
 			thread_pool.push (sigc::bind (sigc::mem_fun (this, &Threader::process_output), c, i));
 		}
@@ -87,7 +90,7 @@ class /*LIBAUDIOGRAPHER_API*/ Threader : public Source<T>, public Sink<T>
 
 	void wait()
 	{
-		while (g_atomic_int_get (&readers) != 0) {
+		while (readers.load () != 0) {
 			gint64 end_time = g_get_monotonic_time () + (wait_timeout * G_TIME_SPAN_MILLISECOND);
 			wait_cond.wait_until(wait_mutex, end_time);
 		}
@@ -110,21 +113,22 @@ class /*LIBAUDIOGRAPHER_API*/ Threader : public Source<T>, public Sink<T>
 			exception_mutex.unlock();
 		}
 
-		if (g_atomic_int_dec_and_test (&readers)) {
+		if (PBD::atomic_dec_and_test (readers)) {
 			wait_cond.signal();
 		}
 	}
 
 	OutputVec outputs;
 
-	Glib::ThreadPool & thread_pool;
-        Glib::Threads::Mutex wait_mutex;
-        Glib::Threads::Cond  wait_cond;
-	gint        readers;
-	long        wait_timeout;
+	Glib::ThreadPool&    thread_pool;
+	Glib::Threads::Mutex wait_mutex;
+	Glib::Threads::Cond  wait_cond;
 
-        Glib::Threads::Mutex exception_mutex;
-	boost::shared_ptr<ThreaderException> exception;
+	std::atomic<int> readers;
+	long         wait_timeout;
+
+	Glib::Threads::Mutex exception_mutex;
+	std::shared_ptr<ThreaderException> exception;
 
 };
 

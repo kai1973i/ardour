@@ -1,33 +1,35 @@
 /*
-    Copyright (C) 2004 Paul Davis
+ * Copyright (C) 2005-2011 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_gtk_panner_ui_h__
-#define __ardour_gtk_panner_ui_h__
+#pragma once
 
 #include <vector>
 
-#include <gtkmm/box.h>
-#include <gtkmm/adjustment.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/arrow.h>
-#include <gtkmm/togglebutton.h>
-#include <gtkmm/button.h>
+#include <ytkmm/box.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/arrow.h>
+#include <ytkmm/togglebutton.h>
+#include <ytkmm/button.h>
 
 #include "ardour/session_handle.h"
 
@@ -47,6 +49,7 @@ namespace ARDOUR {
 }
 
 namespace Gtk {
+	class CheckMenuItem;
 	class Menu;
 	class Menuitem;
 }
@@ -57,7 +60,7 @@ public:
 	PannerUI (ARDOUR::Session*);
 	~PannerUI ();
 
-	virtual void set_panner (boost::shared_ptr<ARDOUR::PannerShell>, boost::shared_ptr<ARDOUR::Panner>);
+	virtual void set_panner (std::shared_ptr<ARDOUR::PannerShell>, std::shared_ptr<ARDOUR::Panner>);
 
 	void panshell_changed ();
 
@@ -79,14 +82,14 @@ public:
 
 private:
 	friend class MixerStrip;
+	friend class TriggerStrip;
 	friend class SendUI;
 
-	boost::shared_ptr<ARDOUR::PannerShell> _panshell;
-	boost::shared_ptr<ARDOUR::Panner> _panner;
+	std::shared_ptr<ARDOUR::PannerShell> _panshell;
+	std::shared_ptr<ARDOUR::Panner> _panner;
 	PBD::ScopedConnectionList connections;
 	PBD::ScopedConnectionList _pan_control_connections;
 
-	bool ignore_toggle;
 	bool in_pan_update;
 	int _current_nouts;
 	int _current_nins;
@@ -132,25 +135,22 @@ private:
 
 	Gtk::Menu* pan_menu;
 	Gtk::CheckMenuItem* bypass_menu_item;
+	Gtk::CheckMenuItem* send_link_menu_item;
 	void build_pan_menu ();
 	void pan_reset ();
 	void pan_bypass_toggle ();
+	void pan_link_toggle ();
 	void pan_edit ();
 	void pan_set_custom_type (std::string type);
 
 	void pan_automation_state_changed();
 	gint pan_automation_state_button_event (GdkEventButton *);
 
-	std::string astate_string (ARDOUR::AutoState);
-	std::string short_astate_string (ARDOUR::AutoState);
-	std::string _astate_string (ARDOUR::AutoState, bool);
-
-	void start_touch (boost::weak_ptr<ARDOUR::AutomationControl>);
-	void stop_touch (boost::weak_ptr<ARDOUR::AutomationControl>);
+	void start_touch (std::weak_ptr<ARDOUR::AutomationControl>);
+	void stop_touch (std::weak_ptr<ARDOUR::AutomationControl>);
 
 	std::map<std::string,std::string> _panner_list;
 	bool _suspend_menu_callbacks;
 };
 
-#endif /* __ardour_gtk_panner_ui_h__ */
 

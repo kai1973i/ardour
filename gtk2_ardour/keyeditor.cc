@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 2002 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
@@ -30,13 +33,13 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 
-#include <gtkmm/accelkey.h>
-#include <gtkmm/accelmap.h>
-#include <gtkmm/label.h>
-#include <gtkmm/separator.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/treemodelsort.h>
-#include <gtkmm/uimanager.h>
+#include <ytkmm/accelkey.h>
+#include <ytkmm/accelmap.h>
+#include <ytkmm/label.h>
+#include <ytkmm/separator.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/treemodelsort.h>
+#include <ytkmm/uimanager.h>
 
 #include "gtkmm2ext/bindings.h"
 #include "gtkmm2ext/utils.h"
@@ -44,6 +47,7 @@
 #include "pbd/error.h"
 #include "pbd/openuri.h"
 #include "pbd/strsplit.h"
+#include "pbd/unwind.h"
 
 #include "ardour/filesystem_paths.h"
 #include "ardour/profile.h"
@@ -64,16 +68,27 @@ using Gtkmm2ext::Bindings;
 
 sigc::signal<void> KeyEditor::UpdateBindings;
 
-static void bindings_collision_dialog (Gtk::Window& parent, const std::string& bound_name)
+static bool
+bindings_collision_dialog (Gtk::Window& parent, const std::string& bound_name)
 {
 	ArdourDialog dialog (parent, _("Colliding keybindings"), true);
 	Label label (string_compose(
-				_("The key sequence is already bound to '%1'. Please remove the other binding first."), bound_name));
+				_("The key sequence is already bound to '%1'.\n\n"
+				  "You can replace the existing binding or cancel this action."), bound_name));
 
 	dialog.get_vbox()->pack_start (label, true, true);
-	dialog.add_button (_("Ok"), Gtk::RESPONSE_ACCEPT);
+
+	dialog.add_button (_("Cancel"), Gtk::RESPONSE_CANCEL);
+	dialog.add_button (_("Replace"), Gtk::RESPONSE_ACCEPT);
 	dialog.show_all ();
-	dialog.run();
+
+	switch (dialog.run()) {
+	case RESPONSE_ACCEPT:
+		return true;
+	default:
+		break;
+	}
+	return false;
 }
 
 KeyEditor::KeyEditor ()
@@ -163,7 +178,6 @@ KeyEditor::remove_tab (string const &name)
 			}
 		}
 	}
-	cerr << "Removed " << name << endl;
 }
 
 void
@@ -321,15 +335,33 @@ KeyEditor::Tab::bind (GdkEventKey* release_event, guint pressed_key)
 	GdkModifierType mod = (GdkModifierType)(Keyboard::RelevantModifierKeyMask & release_event->state);
 	Gtkmm2ext::KeyboardKey new_binding (mod, pressed_key);
 
-	if (bindings->is_bound (new_binding, Gtkmm2ext::Bindings::Press)) {
-		bindings_collision_dialog (owner, bindings->bound_name (new_binding, Gtkmm2ext::Bindings::Press));
-		return;
+	std::string old_path;
+
+	if (bindings->is_bound (new_binding, Gtkmm2ext::Bindings::Press, &old_path)) {
+		if (!bindings_collision_dialog (owner, bindings->bound_name (new_binding, Gtkmm2ext::Bindings::Press))) {
+			return;
+		}
 	}
 
+	TreeModel::iterator oit = data_model->children().end();
+
+	if (!old_path.empty()) {
+		/* Remove the binding for the old action */
+		if (!bindings->remove (Gtkmm2ext::Bindings::Press, old_path, false)) {
+			return;
+		}
+		oit = find_action_path (data_model->children().begin(), data_model->children().end(),  old_path);
+	}
+
+
+	/* Add (or replace) the binding for the chosen action */
 	bool result = bindings->replace (new_binding, Gtkmm2ext::Bindings::Press, action_path);
 
 	if (result) {
 		(*it)[columns.binding] = gtk_accelerator_get_label (new_binding.key(), (GdkModifierType) new_binding.state());
+		if (oit != data_model->children().end()) {
+			(*oit)[columns.binding] = "";
+		}
 		owner.unbind_button.set_sensitive (true);
 	}
 }
@@ -371,8 +403,10 @@ KeyEditor::Tab::populate ()
 		}
 
 		//kinda kludgy way to avoid displaying menu items as mappable
-		if ((action_name.find ("Menu") == action_name.length() - 4) ||
-		    (action_name.find ("menu") == action_name.length() - 4) ||
+		if ((action_name.find (X_("Menu")) == action_name.length() - 4) ||
+		    (action_name.find (X_("menu")) == action_name.length() - 4) ||
+		    (category.find (X_("Menu")) == category.length() - 4) ||
+		    (category.find (X_("menu")) == category.length() - 4) ||
 		    (action_name == _("RegionList"))) {
 			continue;
 		}
@@ -433,6 +467,7 @@ KeyEditor::Tab::sort_column_changed ()
 {
 	int column;
 	SortType type;
+
 	if (data_model->get_sort_column_id (column, type)) {
 		owner.sort_column = column;
 		owner.sort_type = type;
@@ -444,6 +479,10 @@ KeyEditor::Tab::tab_mapped ()
 {
 	data_model->set_sort_column (owner.sort_column,  owner.sort_type);
 	filter->refilter ();
+
+	if (data_model->children().size() == 1) {
+		view.expand_all ();
+	}
 }
 
 bool
@@ -454,22 +493,38 @@ KeyEditor::Tab::visible_func(const Gtk::TreeModel::const_iterator& iter) const
 	}
 
 	// never filter when search string is empty or item is a category
-	if (owner.filter_string.empty () || !(*iter)[columns.bindable]) {
+	if (owner.filter_string.empty ()) {
 		return true;
 	}
 
-	// search name
-	std::string name = (*iter)[columns.name];
-	boost::to_lower (name);
-	if (name.find (owner.filter_string) != std::string::npos) {
-		return true;
+	if (!(*iter)[columns.bindable]) {
+
+		for (auto const & c : iter->children()) {
+			if (visible_func (c)) {
+				TreeModel::Path p (data_model->get_path (iter));
+				view.expand_row (p, false);
+				return true;
+			}
+		}
+
+		return false;
 	}
 
-	// search binding
-	std::string binding = (*iter)[columns.binding];
-	boost::to_lower (binding);
-	if (binding.find (owner.filter_string) != std::string::npos) {
-		return true;
+	if (owner.filter_string.find ("k:") == string::npos) {
+		// search name
+		std::string name = (*iter)[columns.name];
+		boost::to_lower (name);
+		if (name.find (owner.filter_string) != std::string::npos) {
+			return true;
+		}
+	} else {
+		string s = owner.filter_string.substr (2);
+		// search binding
+		std::string binding = (*iter)[columns.binding];
+		boost::to_lower (binding);
+		if (binding.find (s) != std::string::npos) {
+			return true;
+		}
 	}
 
 	return false;
@@ -566,6 +621,7 @@ KeyEditor::print () const
 		if (err) {
 			error << string_compose (_("Could not save bindings to file (%1)"), err->message) << endmsg;
 			g_error_free (err);
+			g_free (file_name);
 		}
 		return;
 	}
@@ -575,4 +631,5 @@ KeyEditor::print () const
 #endif
 
 	PBD::open_uri (string_compose ("file:///%1", file_name));
+	g_free (file_name);
 }

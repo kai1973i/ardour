@@ -1,22 +1,21 @@
 /*
-    Copyright (C) 1998-99 Paul Barton-Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-    $Id$
-*/
+ * Copyright (C) 1998 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 
@@ -46,6 +45,9 @@ PopUp::PopUp (Gtk::WindowPosition pos, unsigned int showfor_msecs, bool doh)
 
 PopUp::~PopUp ()
 {
+	if (popdown_time != 0 && timeout != -1) {
+		g_source_remove (timeout);
+	}
 }
 
 void
@@ -77,6 +79,7 @@ PopUp::remove ()
 
 	if (popdown_time != 0 && timeout != -1) {
 		g_source_remove (timeout);
+		timeout = -1;
 	}
 
 	if (delete_on_hide) {
@@ -96,7 +99,7 @@ PopUp::touch ()
 {
 	ENSURE_GUI_THREAD (mem_fun (*this, &PopUp::touch));
 
-	if (is_visible ()) {
+	if (get_visible ()) {
 		remove ();
 	} else {
 		Gtkmm2ext::set_size_request_to_display_given_text (label, my_text.c_str(), 25, 10);
@@ -138,6 +141,7 @@ PopUp::on_delete_event (GdkEventAny* /*ev*/)
 
 	if (popdown_time != 0 && timeout != -1) {
 		g_source_remove (timeout);
+		timeout = -1;
 	}
 
 	if (delete_on_hide) {

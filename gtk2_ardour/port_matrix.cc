@@ -1,45 +1,55 @@
 /*
-    Copyright (C) 2002-2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2008-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2008 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2013-2015 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/adjustment.h>
-#include <gtkmm/label.h>
-#include <gtkmm/menu.h>
-#include <gtkmm/menushell.h>
-#include <gtkmm/menu_elems.h>
-#include <gtkmm/window.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/messagedialog.h>
+
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/label.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/menushell.h>
+#include <ytkmm/menu_elems.h>
+#include <ytkmm/window.h>
+#include <ytkmm/stock.h>
+
 #include "ardour/bundle.h"
 #include "ardour/types.h"
 #include "ardour/session.h"
 #include "ardour/route.h"
 #include "ardour/audioengine.h"
+
 #include "gtkmm2ext/utils.h"
+
+#include "ardour_dialog.h"
+#include "ardour_message.h"
+#include "gui_thread.h"
 #include "port_matrix.h"
 #include "port_matrix_body.h"
 #include "port_matrix_component.h"
-#include "ardour_dialog.h"
-#include "pbd/i18n.h"
-#include "gui_thread.h"
 #include "utils.h"
+#include "ui_config.h"
+
+#include "pbd/i18n.h"
 
 using namespace std;
 using namespace Gtk;
@@ -104,6 +114,8 @@ PortMatrix::PortMatrix (Window* parent, Session* session, DataType type)
 	_vspacer.show ();
 	_vnotebook.show ();
 	_hnotebook.show ();
+
+	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &PortMatrix::parameter_changed));
 }
 
 PortMatrix::~PortMatrix ()
@@ -141,29 +153,31 @@ PortMatrix::init ()
 
 	for (int i = 0; i < 2; ++i) {
 		/* watch for the content of _ports[] changing */
-		_ports[i].Changed.connect (_changed_connections, invalidator (*this), boost::bind (&PortMatrix::setup, this), gui_context());
+		_ports[i].Changed.connect (_changed_connections, invalidator (*this), std::bind (&PortMatrix::setup, this), gui_context());
 
 		/* and for bundles in _ports[] changing */
-		_ports[i].BundleChanged.connect (_bundle_changed_connections, invalidator (*this), boost::bind (&PortMatrix::setup, this), gui_context());
+		_ports[i].BundleChanged.connect (_bundle_changed_connections, invalidator (*this), std::bind (&PortMatrix::setup, this), gui_context());
 	}
 
 	/* Part 2: notice when things have changed that require our subclass to clear and refill _ports[] */
 
 	/* watch for routes being added or removed */
-	_session->RouteAdded.connect (_session_connections, invalidator (*this), boost::bind (&PortMatrix::routes_changed, this), gui_context());
+	_session->RouteAdded.connect (_session_connections, invalidator (*this), std::bind (&PortMatrix::routes_changed, this), gui_context());
 
 	/* and also bundles */
-	_session->BundleAddedOrRemoved.connect (_session_connections, invalidator (*this), boost::bind (&PortMatrix::setup_global_ports, this), gui_context());
+	_session->BundleAddedOrRemoved.connect (_session_connections, invalidator (*this), std::bind (&PortMatrix::setup_global_ports, this), gui_context());
 
 	/* and also ports */
-	_session->engine().PortRegisteredOrUnregistered.connect (_session_connections, invalidator (*this), boost::bind (&PortMatrix::setup_global_ports, this), gui_context());
+	_session->engine().PortRegisteredOrUnregistered.connect (_session_connections, invalidator (*this), std::bind (&PortMatrix::setup_global_ports, this), gui_context());
+
+	_session->engine().PortPrettyNameChanged.connect (_session_connections, invalidator (*this), std::bind (&PortMatrix::setup_all_ports, this), gui_context());
 
 	/* watch for route order keys changing, which changes the order of things in our global ports list(s) */
-	PresentationInfo::Change.connect (_session_connections, invalidator (*this), boost::bind (&PortMatrix::setup_global_ports_proxy, this), gui_context());
+	PresentationInfo::Change.connect (_session_connections, invalidator (*this), std::bind (&PortMatrix::setup_global_ports_proxy, this), gui_context());
 
 	/* Part 3: other stuff */
 
-	_session->engine().PortConnectedOrDisconnected.connect (_session_connections, invalidator (*this), boost::bind (&PortMatrix::port_connected_or_disconnected, this), gui_context ());
+	_session->engine().PortConnectedOrDisconnected.connect (_session_connections, invalidator (*this), std::bind (&PortMatrix::port_connected_or_disconnected, this), gui_context ());
 
 	_hscroll.signal_value_changed().connect (sigc::mem_fun (*this, &PortMatrix::hscroll_changed));
 	_vscroll.signal_value_changed().connect (sigc::mem_fun (*this, &PortMatrix::vscroll_changed));
@@ -179,10 +193,10 @@ PortMatrix::reconnect_to_routes ()
 {
 	_route_connections.drop_connections ();
 
-	boost::shared_ptr<RouteList> routes = _session->get_routes ();
-	for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-		(*i)->processors_changed.connect (_route_connections, invalidator (*this), boost::bind (&PortMatrix::route_processors_changed, this, _1), gui_context());
-		(*i)->DropReferences.connect (_route_connections, invalidator (*this), boost::bind (&PortMatrix::routes_changed, this), gui_context());
+	std::shared_ptr<RouteList const> routes = _session->get_routes ();
+	for (auto const& i : *routes) {
+		i->processors_changed.connect (_route_connections, invalidator (*this), std::bind (&PortMatrix::route_processors_changed, this, _1), gui_context());
+		i->DropReferences.connect (_route_connections, invalidator (*this), std::bind (&PortMatrix::routes_changed, this), gui_context());
 	}
 }
 
@@ -393,7 +407,7 @@ PortMatrix::columns () const
 	return &_ports[_column_index];
 }
 
-boost::shared_ptr<const PortGroup>
+std::shared_ptr<const PortGroup>
 PortMatrix::visible_columns () const
 {
 	return visible_ports (_column_index);
@@ -406,7 +420,7 @@ PortMatrix::rows () const
 	return &_ports[_row_index];
 }
 
-boost::shared_ptr<const PortGroup>
+std::shared_ptr<const PortGroup>
 PortMatrix::visible_rows () const
 {
 	return visible_ports (_row_index);
@@ -441,12 +455,12 @@ PortMatrix::popup_menu (BundleChannel column, BundleChannel row, uint32_t t)
 			Menu* m = manage (new Menu);
 			MenuList& sub = m->items ();
 
-			boost::weak_ptr<Bundle> w (bc[dim].bundle);
+			std::weak_ptr<Bundle> w (bc[dim].bundle);
 
 			if (can_add_channels (bc[dim].bundle)) {
 				/* Start off with options for the `natural' port type */
 				for (DataType::iterator i = DataType::begin(); i != DataType::end(); ++i) {
-					if (should_show (*i)) {
+					if (should_show (*i) && can_add_port_proxy (w, *i)) {
 						snprintf (buf, sizeof (buf), _("Add %s %s"), (*i).to_i18n_string(), channel_noun().c_str());
 						sub.push_back (MenuElem (buf, sigc::bind (sigc::mem_fun (*this, &PortMatrix::add_channel_proxy), w, *i)));
 					}
@@ -454,7 +468,7 @@ PortMatrix::popup_menu (BundleChannel column, BundleChannel row, uint32_t t)
 
 				/* Now add other ones */
 				for (DataType::iterator i = DataType::begin(); i != DataType::end(); ++i) {
-					if (!should_show (*i)) {
+					if (!should_show (*i) && can_add_port_proxy (w, *i)) {
 						snprintf (buf, sizeof (buf), _("Add %s %s"), (*i).to_i18n_string(), channel_noun().c_str());
 						sub.push_back (MenuElem (buf, sigc::bind (sigc::mem_fun (*this, &PortMatrix::add_channel_proxy), w, *i)));
 					}
@@ -545,13 +559,13 @@ PortMatrix::popup_menu (BundleChannel column, BundleChannel row, uint32_t t)
 	items.push_back (MenuElem (_("Flip"), sigc::mem_fun (*this, &PortMatrix::flip)));
 	items.back().set_sensitive (can_flip ());
 
-	_menu->popup (1, t);
+	_menu->popup (3, t);
 }
 
 void
-PortMatrix::remove_channel_proxy (boost::weak_ptr<Bundle> b, uint32_t c)
+PortMatrix::remove_channel_proxy (std::weak_ptr<Bundle> b, uint32_t c)
 {
-	boost::shared_ptr<Bundle> sb = b.lock ();
+	std::shared_ptr<Bundle> sb = b.lock ();
 	if (!sb) {
 		return;
 	}
@@ -561,9 +575,9 @@ PortMatrix::remove_channel_proxy (boost::weak_ptr<Bundle> b, uint32_t c)
 }
 
 void
-PortMatrix::rename_channel_proxy (boost::weak_ptr<Bundle> b, uint32_t c)
+PortMatrix::rename_channel_proxy (std::weak_ptr<Bundle> b, uint32_t c)
 {
-	boost::shared_ptr<Bundle> sb = b.lock ();
+	std::shared_ptr<Bundle> sb = b.lock ();
 	if (!sb) {
 		return;
 	}
@@ -572,9 +586,9 @@ PortMatrix::rename_channel_proxy (boost::weak_ptr<Bundle> b, uint32_t c)
 }
 
 void
-PortMatrix::disassociate_all_on_bundle (boost::weak_ptr<Bundle> bundle, int dim)
+PortMatrix::disassociate_all_on_bundle (std::weak_ptr<Bundle> bundle, int dim)
 {
-	boost::shared_ptr<Bundle> sb = bundle.lock ();
+	std::shared_ptr<Bundle> sb = bundle.lock ();
 	if (!sb) {
 		return;
 	}
@@ -587,9 +601,9 @@ PortMatrix::disassociate_all_on_bundle (boost::weak_ptr<Bundle> bundle, int dim)
 }
 
 void
-PortMatrix::disassociate_all_on_channel (boost::weak_ptr<Bundle> bundle, uint32_t channel, int dim)
+PortMatrix::disassociate_all_on_channel (std::weak_ptr<Bundle> bundle, uint32_t channel, int dim)
 {
-	boost::shared_ptr<Bundle> sb = bundle.lock ();
+	std::shared_ptr<Bundle> sb = bundle.lock ();
 	if (!sb) {
 		return;
 	}
@@ -704,10 +718,10 @@ PortMatrix::on_scroll_event (GdkEventScroll* ev)
 	return true;
 }
 
-boost::shared_ptr<IO>
-PortMatrix::io_from_bundle (boost::shared_ptr<Bundle> b) const
+std::shared_ptr<IO>
+PortMatrix::io_from_bundle (std::shared_ptr<Bundle> b) const
 {
-	boost::shared_ptr<IO> io = _ports[0].io_from_bundle (b);
+	std::shared_ptr<IO> io = _ports[0].io_from_bundle (b);
 	if (!io) {
 		io = _ports[1].io_from_bundle (b);
 	}
@@ -716,20 +730,27 @@ PortMatrix::io_from_bundle (boost::shared_ptr<Bundle> b) const
 }
 
 bool
-PortMatrix::can_add_channels (boost::shared_ptr<Bundle> b) const
+PortMatrix::can_add_channels (std::shared_ptr<Bundle> b) const
 {
 	return io_from_bundle (b) != 0;
 }
 
-void
-PortMatrix::add_channel (boost::shared_ptr<Bundle> b, DataType t)
+bool
+PortMatrix::can_add_port (std::shared_ptr<Bundle> b, DataType t) const
 {
-	boost::shared_ptr<IO> io = io_from_bundle (b);
+	std::shared_ptr<IO> io = io_from_bundle (b);
+	return io && io->can_add_port (t);
+}
+
+void
+PortMatrix::add_channel (std::shared_ptr<Bundle> b, DataType t)
+{
+	std::shared_ptr<IO> io = io_from_bundle (b);
 
 	if (io) {
 		int const r = io->add_port ("", this, t);
 		if (r == -1) {
-			Gtk::MessageDialog msg (_("It is not possible to add a port here."));
+			ArdourMessageDialog msg (_("It is not possible to add a port here."));
 			msg.set_title (_("Cannot add port"));
 			msg.run ();
 		}
@@ -737,7 +758,7 @@ PortMatrix::add_channel (boost::shared_ptr<Bundle> b, DataType t)
 }
 
 bool
-PortMatrix::can_remove_channels (boost::shared_ptr<Bundle> b) const
+PortMatrix::can_remove_channels (std::shared_ptr<Bundle> b) const
 {
 	return io_from_bundle (b) != 0;
 }
@@ -746,8 +767,8 @@ void
 PortMatrix::remove_channel (ARDOUR::BundleChannel b)
 {
 	std::string errmsg;
-	boost::shared_ptr<IO> io = io_from_bundle (b.bundle);
-	boost::shared_ptr<Port> p = io->nth (b.channel);
+	std::shared_ptr<IO> io = io_from_bundle (b.bundle);
+	std::shared_ptr<Port> p = io->nth (b.channel);
 
 	if (!io || !p) {
 		return;
@@ -762,20 +783,15 @@ PortMatrix::remove_channel (ARDOUR::BundleChannel b)
 	}
 
 	if (!errmsg.empty ()) {
-		ArdourDialog d (_("Port removal not allowed"));
-		Label l (errmsg);
-		d.get_vbox()->pack_start (l);
-		d.add_button (Stock::OK, RESPONSE_ACCEPT);
-		d.set_modal (true);
-		d.show_all ();
+		ArdourMessageDialog d (_("Port removal not allowed"));
 		d.run ();
 	}
 }
 
 void
-PortMatrix::remove_all_channels (boost::weak_ptr<Bundle> w)
+PortMatrix::remove_all_channels (std::weak_ptr<Bundle> w)
 {
-	boost::shared_ptr<Bundle> b = w.lock ();
+	std::shared_ptr<Bundle> b = w.lock ();
 	if (!b) {
 		return;
 	}
@@ -790,10 +806,20 @@ PortMatrix::remove_all_channels (boost::weak_ptr<Bundle> w)
 	}
 }
 
-void
-PortMatrix::add_channel_proxy (boost::weak_ptr<Bundle> w, DataType t)
+bool
+PortMatrix::can_add_port_proxy (std::weak_ptr<Bundle> w, DataType t) const
 {
-	boost::shared_ptr<Bundle> b = w.lock ();
+	std::shared_ptr<Bundle> b = w.lock ();
+	if (!b) {
+		return false;
+	}
+	return can_add_port (b, t);
+}
+
+void
+PortMatrix::add_channel_proxy (std::weak_ptr<Bundle> w, DataType t)
+{
+	std::shared_ptr<Bundle> b = w.lock ();
 	if (!b) {
 		return;
 	}
@@ -902,6 +928,7 @@ PortMatrix::notebook_page_selected (GtkNotebookPage *, guint)
 void
 PortMatrix::session_going_away ()
 {
+	SessionHandlePtr::session_going_away ();
 	_session = 0;
 }
 
@@ -932,7 +959,7 @@ PortMatrix::body_dimensions_changed ()
 /** @return The PortGroup that is currently visible (ie selected by
  *  the notebook) along a given axis.
  */
-boost::shared_ptr<const PortGroup>
+std::shared_ptr<const PortGroup>
 PortMatrix::visible_ports (int d) const
 {
 	PortGroupList const & p = _ports[d];
@@ -961,18 +988,18 @@ PortMatrix::visible_ports (int d) const
 	}
 
 	if (j == p.end()) {
-		return boost::shared_ptr<const PortGroup> ();
+		return std::shared_ptr<const PortGroup> ();
 	}
 
 	return *j;
 }
 
 void
-PortMatrix::add_remove_option (Menu_Helpers::MenuList& m, boost::weak_ptr<Bundle> w, int c)
+PortMatrix::add_remove_option (Menu_Helpers::MenuList& m, std::weak_ptr<Bundle> w, int c)
 {
 	using namespace Menu_Helpers;
 
-	boost::shared_ptr<Bundle> b = w.lock ();
+	std::shared_ptr<Bundle> b = w.lock ();
 	if (!b) {
 		return;
 	}
@@ -983,11 +1010,11 @@ PortMatrix::add_remove_option (Menu_Helpers::MenuList& m, boost::weak_ptr<Bundle
 }
 
 void
-PortMatrix::add_disassociate_option (Menu_Helpers::MenuList& m, boost::weak_ptr<Bundle> w, int d, int c)
+PortMatrix::add_disassociate_option (Menu_Helpers::MenuList& m, std::weak_ptr<Bundle> w, int d, int c)
 {
 	using namespace Menu_Helpers;
 
-	boost::shared_ptr<Bundle> b = w.lock ();
+	std::shared_ptr<Bundle> b = w.lock ();
 	if (!b) {
 		return;
 	}
@@ -1160,7 +1187,7 @@ PortMatrix::get_association (PortMatrixNode node) const
 
 /** @return true if b is a non-zero pointer and the bundle it points to has some channels */
 bool
-PortMatrix::bundle_with_channels (boost::shared_ptr<ARDOUR::Bundle> b)
+PortMatrix::bundle_with_channels (std::shared_ptr<ARDOUR::Bundle> b)
 {
 	return b && b->nchannels() != ARDOUR::ChanCount::ZERO;
 }
@@ -1175,7 +1202,7 @@ PortMatrix::check_flip () const
 	/* Look for the row's port group name in the columns */
 
 	int new_column = 0;
-	boost::shared_ptr<const PortGroup> r = visible_ports (_row_index);
+	std::shared_ptr<const PortGroup> r = visible_ports (_row_index);
 	PortGroupList::List::const_iterator i = _ports[_column_index].begin();
 	while (i != _ports[_column_index].end() && (*i)->name != r->name) {
 		++i;
@@ -1189,7 +1216,7 @@ PortMatrix::check_flip () const
 	/* Look for the column's port group name in the rows */
 
 	int new_row = 0;
-	boost::shared_ptr<const PortGroup> c = visible_ports (_column_index);
+	std::shared_ptr<const PortGroup> c = visible_ports (_column_index);
 	i = _ports[_row_index].begin();
 	while (i != _ports[_row_index].end() && (*i)->name != c->name) {
 		++i;
@@ -1235,4 +1262,12 @@ PortMatrix::key_press (GdkEventKey* k)
 	}
 
 	return false;
+}
+
+void
+PortMatrix::parameter_changed (string p)
+{
+	if (p == "font-scale") {
+		setup ();
+	}
 }

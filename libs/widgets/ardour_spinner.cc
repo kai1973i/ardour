@@ -1,20 +1,20 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
- * Copyright (C) 2011 Paul Davis
+ * Copyright (C) 2011 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "gtkmm2ext/gui_thread.h"
@@ -27,7 +27,7 @@
 
 using namespace ArdourWidgets;
 
-ArdourSpinner::ArdourSpinner (boost::shared_ptr<PBD::Controllable> c, Gtk::Adjustment* adj)
+ArdourSpinner::ArdourSpinner (std::shared_ptr<PBD::Controllable> c, Gtk::Adjustment* adj)
 	: _btn (ArdourButton::Text)
 	, _ctrl_adj (adj)
 	, _spin_adj (0, c->lower (), c->upper (), .1, .01)
@@ -56,7 +56,7 @@ ArdourSpinner::ArdourSpinner (boost::shared_ptr<PBD::Controllable> c, Gtk::Adjus
 
 	_spin_adj.signal_value_changed().connect (sigc::mem_fun(*this, &ArdourSpinner::spin_adjusted));
 	adj->signal_value_changed().connect (sigc::mem_fun(*this, &ArdourSpinner::ctrl_adjusted));
-	c->Changed.connect (watch_connection, invalidator(*this), boost::bind (&ArdourSpinner::controllable_changed, this), gui_context());
+	c->Changed.connect (watch_connection, invalidator(*this), std::bind (&ArdourSpinner::controllable_changed, this), gui_context());
 
 #if 0
 	// this assume the "upper" value needs most space.
@@ -117,7 +117,7 @@ ArdourSpinner::on_scroll_event (GdkEventScroll* ev)
 		}
 	}
 
-	boost::shared_ptr<PBD::Controllable> c = _btn.get_controllable();
+	std::shared_ptr<PBD::Controllable> c = _btn.get_controllable();
 	if (c) {
 		float val = c->get_interface();
 

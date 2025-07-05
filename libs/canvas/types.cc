@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2011-2013 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cfloat>
 #include <cassert>
@@ -39,7 +39,60 @@ ArdourCanvas::operator<< (ostream & s, Duple const & r)
 ostream &
 ArdourCanvas::operator<< (ostream & s, Rect const & r)
 {
-	s << "[(" << r.x0 << ", " << r.y0 << "), (" << r.x1 << ", " << r.y1 << ") " << r.width() << " x " << r.height() << "]";
+	static const Coord BIG = COORD_MAX/10.0; /* 1 order of magnitude from COORD_MAX */
+
+	const Distance w = r.width();
+	const Distance h = r.height();
+
+	s << "[(";
+
+	if (r.x0 > BIG) {
+		s << "BIG";
+	} else {
+		s << r.x0;
+	}
+
+	s << ", ";
+
+	if (r.y0 > BIG) {
+		s << "BIG";
+	} else {
+		s << r.y0;
+	}
+
+	s << "), (";
+
+
+	if (r.x1 > BIG) {
+		s << "BIG";
+	} else {
+		s << r.x1;
+	}
+
+	s << ", ";
+
+	if (r.y1 > BIG) {
+		s << "BIG";
+	} else {
+		s << r.y1;
+	}
+
+	s << ") ";
+
+	if (w > BIG) {
+		s << "BIG";
+	} else {
+		s << w;
+	}
+
+	s << " x ";
+
+	if (h > BIG) {
+		s << "BIG";
+	} else {
+		s << h;
+	}
+
+	s << ']';
 	return s;
 }
-

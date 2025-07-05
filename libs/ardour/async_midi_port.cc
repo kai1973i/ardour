@@ -1,22 +1,23 @@
 /*
-    Copyright (C) 1998 Paul Barton-Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-    $Id$
-*/
+ * Copyright (C) 1998-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2014 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2014-2016 David Robillard <d@drobilla.net>
+ * Copyright (C) 2015-2016 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <vector>
@@ -27,6 +28,8 @@
 #include "pbd/stacktrace.h"
 
 #include "midi++/types.h"
+
+#include "temporal/tempo.h"
 
 #include "ardour/async_midi_port.h"
 #include "ardour/audioengine.h"
@@ -59,7 +62,7 @@ AsyncMIDIPort::~AsyncMIDIPort ()
 }
 
 void
-AsyncMIDIPort::set_timer (boost::function<MIDI::samplecnt_t (void)>& f)
+AsyncMIDIPort::set_timer (std::function<MIDI::samplecnt_t (void)>& f)
 {
 	timer = f;
 	have_timer = true;
@@ -82,7 +85,7 @@ AsyncMIDIPort::flush_output_fifo (MIDI::pframes_t nframes)
 		assert (evp->buffer());
 
 		for (size_t n = 0; n < vec.len[0]; ++n, ++evp) {
-			if (mb.push_back (evp->time(), evp->size(), evp->buffer())) {
+			if (mb.push_back (evp->time(), evp->event_type (), evp->size(), evp->buffer())) {
 				written++;
 			}
 		}
@@ -95,7 +98,7 @@ AsyncMIDIPort::flush_output_fifo (MIDI::pframes_t nframes)
 		assert (evp->buffer());
 
 		for (size_t n = 0; n < vec.len[1]; ++n, ++evp) {
-			if (mb.push_back (evp->time(), evp->size(), evp->buffer())) {
+			if (mb.push_back (evp->time(), evp->event_type (), evp->size(), evp->buffer())) {
 				written++;
 			}
 		}
@@ -130,23 +133,35 @@ AsyncMIDIPort::cycle_start (MIDI::pframes_t nframes)
 	*/
 
 	if (ARDOUR::Port::receives_input()) {
-		MidiBuffer& mb (get_midi_buffer (nframes));
-		samplecnt_t when;
 
-		if (have_timer) {
-			when = timer ();
-		} else {
-			when = AudioEngine::instance()->sample_time_at_cycle_start();
-		}
+		void* buffer = port_engine.get_buffer (_port_handle, nframes);
+		const pframes_t event_count = port_engine.get_midi_event_count (buffer);
 
-		for (MidiBuffer::iterator b = mb.begin(); b != mb.end(); ++b) {
-			if (!have_timer) {
-				when += (*b).time();
+		for (pframes_t i = 0; i < event_count; ++i) {
+
+			pframes_t timestamp;
+			size_t size;
+			uint8_t const* buf;
+
+			port_engine.midi_event_get (timestamp, size, &buf, buffer, i);
+
+			if (buf[0] == 0xfe) {
+				/* throw away active sensing */
+				continue;
 			}
-			input_fifo.write (when, Evoral::NO_EVENT, (*b).size(), (*b).buffer());
+
+			samplecnt_t when;
+
+			if (have_timer) {
+				when = timer ();
+			} else {
+				when = AudioEngine::instance()->sample_time_at_cycle_start() + timestamp;
+			}
+
+			input_fifo.write (when, Evoral::NO_EVENT, size, buf);
 		}
 
-		if (!mb.empty()) {
+		if (event_count) {
 			_xthread.wakeup ();
 		}
 
@@ -216,9 +231,14 @@ AsyncMIDIPort::write (const MIDI::byte * msg, size_t msglen, MIDI::timestamp_t t
 		 * delivered
 		 */
 
+		std::shared_ptr<MIDI::Parser> tp (trace_parser());
+
 		_parser->set_timestamp (AudioEngine::instance()->sample_time() + timestamp);
 		for (size_t n = 0; n < msglen; ++n) {
 			_parser->scanner (msg[n]);
+			if (tp) {
+				tp->scanner (msg[n]);
+			}
 		}
 
 		Glib::Threads::Mutex::Lock lm (output_fifo_lock);
@@ -244,12 +264,14 @@ AsyncMIDIPort::write (const MIDI::byte * msg, size_t msglen, MIDI::timestamp_t t
 				vec.buf[0]->set_buffer (0, 0, true);
 			}
 			vec.buf[0]->set (msg, msglen, timestamp);
+			vec.buf[0]->set_event_type (Evoral::LIVE_MIDI_EVENT);
 		} else {
 			/* see comment in previous branch of if() statement */
 			if (!vec.buf[1]->owns_buffer()) {
 				vec.buf[1]->set_buffer (0, 0, true);
 			}
 			vec.buf[1]->set (msg, msglen, timestamp);
+			vec.buf[1]->set_event_type (Evoral::LIVE_MIDI_EVENT);
 		}
 
 		output_fifo.increment_write_idx (1);
@@ -284,7 +306,7 @@ AsyncMIDIPort::write (const MIDI::byte * msg, size_t msglen, MIDI::timestamp_t t
 				timestamp = _last_write_timestamp;
 			}
 
-			if (mb.push_back (timestamp, msglen, msg)) {
+			if (mb.push_back (timestamp, Evoral::LIVE_MIDI_EVENT, msglen, msg)) {
 				ret = msglen;
 				_last_write_timestamp = timestamp;
 
@@ -314,6 +336,10 @@ AsyncMIDIPort::read (MIDI::byte *, size_t)
 	Evoral::EventType type;
 	uint32_t size;
 	vector<MIDI::byte> buffer(input_fifo.capacity());
+
+	if (!is_process_thread()) {
+		(void) Temporal::TempoMap::fetch();
+	}
 
 	while (input_fifo.read (&time, &type, &size, &buffer[0])) {
 		_parser->set_timestamp (time);
@@ -345,4 +371,3 @@ AsyncMIDIPort::is_process_thread()
 {
 	return pthread_equal (pthread_self(), _process_thread);
 }
-

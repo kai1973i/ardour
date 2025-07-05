@@ -1,28 +1,27 @@
 /*
-    Copyright (C) 2003 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2003 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef _WIDGETS_FAST_METER_H_
 #define _WIDGETS_FAST_METER_H_
 
 #include <map>
-#include <boost/tuple/tuple.hpp>
-#include <boost/tuple/tuple_comparison.hpp>
+#include <tuple>
 #include <cairomm/pattern.h>
 #include "gtkmm2ext/cairo_widget.h"
 
@@ -96,6 +95,8 @@ private:
 	float current_user_level;
 	bool highlight;
 
+	uint32_t outline_color;
+
 	void vertical_expose (cairo_t*, cairo_rectangle_t*);
 	void vertical_size_request (GtkRequisition*);
 	void vertical_size_allocate (Gtk::Allocation&);
@@ -141,9 +142,9 @@ private:
 				|| (dim == rhs.dim && stp == rhs.stp && cols < rhs.cols)
 				|| (dim == rhs.dim && stp == rhs.stp && cols == rhs.cols && style < rhs.style);
 		}
-		boost::tuple<int, int> dim;
-		boost::tuple<float, float, float, float> stp;
-		boost::tuple<int, int, int, int, int, int, int, int, int, int> cols;
+		std::tuple<int, int> dim;
+		std::tuple<float, float, float, float> stp;
+		std::tuple<int, int, int, int, int, int, int, int, int, int> cols;
 		int style;
 	};
 	typedef std::map<Pattern10MapKey, Cairo::RefPtr<Cairo::Pattern> > Pattern10Map;
@@ -157,8 +158,8 @@ private:
 		inline bool operator<(const PatternBgMapKey& rhs) const {
 			return (dim < rhs.dim) || (dim == rhs.dim && cols < rhs.cols) || (dim == rhs.dim && cols == rhs.cols && (sh && !rhs.sh));
 		}
-		boost::tuple<int, int> dim;
-		boost::tuple<int, int> cols;
+		std::tuple<int, int> dim;
+		std::tuple<int, int> cols;
 		bool sh;
 	};
 	typedef std::map<PatternBgMapKey, Cairo::RefPtr<Cairo::Pattern> > PatternBgMap;

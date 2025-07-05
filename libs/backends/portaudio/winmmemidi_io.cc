@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,9 +12,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <windows.h>
@@ -25,7 +26,6 @@
 
 #include "pbd/error.h"
 #include "pbd/compose.h"
-#include "pbd/windows_timer_utils.h"
 
 #include "winmmemidi_io.h"
 #include "debug.h"
@@ -136,7 +136,6 @@ WinMMEMidiIO::start ()
 	m_run = true;
 	DEBUG_MIDI ("Starting MIDI driver\n");
 
-	PBD::MMTIMERS::set_min_resolution();
 	discover();
 	start_devices ();
 }
@@ -155,8 +154,6 @@ WinMMEMidiIO::stop ()
 	pthread_mutex_lock (&m_device_lock);
 	cleanup ();
 	pthread_mutex_unlock (&m_device_lock);
-
-	PBD::MMTIMERS::reset_resolution();
 }
 
 void

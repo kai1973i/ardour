@@ -1,44 +1,50 @@
 /*
-	Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2017 Len Ovens <len@ovenwerks.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/box.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/treestore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/cellrenderercombo.h>
-#include <gtkmm/scale.h>
-#include <gtkmm/alignment.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/box.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/treestore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/cellrenderercombo.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/alignment.h>
 
 #include "pbd/error.h"
 #include "pbd/unwind.h"
 #include "pbd/strsplit.h"
-#include "pbd/stacktrace.h"
+#include "pbd/file_utils.h"
 
 #include "gtkmm2ext/actions.h"
+#include "gtkmm2ext/action_model.h"
 #include "gtkmm2ext/bindings.h"
 #include "gtkmm2ext/gui_thread.h"
 #include "gtkmm2ext/utils.h"
 
 #include "ardour/audioengine.h"
+#include "ardour/filesystem_paths.h"
 #include "ardour/port.h"
 #include "ardour/rc_configuration.h"
 
@@ -53,7 +59,7 @@
 using namespace std;
 using namespace Gtk;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 void*
 MackieControlProtocol::get_gui () const
@@ -88,17 +94,19 @@ MackieControlProtocol::build_gui ()
 MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	: _cp (p)
 	, table (2, 9)
+	, action_model (ActionManager::ActionModel::instance ())
 	, touch_sensitivity_adjustment (0, 0, 9, 1, 4)
 	, touch_sensitivity_scale (touch_sensitivity_adjustment)
 	, recalibrate_fader_button (_("Recalibrate Faders"))
 	, ipmidi_base_port_adjustment (_cp.ipmidi_base(), 0, 32767, 1, 1000)
-	, discover_button (_("Discover Mackie Devices"))
 	, _device_dependent_widget (0)
 	, _ignore_profile_changed (false)
 	, ignore_active_change (false)
 {
 	Gtk::Label* l;
+#ifndef UF8
 	Gtk::Alignment* align;
+#endif
 	int row = 0;
 
 	set_border_width (12);
@@ -107,6 +115,17 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	table.set_col_spacings (6);
 	table.set_border_width (12);
 	table.set_homogeneous (false);
+#ifdef UF8
+	std::string data_file_path;
+	string name = "ssl-uf8-small.png";
+	PBD::Searchpath spath(ARDOUR::ardour_data_search_path());
+	spath.add_subdirectory_to_paths ("icons");
+	find_file (spath, name, data_file_path);
+	if (!data_file_path.empty()) {
+		image.set (data_file_path);
+		hpacker.pack_start (image, false, false);
+	}
+#endif
 
 	l = manage (new Gtk::Label (_("Device Type:")));
 	l->set_alignment (1.0, 0.5);
@@ -122,8 +141,12 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	Gtkmm2ext::set_popdown_strings (_surface_combo, surfaces);
 	_surface_combo.signal_changed().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::surface_combo_changed));
 
-	_cp.DeviceChanged.connect (device_change_connection, invalidator (*this), boost::bind (&MackieControlProtocolGUI::device_changed, this), gui_context());
-	_cp.ConnectionChange.connect (connection_change_connection, invalidator (*this), boost::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
+	_cp.DeviceChanged.connect (device_change_connection, invalidator (*this), std::bind (&MackieControlProtocolGUI::device_changed, this), gui_context());
+
+	/* catch future changes to connection state */
+	ARDOUR::AudioEngine::instance()->PortRegisteredOrUnregistered.connect (_port_connections, invalidator (*this), std::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
+	ARDOUR::AudioEngine::instance()->PortPrettyNameChanged.connect (_port_connections, invalidator (*this), std::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
+	_cp.ConnectionChange.connect (_port_connections, invalidator (*this), std::bind (&MackieControlProtocolGUI::connection_handler, this), gui_context());
 
 	ipmidi_base_port_adjustment.signal_value_changed().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::ipmidi_spinner_changed));
 
@@ -140,6 +163,7 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	table.attach (*_device_dependent_widget, 0, 12, row, row+1, AttachOptions(0), AttachOptions(0), 0, 0);
 	row++;
 
+#ifndef UF8
 	/* back to the boilerplate */
 
 	RadioButtonGroup rb_group = absolute_touch_mode_button.get_group();
@@ -197,11 +221,6 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	table.attach (recalibrate_fader_button, 1, 2, row, row+1, AttachOptions(FILL|EXPAND), AttachOptions (0));
 	row++;
 
-
-	table.attach (discover_button, 1, 2, row, row+1, AttachOptions(FILL|EXPAND), AttachOptions (0));
-	discover_button.signal_clicked().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::discover_clicked));
-	row++;
-
 	vector<string> profiles;
 
 	for (std::map<std::string,DeviceProfile>::iterator i = DeviceProfile::device_profiles.begin(); i != DeviceProfile::device_profiles.end(); ++i) {
@@ -213,8 +232,11 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	_profile_combo.set_active_text (p.device_profile().name());
 	_profile_combo.signal_changed().connect (sigc::mem_fun (*this, &MackieControlProtocolGUI::profile_combo_changed));
 
-	append_page (table, _("Device Setup"));
-	table.show_all();
+#endif
+	hpacker.pack_start(table, false, false);
+	append_page (hpacker, _("Device Setup"));
+	hpacker.show_all();
+
 
 	/* function key editor */
 
@@ -239,7 +261,6 @@ MackieControlProtocolGUI::MackieControlProtocolGUI (MackieControlProtocol& p)
 	function_key_scroller.add (function_key_editor);
 	append_page (*fkey_packer, _("Function Keys"));
 
-	build_available_action_menu ();
 	build_function_key_editor ();
 	refresh_function_key_editor ();
 	fkey_packer->show_all();
@@ -266,7 +287,7 @@ MackieControlProtocolGUI::connection_handler ()
 
 	for (ic = input_combos.begin(), oc = output_combos.begin(); ic != input_combos.end() && oc != output_combos.end(); ++ic, ++oc) {
 
-		boost::shared_ptr<Surface> surface = _cp.get_surface_by_raw_pointer ((*ic)->get_data ("surface"));
+		std::shared_ptr<MACKIE_NAMESPACE::Surface> surface = _cp.get_surface_by_raw_pointer ((*ic)->get_data ("surface"));
 
 		if (surface) {
 			update_port_combos (midi_inputs, midi_outputs, *ic, *oc, surface);
@@ -278,7 +299,7 @@ void
 MackieControlProtocolGUI::update_port_combos (vector<string> const& midi_inputs, vector<string> const& midi_outputs,
                                               Gtk::ComboBox* input_combo,
                                               Gtk::ComboBox* output_combo,
-                                              boost::shared_ptr<Surface> surface)
+                                              std::shared_ptr<MACKIE_NAMESPACE::Surface> surface)
 {
 	Glib::RefPtr<Gtk::ListStore> input = build_midi_port_list (midi_inputs, true);
 	Glib::RefPtr<Gtk::ListStore> output = build_midi_port_list (midi_outputs, false);
@@ -362,11 +383,11 @@ MackieControlProtocolGUI::device_dependent_widget ()
 
 		for (uint32_t n = 0; n < n_surfaces; ++n) {
 
-			boost::shared_ptr<Surface> surface = _cp.nth_surface (n);
+			std::shared_ptr<MACKIE_NAMESPACE::Surface> surface = _cp.nth_surface (n);
 
 			if (!surface) {
 				PBD::fatal << string_compose (_("programming error: %1\n"), string_compose ("n=%1 surface not found!", n)) << endmsg;
-				/*NOTREACHED*/
+				abort (); /*NOTREACHED*/
 			}
 
 			Gtk::ComboBox* input_combo = manage (new Gtk::ComboBox);
@@ -381,7 +402,7 @@ MackieControlProtocolGUI::device_dependent_widget ()
 			output_combo->set_data ("surface", surface.get());
 			output_combos.push_back (output_combo);
 
-			boost::weak_ptr<Surface> ws (surface);
+			std::weak_ptr<MACKIE_NAMESPACE::Surface> ws (surface);
 			input_combo->signal_changed().connect (sigc::bind (sigc::mem_fun (*this, &MackieControlProtocolGUI::active_port_changed), input_combo, ws, true));
 			output_combo->signal_changed().connect (sigc::bind (sigc::mem_fun (*this, &MackieControlProtocolGUI::active_port_changed), output_combo, ws, false));
 
@@ -436,122 +457,9 @@ MackieControlProtocolGUI::make_action_renderer (Glib::RefPtr<TreeStore> model, G
 	renderer->property_editable() = true;
 	renderer->property_text_column() = 0;
 	renderer->property_has_entry() = false;
-	renderer->signal_edited().connect (sigc::bind (sigc::mem_fun(*this, &MackieControlProtocolGUI::action_changed), column));
+	renderer->signal_changed().connect (sigc::bind (sigc::mem_fun(*this, &MackieControlProtocolGUI::action_changed), column));
 
 	return renderer;
-}
-
-void
-MackieControlProtocolGUI::build_available_action_menu ()
-{
-	/* build a model of all available actions (needs to be tree structured
-	 * more)
-	 */
-
-	available_action_model = TreeStore::create (available_action_columns);
-
-	vector<string> paths;
-	vector<string> labels;
-	vector<string> tooltips;
-	vector<string> keys;
-	vector<Glib::RefPtr<Gtk::Action> > actions;
-
-	typedef std::map<string,TreeIter> NodeMap;
-	NodeMap nodes;
-	NodeMap::iterator r;
-
-	Gtkmm2ext::ActionMap::get_all_actions (paths, labels, tooltips, keys, actions);
-
-	vector<string>::iterator k;
-	vector<string>::iterator p;
-	vector<string>::iterator t;
-	vector<string>::iterator l;
-
-	available_action_model->clear ();
-
-	/* Because there are button bindings built in that are not
-	   in the key binding map, there needs to be a way to undo
-	   a profile edit.
-	*/
-	TreeIter rowp;
-	TreeModel::Row parent;
-	rowp = available_action_model->append();
-	parent = *(rowp);
-	parent[available_action_columns.name] = _("Remove Binding");
-
-	/* Key aliasing */
-
-	rowp = available_action_model->append();
-	parent = *(rowp);
-	parent[available_action_columns.name] = _("Shift");
-	rowp = available_action_model->append();
-	parent = *(rowp);
-	parent[available_action_columns.name] = _("Control");
-	rowp = available_action_model->append();
-	parent = *(rowp);
-	parent[available_action_columns.name] = _("Option");
-	rowp = available_action_model->append();
-	parent = *(rowp);
-	parent[available_action_columns.name] = _("CmdAlt");
-
-	for (l = labels.begin(), k = keys.begin(), p = paths.begin(), t = tooltips.begin(); l != labels.end(); ++k, ++p, ++t, ++l) {
-
-		TreeModel::Row row;
-		vector<string> parts;
-
-		parts.clear ();
-
-		split (*p, parts, '/');
-
-		if (parts.empty()) {
-			continue;
-		}
-
-		//kinda kludgy way to avoid displaying menu items as mappable
-		if ( parts[1] == _("Main_menu") )
-			continue;
-		if ( parts[1] == _("JACK") )
-			continue;
-		if ( parts[1] == _("redirectmenu") )
-			continue;
-		if ( parts[1] == _("Editor_menus") )
-			continue;
-		if ( parts[1] == _("RegionList") )
-			continue;
-		if ( parts[1] == _("ProcessorMenu") )
-			continue;
-
-		if ((r = nodes.find (parts[1])) == nodes.end()) {
-
-			/* top level is missing */
-
-			TreeIter rowp;
-			TreeModel::Row parent;
-			rowp = available_action_model->append();
-			nodes[parts[1]] = rowp;
-			parent = *(rowp);
-			parent[available_action_columns.name] = parts[1];
-
-			row = *(available_action_model->append (parent.children()));
-
-		} else {
-
-			row = *(available_action_model->append ((*r->second)->children()));
-
-		}
-
-		/* add this action */
-
-		if (l->empty ()) {
-			row[available_action_columns.name] = *t;
-			action_map[*t] = *p;
-		} else {
-			row[available_action_columns.name] = *l;
-			action_map[*l] = *p;
-		}
-
-		row[available_action_columns.path] = (*p);
-	}
 }
 
 void
@@ -562,32 +470,32 @@ MackieControlProtocolGUI::build_function_key_editor ()
 	TreeViewColumn* col;
 	CellRendererCombo* renderer;
 
-	renderer = make_action_renderer (available_action_model, function_key_columns.plain);
+	renderer = make_action_renderer (action_model.model(), function_key_columns.plain);
 	col = manage (new TreeViewColumn (_("Plain"), *renderer));
 	col->add_attribute (renderer->property_text(), function_key_columns.plain);
 	function_key_editor.append_column (*col);
 
-	renderer = make_action_renderer (available_action_model, function_key_columns.shift);
+	renderer = make_action_renderer (action_model.model(), function_key_columns.shift);
 	col = manage (new TreeViewColumn (_("Shift"), *renderer));
 	col->add_attribute (renderer->property_text(), function_key_columns.shift);
 	function_key_editor.append_column (*col);
 
-	renderer = make_action_renderer (available_action_model, function_key_columns.control);
+	renderer = make_action_renderer (action_model.model(), function_key_columns.control);
 	col = manage (new TreeViewColumn (_("Control"), *renderer));
 	col->add_attribute (renderer->property_text(), function_key_columns.control);
 	function_key_editor.append_column (*col);
 
-	renderer = make_action_renderer (available_action_model, function_key_columns.option);
+	renderer = make_action_renderer (action_model.model(), function_key_columns.option);
 	col = manage (new TreeViewColumn (_("Option"), *renderer));
 	col->add_attribute (renderer->property_text(), function_key_columns.option);
 	function_key_editor.append_column (*col);
 
-	renderer = make_action_renderer (available_action_model, function_key_columns.cmdalt);
+	renderer = make_action_renderer (action_model.model(), function_key_columns.cmdalt);
 	col = manage (new TreeViewColumn (_("Cmd/Alt"), *renderer));
 	col->add_attribute (renderer->property_text(), function_key_columns.cmdalt);
 	function_key_editor.append_column (*col);
 
-	renderer = make_action_renderer (available_action_model, function_key_columns.shiftcontrol);
+	renderer = make_action_renderer (action_model.model(), function_key_columns.shiftcontrol);
 	col = manage (new TreeViewColumn (_("Shift+Control"), *renderer));
 	col->add_attribute (renderer->property_text(), function_key_columns.shiftcontrol);
 	function_key_editor.append_column (*col);
@@ -606,15 +514,15 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 
 	TreeModel::Row row;
 	DeviceProfile dp (_cp.device_profile());
-	DeviceInfo di;
+	DeviceInfo di (_cp.device_info());
 
-	for (int n = 0; n < Mackie::Button::FinalGlobalButton; ++n) {
+	for (int n = 0; n < MACKIE_NAMESPACE::Button::FinalGlobalButton; ++n) {
 
-		Mackie::Button::ID bid = (Mackie::Button::ID) n;
+		MACKIE_NAMESPACE::Button::ID bid = (MACKIE_NAMESPACE::Button::ID) n;
 
 		row = *(function_key_model->append());
 		if (di.global_buttons().find (bid) == di.global_buttons().end()) {
-			row[function_key_columns.name] = Mackie::Button::id_to_name (bid);
+			row[function_key_columns.name] = MACKIE_NAMESPACE::Button::id_to_name (bid);
 		} else {
 			row[function_key_columns.name] = di.get_global_button_name (bid) + "*";
 		}
@@ -622,13 +530,13 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 
 		Glib::RefPtr<Gtk::Action> act;
 		string action;
-		const string defstring = "\u2022";
+		const string defstring = u8"\u2022";
 
 		/* We only allow plain bindings for Fn keys. All others are
 		 * reserved for hard-coded actions.
 		 */
 
-		if (bid >= Mackie::Button::F1 && bid <= Mackie::Button::F8) {
+		if (bid >= MACKIE_NAMESPACE::Button::F1 && bid <= MACKIE_NAMESPACE::Button::F8) {
 
 			action = dp.get_button_action (bid, 0);
 			if (action.empty()) {
@@ -639,7 +547,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 					row[function_key_columns.plain] = action;
 				} else {
 
-					act = ActionManager::get_action (action.c_str());
+					act = ActionManager::get_action (action, false);
 					if (act) {
 						row[function_key_columns.plain] = act->get_label();
 					} else {
@@ -653,7 +561,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 		 * reserved for hard-coded actions.
 		 */
 
-		if (bid >= Mackie::Button::F1 && bid <= Mackie::Button::F8) {
+		if (bid >= MACKIE_NAMESPACE::Button::F1 && bid <= MACKIE_NAMESPACE::Button::F8) {
 
 			action = dp.get_button_action (bid, MackieControlProtocol::MODIFIER_SHIFT);
 			if (action.empty()) {
@@ -663,7 +571,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 					/* Probably a key alias */
 					row[function_key_columns.shift] = action;
 				} else {
-					act = ActionManager::get_action (action.c_str());
+					act = ActionManager::get_action (action, false);
 					if (act) {
 						row[function_key_columns.shift] = act->get_label();
 					} else {
@@ -681,7 +589,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 				/* Probably a key alias */
 				row[function_key_columns.control] = action;
 			} else {
-				act = ActionManager::get_action (action.c_str());
+				act = ActionManager::get_action (action, false);
 				if (act) {
 					row[function_key_columns.control] = act->get_label();
 				} else {
@@ -698,7 +606,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 				/* Probably a key alias */
 				row[function_key_columns.option] = action;
 			} else {
-				act = ActionManager::get_action (action.c_str());
+				act = ActionManager::get_action (action, false);
 				if (act) {
 					row[function_key_columns.option] = act->get_label();
 				} else {
@@ -715,7 +623,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 				/* Probably a key alias */
 				row[function_key_columns.cmdalt] = action;
 			} else {
-				act = ActionManager::get_action (action.c_str());
+				act = ActionManager::get_action (action, false);
 				if (act) {
 					row[function_key_columns.cmdalt] = act->get_label();
 				} else {
@@ -728,7 +636,7 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 		if (action.empty()) {
 			row[function_key_columns.shiftcontrol] = defstring;
 		} else {
-			act = ActionManager::get_action (action.c_str());
+			act = ActionManager::get_action (action, false);
 			if (act) {
 				row[function_key_columns.shiftcontrol] = act->get_label();
 			} else {
@@ -741,26 +649,31 @@ MackieControlProtocolGUI::refresh_function_key_editor ()
 }
 
 void
-MackieControlProtocolGUI::action_changed (const Glib::ustring &sPath, const Glib::ustring &text, TreeModelColumnBase col)
+MackieControlProtocolGUI::action_changed (const Glib::ustring &sPath, const TreeModel::iterator & iter, TreeModelColumnBase col)
 {
+	string action_path = (*iter)[action_model.columns().path];
+
 	// Remove Binding is not in the action map but still valid
-	bool remove (false);
-	if ( text == "Remove Binding") {
+
+	bool remove = false;
+
+	if (action_path == "Remove Binding") {
 		remove = true;
 	}
+
 	Gtk::TreePath path(sPath);
 	Gtk::TreeModel::iterator row = function_key_model->get_iter(path);
 
 	if (row) {
 
-		std::map<std::string,std::string>::iterator i = action_map.find (text);
+		Glib::RefPtr<Gtk::Action> act = ActionManager::get_action (action_path, false);
 
-		if (i == action_map.end()) {
+		if (!act) {
+			cerr << action_path << " not found in action map\n";
 			if (!remove) {
 				return;
 			}
 		}
-		Glib::RefPtr<Gtk::Action> act = ActionManager::get_action (i->second.c_str());
 
 		if (act || remove) {
 			/* update visible text, using string supplied by
@@ -768,10 +681,10 @@ MackieControlProtocolGUI::action_changed (const Glib::ustring &sPath, const Glib
 			   within the model.
 			*/
 			if (remove) {
-				Glib::ustring dot = "\u2022";
+				Glib::ustring dot = u8"\u2022";
 				(*row).set_value (col.index(), dot);
 			} else {
-				(*row).set_value (col.index(), text);
+				(*row).set_value (col.index(), act->get_label());
 			}
 
 			/* update the current DeviceProfile, using the full
@@ -800,10 +713,11 @@ MackieControlProtocolGUI::action_changed (const Glib::ustring &sPath, const Glib
 				modifier = 0;
 			}
 
+			int id = (*row)[function_key_columns.id];
 			if (remove) {
-				_cp.device_profile().set_button_action ((*row)[function_key_columns.id], modifier, "");
+				_cp.device_profile().set_button_action ((Button::ID)id, modifier, "");
 			} else {
-				_cp.device_profile().set_button_action ((*row)[function_key_columns.id], modifier, i->second);
+				_cp.device_profile().set_button_action ((Button::ID)id, modifier, action_path);
 			}
 
 			_ignore_profile_changed = true;
@@ -834,6 +748,8 @@ MackieControlProtocolGUI::device_changed ()
 	_device_dependent_widget->show_all ();
 
 	table.attach (*_device_dependent_widget, 0, 12, device_dependent_row, device_dependent_row+1, AttachOptions(0), AttachOptions(0), 0, 0);
+
+	refresh_function_key_editor ();
 }
 
 void
@@ -852,13 +768,6 @@ void
 MackieControlProtocolGUI::ipmidi_spinner_changed ()
 {
 	_cp.set_ipmidi_base ((int16_t) lrintf (ipmidi_base_port_adjustment.get_value()));
-}
-
-void
-MackieControlProtocolGUI::discover_clicked ()
-{
-	/* this should help to get things started */
-	_cp.ping_devices ();
 }
 
 void
@@ -904,13 +813,13 @@ MackieControlProtocolGUI::build_midi_port_list (vector<string> const & ports, bo
 }
 
 void
-MackieControlProtocolGUI::active_port_changed (Gtk::ComboBox* combo, boost::weak_ptr<Surface> ws, bool for_input)
+MackieControlProtocolGUI::active_port_changed (Gtk::ComboBox* combo, std::weak_ptr<MACKIE_NAMESPACE::Surface> ws, bool for_input)
 {
 	if (ignore_active_change) {
 		return;
 	}
 
-	boost::shared_ptr<Surface> surface = ws.lock();
+	std::shared_ptr<MACKIE_NAMESPACE::Surface> surface = ws.lock();
 
 	if (!surface) {
 		return;

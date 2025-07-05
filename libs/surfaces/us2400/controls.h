@@ -1,21 +1,20 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-	Copyright (C) 2012 Paul Davis
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __us2400_controls_h__
 #define __us2400_controls_h__
@@ -25,8 +24,6 @@
 #include <string>
 #include <stdint.h>
 
-#include <boost/smart_ptr.hpp>
-
 #include "pbd/controllable.h"
 #include "pbd/signals.h"
 
@@ -35,6 +32,10 @@
 
 namespace ARDOUR {
 	class AutomationControl;
+}
+
+namespace Temporal {
+	class timepos_t;
 }
 
 namespace ArdourSurface {
@@ -67,8 +68,8 @@ public:
 	 */
 	Control* in_use_touch_control;
 
-	boost::shared_ptr<ARDOUR::AutomationControl> control () const { return normal_ac; }
-	virtual void set_control (boost::shared_ptr<ARDOUR::AutomationControl>);
+	std::shared_ptr<ARDOUR::AutomationControl> control () const { return normal_ac; }
+	virtual void set_control (std::shared_ptr<ARDOUR::AutomationControl>);
 	virtual void reset_control () { normal_ac.reset(); } 
 
 	virtual void mark_dirty() = 0;
@@ -76,11 +77,11 @@ public:
 	float get_value ();
 	void set_value (float val, PBD::Controllable::GroupControlDisposition gcd = PBD::Controllable::UseGroup);
 
-	virtual void start_touch (double when);
-	virtual void stop_touch (double when);
+	virtual void start_touch (Temporal::timepos_t const & when);
+	virtual void stop_touch (Temporal::timepos_t const & when);
 
   protected:
-	boost::shared_ptr<ARDOUR::AutomationControl> normal_ac;
+	std::shared_ptr<ARDOUR::AutomationControl> normal_ac;
 
   private:
 	int _id; /* possibly device-dependent ID */

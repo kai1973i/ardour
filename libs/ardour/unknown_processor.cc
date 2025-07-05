@@ -1,23 +1,30 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2022 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+#include "pbd/types_convert.h"
+#include "pbd/xml++.h"
 
 #include "ardour/audio_buffer.h"
+#include "ardour/sidechain.h"
+#include "ardour/io.h"
+#include "ardour/types_convert.h"
 #include "ardour/unknown_processor.h"
 
 #include "pbd/i18n.h"
@@ -25,16 +32,48 @@
 using namespace std;
 using namespace ARDOUR;
 
-UnknownProcessor::UnknownProcessor (Session& s, XMLNode const & state)
-	: Processor (s, "")
+static std::string
+proc_type_map (std::string const& str)
+{
+	/* compare to PluginInsert::set_state */
+	if (str == X_("ladspa") || str == X_("Ladspa")) { /* handle old school sessions */
+		return "LV1";
+	} else if (str == X_("lv2")) {
+		return "LV2";
+	} else if (str == X_("windows-vst")) {
+		return "VST2";
+	} else if (str == X_("lxvst")) {
+		return "VST2";
+	} else if (str == X_("mac-vst")) {
+		return "VST2";
+	} else if (str == X_("audiounit")) {
+		return "AU";
+	} else if (str == X_("luaproc")) {
+		return "Lua";
+	} else if (str == X_("vst3")) {
+		return "VST3";
+	} else {
+		return str;
+  }
+}
+
+UnknownProcessor::UnknownProcessor (Session&s, XMLNode const &state, SessionObject* o)
+	: Processor (s, "", Temporal::TimeDomainProvider (Temporal::AudioTime))
 	, _state (state)
 	, have_ioconfig (false)
 	, saved_input (0)
 	, saved_output (0)
 {
-	XMLProperty const * prop = state.property (X_("name"));
-	if (prop) {
-		set_name (prop->value ());
+	set_owner (o);
+
+	XMLProperty const* pname = state.property (X_("name"));
+	if (pname) {
+		XMLProperty const* ptype = state.property (X_("type"));
+		if (ptype) {
+			set_name (string_compose ("%1 (%2)", pname->value (), proc_type_map (ptype->value ())));
+		} else {
+			set_name (pname->value ());
+		}
 		_display_to_user = true;
 	}
 
@@ -49,6 +88,13 @@ UnknownProcessor::UnknownProcessor (Session& s, XMLNode const & state)
 			have_io |= 2;
 			saved_output = new ChanCount(**i);
 		}
+
+		/* sidechain is a Processor (IO)
+		 * add a SC port to retain connections
+		 */
+		if ((*i)->name () ==  Processor::state_node_name) {
+			add_sidechain_from_xml (**i, Stateful::loading_state_version);
+		}
 	}
 	have_ioconfig = (have_io == 3);
 }
@@ -59,7 +105,7 @@ UnknownProcessor::~UnknownProcessor () {
 }
 
 XMLNode &
-UnknownProcessor::state ()
+UnknownProcessor::state () const
 {
 	return *(new XMLNode (_state));
 }
@@ -120,4 +166,43 @@ UnknownProcessor::run (BufferSet& bufs, samplepos_t /*start_sample*/, samplepos_
 	for (uint32_t i = saved_input->n_audio(); i < saved_output->n_audio(); ++i) {
 		bufs.get_audio (i).silence (nframes);
 	}
+}
+
+void
+UnknownProcessor::add_sidechain_from_xml (const XMLNode& node, int version)
+{
+	if (version < 3000) {
+		return;
+	}
+
+	XMLNodeList nlist = node.children();
+
+	if (nlist.size() == 0) {
+		return;
+	}
+
+	uint32_t n_audio = 0;
+	uint32_t n_midi = 0;
+
+	XMLNodeConstIterator it = nlist.front()->children().begin();
+	for ( ; it != nlist.front()->children().end(); ++ it) {
+		if ((*it)->name() == "Port") {
+			DataType type (DataType::NIL);
+			(*it)->get_property ("type", type);
+			if (type == DataType::AUDIO) {
+				++n_audio;
+			} else if (type == DataType::MIDI) {
+				++n_midi;
+			}
+		}
+	}
+
+	_sidechain.reset (new SideChain (_session, "toBeRenamed"));
+	for (uint32_t n = 0; n < n_audio; ++n) {
+		_sidechain->input()->add_port ("", owner(), DataType::AUDIO); // add a port, don't connect.
+	}
+	for (uint32_t n = 0; n < n_midi; ++n) {
+		_sidechain->input()->add_port ("", owner(), DataType::MIDI); // add a port, don't connect.
+	}
+	_sidechain->set_state (node, version);
 }

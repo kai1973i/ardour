@@ -1,3 +1,21 @@
+/*
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
 #include <iostream>
 #include <cstdlib>
 #include <getopt.h>
@@ -42,8 +60,8 @@ trim_state_for_mixer_copy (Session*s, XMLNode& node)
 					(*i)->set_property ("type", "dangling-aux-send");
 					continue;
 				}
-				boost::shared_ptr<Route> r = s->route_by_name (target->value ());
-				if (!r || boost::dynamic_pointer_cast<Track> (r)) {
+				std::shared_ptr<Route> r = s->route_by_name (target->value ());
+				if (!r || std::dynamic_pointer_cast<Track> (r)) {
 					(*i)->set_property ("type", "dangling-aux-send");
 					continue;
 				}
@@ -83,7 +101,7 @@ trim_state_for_mixer_copy (Session*s, XMLNode& node)
 }
 
 static void
-copy_mixer_settings (Session*s, boost::shared_ptr<Route> dst, XMLNode& state)
+copy_mixer_settings (Session*s, std::shared_ptr<Route> dst, XMLNode& state)
 {
 	PBD::Stateful::ForceIDRegeneration force_ids;
 
@@ -118,15 +136,14 @@ copy_session_routes (
 	}
 
 	/* get route state from first session */
-	boost::shared_ptr<RouteList> rl = s->get_routes ();
-	for (RouteList::iterator i = rl->begin (); i != rl->end (); ++i) {
-		boost::shared_ptr<Route> r = *i;
-		if (r->is_master () || r->is_monitor () || r->is_auditioner ()) {
+	std::shared_ptr<RouteList const> rl = s->get_routes ();
+	for (auto const& r : *rl) {
+		if (r->is_singleton () || r->is_auditioner ()) {
 			continue;
 		}
 		XMLNode& state (r->get_state ());
 		routestate[r->name ()] = &state;
-		if (boost::dynamic_pointer_cast<Track> (r)) {
+		if (std::dynamic_pointer_cast<Track> (r)) {
 			continue;
 		}
 		buslist[r->name ()] = &state;
@@ -159,25 +176,24 @@ copy_session_routes (
 	 * setup internal return targets.
 	 */
 	rl = s->get_routes ();
-	for (RouteList::iterator i = rl->begin (); i != rl->end (); ++i) {
-		boost::shared_ptr<Route> r = *i;
+	for (auto const& r : *rl) {
 		/* skip special busses */
-		if (r->is_master () || r->is_monitor () || r->is_auditioner ()) {
+		if (r->is_singleton () || r->is_auditioner ()) {
 			continue;
 		}
-		if (boost::dynamic_pointer_cast<Track> (r)) {
+		if (std::dynamic_pointer_cast<Track> (r)) {
 			continue;
 		}
 		/* find matching route by name */
 		std::map<std::string,XMLNode*>::iterator it = routestate.find (r->name ());
 		if (it == routestate.end ()) {
 			if (opt_verbose) {
-				printf (" -- no match for '%s'\n", (*i)->name ().c_str ());
+				printf (" -- no match for '%s'\n", r->name ().c_str ());
 			}
 			continue;
 		}
 		if (opt_verbose) {
-			printf ("-- found match '%s'\n", (*i)->name ().c_str ());
+			printf ("-- found match '%s'\n", r->name ().c_str ());
 		}
 		XMLNode *state = it->second;
 		// copy state
@@ -186,13 +202,12 @@ copy_session_routes (
 
 	/* iterate over all tracks in the target session.. */
 	rl = s->get_routes ();
-	for (RouteList::iterator i = rl->begin (); i != rl->end (); ++i) {
-		boost::shared_ptr<Route> r = *i;
+	for (auto const& r : *rl) {
 		/* skip special busses */
-		if (r->is_master () || r->is_monitor () || r->is_auditioner ()) {
+		if (r->is_singleton () || r->is_auditioner ()) {
 			continue;
 		}
-		if (!boost::dynamic_pointer_cast<Track> (r)) {
+		if (!std::dynamic_pointer_cast<Track> (r)) {
 			continue;
 		}
 
@@ -200,12 +215,12 @@ copy_session_routes (
 		std::map<std::string,XMLNode*>::iterator it = routestate.find (r->name ());
 		if (it == routestate.end ()) {
 			if (opt_verbose) {
-				printf (" -- no match for '%s'\n", (*i)->name ().c_str ());
+				printf (" -- no match for '%s'\n", r->name ().c_str ());
 			}
 			continue;
 		}
 		if (opt_verbose) {
-			printf ("-- found match '%s'\n", (*i)->name ().c_str ());
+			printf ("-- found match '%s'\n", r->name ().c_str ());
 		}
 		XMLNode *state = it->second;
 		/* copy state */
@@ -228,7 +243,7 @@ copy_session_routes (
 }
 
 
-static void usage (int status) {
+static void usage () {
 	// help2man compatible format (standard GNU help-text)
 	printf (UTILNAME " - copy mixer settings from one session to another.\n\n");
 	printf ("Usage: " UTILNAME " [ OPTIONS ] <src> <dst>\n\n");
@@ -247,12 +262,12 @@ static void usage (int status) {
 This utility copies mixer-settings from the src-session to the dst-session.\n\
 Both <src> and <dst> are paths to .ardour session files.\n\
 If --snapshot is not given, the <dst> session file is overwritten.\n\
-When --snapshot is set, a new snaphot in the <dst> session is created.\n\
+When --snapshot is set, a new snapshot in the <dst> session is created.\n\
 \n");
 
-	printf ("Report bugs to <http://tracker.ardour.org/>\n"
-	        "Website: <http://ardour.org/>\n");
-	::exit (status);
+	printf ("Report bugs to <https://tracker.ardour.org/>\n"
+	        "Website: <https://ardour.org/>\n");
+	::exit (EXIT_SUCCESS);
 }
 
 static bool ends_with (std::string const& value, std::string const& ending)
@@ -290,7 +305,7 @@ int main (int argc, char* argv[])
 				break;
 
 			case 'h':
-				usage (0);
+				usage ();
 				break;
 
 			case 'l':
@@ -304,7 +319,7 @@ int main (int argc, char* argv[])
 			case 'V':
 				printf ("ardour-utils version %s\n\n", VERSIONSTRING);
 				printf ("Copyright (C) GPL 2016 Robin Gareus <robin@gareus.org>\n");
-				exit (0);
+				exit (EXIT_SUCCESS);
 				break;
 
 			case 'v':
@@ -312,15 +327,17 @@ int main (int argc, char* argv[])
 				break;
 
 			default:
-					usage (EXIT_FAILURE);
-					break;
+				cerr << "Error: unrecognized option. See --help for usage information.\n";
+				::exit (EXIT_FAILURE);
+				break;
 		}
 	}
 
 	// TODO parse path/name  from a single argument.
 
 	if (optind + 2 > argc) {
-		usage (EXIT_FAILURE);
+		cerr << "Error: Missing parameter. See --help for usage information.\n";
+		::exit (EXIT_FAILURE);
 	}
 
 	std::string src = argv[optind];
@@ -330,19 +347,19 @@ int main (int argc, char* argv[])
 
 	if (!ends_with (src, statefile_suffix)) {
 		fprintf (stderr, "source is not a .ardour session file.\n");
-		exit (1);
+		exit (EXIT_FAILURE);
 	}
 	if (!ends_with (dst, statefile_suffix)) {
 		fprintf (stderr, "target is not a .ardour session file.\n");
-		exit (1);
+		exit (EXIT_FAILURE);
 	}
 	if (!Glib::file_test (src, Glib::FILE_TEST_IS_REGULAR)) {
 		fprintf (stderr, "source is not a regular file.\n");
-		exit (1);
+		exit (EXIT_FAILURE);
 	}
 	if (!Glib::file_test (dst, Glib::FILE_TEST_IS_REGULAR)) {
 		fprintf (stderr, "target is not a regular file.\n");
-		exit (1);
+		exit (EXIT_FAILURE);
 	}
 
 	std::string src_path = Glib::path_get_dirname (src);

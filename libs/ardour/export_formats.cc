@@ -1,22 +1,23 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2010 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/export_formats.h"
 
@@ -32,6 +33,13 @@ ExportFormat::has_sample_format ()
 {
 	return dynamic_cast<HasSampleFormat *> (this);
 }
+
+bool
+ExportFormat::has_codec_quality ()
+{
+	return dynamic_cast<HasCodecQuality *> (this);
+}
+
 
 bool
 ExportFormat::sample_format_is_compatible (SampleFormat format) const
@@ -59,12 +67,12 @@ HasSampleFormat::add_sample_format (ExportFormatBase::SampleFormat format)
 
 	SampleFormatPtr ptr (new SampleFormatState (format, get_sample_format_name (format)));
 	sample_format_states.push_back (ptr);
-	ptr->SelectChanged.connect_same_thread (*this, boost::bind (&HasSampleFormat::update_sample_format_selection, this, _1));
+	ptr->SelectChanged.connect_same_thread (*this, std::bind (&HasSampleFormat::update_sample_format_selection, this, _1));
 	// BOOST SIGNALS Could this be made any uglier?
 	ptr->SelectChanged.connect_same_thread (*this,
-		boost::bind (boost::type<void> (), boost::ref (SampleFormatSelectChanged), _1, WeakSampleFormatPtr (ptr)));
+		std::bind ( std::ref (SampleFormatSelectChanged), _1, WeakSampleFormatPtr (ptr)));
 	ptr->CompatibleChanged.connect_same_thread (*this,
-		boost::bind (boost::type<void> (), boost::ref (SampleFormatCompatibleChanged), _1, WeakSampleFormatPtr (ptr)));
+		std::bind ( std::ref (SampleFormatCompatibleChanged), _1, WeakSampleFormatPtr (ptr)));
 }
 
 void
@@ -72,12 +80,12 @@ HasSampleFormat::add_dither_type (ExportFormatBase::DitherType type, string name
 {
 	DitherTypePtr ptr (new DitherTypeState (type, name));
 	dither_type_states.push_back (ptr);
-	ptr->SelectChanged.connect_same_thread (*this, boost::bind (&HasSampleFormat::update_dither_type_selection, this, _1));
+	ptr->SelectChanged.connect_same_thread (*this, std::bind (&HasSampleFormat::update_dither_type_selection, this, _1));
 	// BOOST SIGNALS Could this be made any uglier?
 	ptr->SelectChanged.connect_same_thread (*this,
-		boost::bind (boost::type<void> (), boost::ref (DitherTypeSelectChanged), _1, WeakDitherTypePtr (ptr)));
+		std::bind ( std::ref (DitherTypeSelectChanged), _1, WeakDitherTypePtr (ptr)));
 	ptr->CompatibleChanged.connect_same_thread (*this,
-		boost::bind (boost::type<void> (),boost::ref ( DitherTypeCompatibleChanged), _1, WeakDitherTypePtr (ptr)));
+		std::bind (std::ref ( DitherTypeCompatibleChanged), _1, WeakDitherTypePtr (ptr)));
 }
 
 HasSampleFormat::SampleFormatPtr
@@ -171,6 +179,10 @@ HasSampleFormat::get_sample_format_name (ExportFormatBase::SampleFormat format)
 		return _("8-bit unsigned");
 	  case ExportFormatBase::SF_Vorbis:
 		return _("Vorbis sample format");
+	  case ExportFormatBase::SF_Opus:
+		return _("OPUS codec");
+	  case ExportFormatBase::SF_MPEG_LAYER_III:
+		return _("MPEG-2 Audio Layer III");
 	  case ExportFormatBase::SF_None:
 		return _("No sample format");
 	}
@@ -188,6 +200,7 @@ ExportFormatLinear::ExportFormatLinear (string name, FormatId format_id) :
 
 	add_sample_rate (SR_8);
 	add_sample_rate (SR_22_05);
+	add_sample_rate (SR_24);
 	add_sample_rate (SR_44_1);
 	add_sample_rate (SR_48);
 	add_sample_rate (SR_88_2);
@@ -216,7 +229,7 @@ ExportFormatLinear::set_compatibility_state (ExportFormatCompatibility const & c
 		compatible = false;
 	}
 
-	boost::shared_ptr<ExportFormatBase> intersection = get_intersection (compatibility);
+	std::shared_ptr<ExportFormatBase> intersection = get_intersection (compatibility);
 
 	if (intersection->endiannesses_empty()) {
 		compatible = false;
@@ -260,6 +273,7 @@ ExportFormatOggVorbis::ExportFormatOggVorbis ()
 	sample_formats.insert (SF_Vorbis);
 
 	add_sample_rate (SR_22_05);
+	add_sample_rate (SR_24);
 	add_sample_rate (SR_44_1);
 	add_sample_rate (SR_48);
 	add_sample_rate (SR_88_2);
@@ -267,6 +281,12 @@ ExportFormatOggVorbis::ExportFormatOggVorbis ()
 	add_sample_rate (SR_176_4);
 	add_sample_rate (SR_192);
 	add_sample_rate (SR_Session);
+
+	/* these are 100 vorbis_encode_init_vbr() quality */
+	add_codec_quality ("Low (0)",           0);
+	add_codec_quality ("Default (4)",      40);
+	add_codec_quality ("High (6)",         60);
+	add_codec_quality ("Very High (10)",  100);
 
 	add_endianness (E_FileDefault);
 
@@ -301,6 +321,7 @@ ExportFormatFLAC::ExportFormatFLAC () :
 	set_format_id (F_FLAC);
 
 	add_sample_rate (SR_22_05);
+	add_sample_rate (SR_24);
 	add_sample_rate (SR_44_1);
 	add_sample_rate (SR_48);
 	add_sample_rate (SR_88_2);
@@ -336,6 +357,7 @@ ExportFormatBWF::ExportFormatBWF () :
 	set_format_id (F_WAV);
 
 	add_sample_rate (SR_22_05);
+	add_sample_rate (SR_24);
 	add_sample_rate (SR_44_1);
 	add_sample_rate (SR_48);
 	add_sample_rate (SR_88_2);
@@ -364,5 +386,138 @@ ExportFormatBWF::set_compatibility_state (ExportFormatCompatibility const & comp
 	set_compatible (compatible);
 	return compatible;
 }
+
+
+/*** OPUS ***/
+
+ExportFormatOggOpus::ExportFormatOggOpus ()
+{
+	SF_INFO sf_info;
+	sf_info.channels = 2;
+	sf_info.samplerate = SR_48;
+	sf_info.format = F_Ogg | SF_Opus;
+	if (sf_format_check (&sf_info) != SF_TRUE) {
+		throw ExportFormatIncompatible();
+	}
+
+	set_name ("Ogg OPUS");
+	set_format_id (F_Ogg);
+	sample_formats.insert (SF_Opus);
+
+	add_sample_rate (SR_8);
+	add_sample_rate (SR_24);
+	add_sample_rate (SR_48);
+
+	/* libsndfile doesn't expose direct quality control,
+	 * bitrate = (((1.0 - quality) * (250000.0)) + 6000.0)
+	 */
+	add_codec_quality ("6 kb/s/channel",   0);
+	add_codec_quality ("32 kb/s/channel",  10); // 10.4
+	add_codec_quality ("64 kb/s/channel",  23); // 23.2
+	add_codec_quality ("96 kb/s/channel",  36);
+	add_codec_quality ("128 kb/s/channel", 49); // 48.8
+	add_codec_quality ("160 kb/s/channel", 61); // 61.6
+	add_codec_quality ("192 kb/s/channel", 74); // 74.42
+	add_codec_quality ("256 kb/s/channel", 100);
+
+	set_extension ("opus");
+	set_quality (Q_LossyCompression);
+}
+
+bool
+ExportFormatOggOpus::set_compatibility_state (ExportFormatCompatibility const& compatibility)
+{
+	bool compatible = compatibility.has_format (F_Ogg);
+	set_compatible (compatible);
+	return compatible;
+}
+
+/*** MPEG / MP3 ***/
+
+ExportFormatMPEG::ExportFormatMPEG (std::string const& name, std::string const& ext) :
+  HasSampleFormat (sample_formats)
+{
+	SF_INFO sf_info;
+	sf_info.channels = 2;
+	sf_info.samplerate = SR_44_1;
+	sf_info.format = F_MPEG | SF_MPEG_LAYER_III;
+	if (sf_format_check (&sf_info) != SF_TRUE) {
+		throw ExportFormatIncompatible();
+	}
+
+	set_name (name);
+	set_format_id (F_MPEG);
+	add_sample_format (SF_MPEG_LAYER_III);
+
+	add_endianness (E_FileDefault);
+
+	// libsndfile doesn't expose direct quality control - use these coarse approximations
+	add_codec_quality ("Low (0%)",            0);
+	add_codec_quality ("Default (40%)",      40);
+	add_codec_quality ("High (60%)",         60);
+	add_codec_quality ("Very High (100%)",  100);
+
+	set_extension (ext);
+	set_quality (Q_LossyCompression);
+}
+
+bool
+ExportFormatMPEG::set_compatibility_state (ExportFormatCompatibility const & compatibility)
+{
+	bool compatible = compatibility.has_format (F_MPEG);
+	set_compatible (compatible);
+	return compatible;
+}
+
+
+/*** FFMPEG Pipe ***/
+
+ExportFormatFFMPEG::ExportFormatFFMPEG (std::string const& name, std::string const& ext)
+{
+	set_name (name);
+	set_format_id (F_FFMPEG);
+	sample_formats.insert (SF_Float);
+
+	add_sample_rate (SR_8);
+	add_sample_rate (SR_22_05);
+	add_sample_rate (SR_24);
+	add_sample_rate (SR_44_1);
+	add_sample_rate (SR_48);
+	add_sample_rate (SR_Session);
+
+	add_endianness (E_Little);
+
+	add_codec_quality ("VBR 220-260 kb/s",  0);
+	add_codec_quality ("VBR 190-250 kb/s", -1);
+	add_codec_quality ("VBR 170-210 kb/s", -2);
+	add_codec_quality ("VBR 150-195 kb/s", -3);
+	add_codec_quality ("VBR 140-185 kb/s", -4);
+	add_codec_quality ("VBR 120-150 kb/s", -5);
+	add_codec_quality ("VBR 100-130 kb/s", -6);
+	add_codec_quality ("VBR 80-120 kb/s",  -7);
+	add_codec_quality ("VBR 70-105 kb/s",  -8);
+	add_codec_quality ("VBR 45-85 kb/s",   -9);
+	/*  Available CBR options are:
+	 *  8, 16, 24, 32, 40, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320
+	 */
+	add_codec_quality ("CBR  64 kb/s",     64);
+	add_codec_quality ("CBR 128 kb/s",    128);
+	add_codec_quality ("CBR 160 kb/s",    160);
+	add_codec_quality ("CBR 192 kb/s",    192);
+	add_codec_quality ("CBR 256 kb/s",    256);
+	add_codec_quality ("CBR 320 kb/s",    320);
+
+	set_extension (ext);
+	set_quality (Q_LossyCompression);
+}
+
+bool
+ExportFormatFFMPEG::set_compatibility_state (ExportFormatCompatibility const & compatibility)
+{
+	bool compatible = compatibility.has_format (F_FFMPEG);
+	set_compatible (compatible);
+	return compatible;
+}
+
 
 }; // namespace ARDOUR

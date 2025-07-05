@@ -1,27 +1,26 @@
 /*
-    Copyright (C) 2016 Paul Davis
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __ardour_phase_control_h__
-#define __ardour_phase_control_h__
-
+#include <memory>
 #include <string>
 
-#include <boost/shared_ptr.hpp>
 #include <boost/dynamic_bitset.hpp>
 
 #include "ardour/slavable_automation_control.h"
@@ -38,7 +37,7 @@ class Session;
 class LIBARDOUR_API PhaseControl : public AutomationControl
 {
   public:
-	PhaseControl (Session& session, std::string const & name);
+	PhaseControl (Session& session, std::string const & name, Temporal::TimeDomainProvider const &);
 
 	/* There are two approaches to designing/using a PhaseControl. One is
 	 * to have one such control for every channel of the control's
@@ -57,7 +56,7 @@ class LIBARDOUR_API PhaseControl : public AutomationControl
 	void resize (uint32_t);
 
 	int set_state (XMLNode const&, int);
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 
   protected:
 	void actually_set_value (double, PBD::Controllable::GroupControlDisposition group_override);
@@ -68,4 +67,3 @@ class LIBARDOUR_API PhaseControl : public AutomationControl
 
 } /* namespace */
 
-#endif /* __libardour_phase_control_h__ */

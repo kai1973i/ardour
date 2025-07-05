@@ -1,80 +1,109 @@
 /*
-  Copyright (C) 2010 Paul Davis
-  Author: Torben Hohn
+ * Copyright (C) 2010-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2017-2022 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
+#include "pbd/atomic.h"
 
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include "ardour/graph.h"
 #include "ardour/graphnode.h"
+#include "ardour/graph.h"
 #include "ardour/route.h"
 
 using namespace ARDOUR;
 
-GraphNode::GraphNode (boost::shared_ptr<Graph> graph)
-	: _graph(graph)
+GraphActivision::GraphActivision ()
+	: _activation_set (new ActivationMap)
+	, _init_refcount (new RefCntMap)
 {
 }
 
-GraphNode::~GraphNode()
+node_set_t const&
+GraphActivision::activation_set (GraphChain const* const g) const
 {
+	std::shared_ptr<ActivationMap const> m (_activation_set.reader ());
+	return m->at (g);
+}
+
+int
+GraphActivision::init_refcount (GraphChain const* const g) const
+{
+	std::shared_ptr<RefCntMap const> m (_init_refcount.reader ());
+	return m->at (g);
 }
 
 void
-GraphNode::prep (int chain)
+GraphActivision::flush_graph_activision_rcu ()
+{
+	_activation_set.flush ();
+}
+
+/* ****************************************************************************/
+
+GraphNode::GraphNode (std::shared_ptr<Graph> graph)
+	: _graph (graph)
+{
+	_refcount.store (0);
+}
+
+void
+GraphNode::prep (GraphChain const* chain)
 {
 	/* This is the number of nodes that directly feed us */
-	_refcount = _init_refcount[chain];
+	_refcount.store (init_refcount (chain));
 }
 
-/** Called by another node to tell us that one of the nodes that feed us
- *  has been processed.
- */
 void
-GraphNode::dec_ref()
+GraphNode::run (GraphChain const* chain)
 {
-	if (g_atomic_int_dec_and_test (&_refcount)) {
-		/* All the nodes that feed us are done, so we can queue this node
-		 * for processing.
-		 */
+	process ();
+	finish (chain);
+}
+
+/** Called by an upstream node, when it has completed processing */
+void
+GraphNode::trigger ()
+{
+	/* check if we can run */
+	if (PBD::atomic_dec_and_test (_refcount)) {
+#if 0 // TODO optimize: remove prep()
+		/* reset reference count for next cycle */
+		_refcount.store (_init_refcount[chain]);
+#endif
+		/* All nodes that feed this node have completed, so this node be processed now. */
 		_graph->trigger (this);
 	}
 }
 
 void
-GraphNode::finish (int chain)
+GraphNode::finish (GraphChain const* chain)
 {
 	node_set_t::iterator i;
-	bool feeds_somebody = false;
+	bool                 feeds = false;
 
-	/* Tell the nodes that we feed that we've finished */
-	for (i=_activation_set[chain].begin(); i!=_activation_set[chain].end(); i++) {
-		(*i)->dec_ref();
-		feeds_somebody = true;
+	/* Notify downstream nodes that depend on this node */
+	for (auto const& i : activation_set (chain)) {
+		i->trigger ();
+		feeds = true;
 	}
 
-	if (!feeds_somebody) {
-		/* This node does not feed anybody, so decrement the graph's finished count */
-		_graph->dec_ref();
+	if (!feeds) {
+		/* This node is a terminal node that does not feed another note,
+		 * so notify the graph to decrement the the finished count */
+		_graph->reached_terminal_node ();
 	}
-}
-
-
-void
-GraphNode::process()
-{
-	_graph->process_one_route (dynamic_cast<Route *>(this));
 }

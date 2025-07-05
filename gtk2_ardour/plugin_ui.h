@@ -1,24 +1,28 @@
 /*
-    Copyright (C) 2000-2006 Paul Davis
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2009 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2007-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_plugin_ui_h__
-#define __ardour_plugin_ui_h__
+#pragma once
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
@@ -30,20 +34,19 @@
 
 #include <sigc++/signal.h>
 
-#include <gtkmm/adjustment.h>
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/expander.h>
-#include <gtkmm/filechooserbutton.h>
-#include <gtkmm/image.h>
-#include <gtkmm/label.h>
-#include <gtkmm/menu.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/socket.h>
-#include <gtkmm/table.h>
-#include <gtkmm/togglebutton.h>
-#include <gtkmm/viewport.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/expander.h>
+#include <ytkmm/filechooserbutton.h>
+#include <ytkmm/image.h>
+#include <ytkmm/label.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/socket.h>
+#include <ytkmm/togglebutton.h>
+#include <ytkmm/viewport.h>
 
 #include "ardour/types.h"
 #include "ardour/plugin.h"
@@ -55,10 +58,11 @@
 
 #include "ardour_window.h"
 #include "automation_controller.h"
-#include "gtk_pianokeyboard.h"
+#include "pianokeyboard.h"
 
 namespace ARDOUR {
 	class PluginInsert;
+	class PlugInsertBase;
 	class Plugin;
 	class WindowsVSTPlugin;
 	class LXVSTPlugin;
@@ -75,15 +79,17 @@ namespace ArdourWidgets {
 	class FastMeter;
 }
 
-class LatencyGUI;
+class TimeCtlGUI;
 class ArdourWindow;
 class PluginEqGui;
+class PluginLoadStatsGui;
+class PluginPresetsUI;
 class VSTPluginUI;
 
 class PlugUIBase : public virtual sigc::trackable, public PBD::ScopedConnectionList
 {
 public:
-	PlugUIBase (boost::shared_ptr<ARDOUR::PluginInsert>);
+	PlugUIBase (std::shared_ptr<ARDOUR::PlugInsertBase>);
 	virtual ~PlugUIBase();
 
 	virtual gint get_preferred_height () = 0;
@@ -92,6 +98,9 @@ public:
 	virtual bool start_updating(GdkEventAny*) = 0;
 	virtual bool stop_updating(GdkEventAny*) = 0;
 
+	virtual bool is_external () const { return false; }
+	virtual bool is_external_visible () const { return false; }
+
 	virtual void activate () {}
 	virtual void deactivate () {}
 
@@ -99,6 +108,7 @@ public:
 	void update_preset ();
 
 	void latency_button_clicked ();
+	void tailtime_button_clicked ();
 
 	virtual bool on_window_show(const std::string& /*title*/) { return true; }
 	virtual void on_window_hide() {}
@@ -110,35 +120,44 @@ public:
 	sigc::signal<void,bool> KeyboardFocused;
 
 protected:
-	boost::shared_ptr<ARDOUR::PluginInsert> insert;
-	boost::shared_ptr<ARDOUR::Plugin> plugin;
+	std::shared_ptr<ARDOUR::PlugInsertBase> _pib;
+	std::shared_ptr<ARDOUR::PluginInsert> _pi;
+	std::shared_ptr<ARDOUR::Plugin> plugin;
 
-	/* UI elements that can subclasses can add to their widgets */
+	void add_common_widgets (Gtk::HBox*, bool with_focus = true);
+
+	/* UI elements that subclasses can add to their widgets */
 
 	/** a ComboBoxText which lists presets and manages their selection */
 	ArdourWidgets::ArdourDropdown _preset_combo;
 	/** a label which has a * in if the current settings are different from the preset being shown */
 	Gtk::Label _preset_modified;
 	/** a button to add a preset */
-	ArdourWidgets::ArdourButton add_button;
+	ArdourWidgets::ArdourButton _add_button;
 	/** a button to save the current settings as a new user preset */
-	ArdourWidgets::ArdourButton save_button;
+	ArdourWidgets::ArdourButton _save_button;
 	/** a button to delete the current preset (if it is a user one) */
-	ArdourWidgets::ArdourButton delete_button;
+	ArdourWidgets::ArdourButton _delete_button;
+	/** a button to show a preset browser */
+	ArdourWidgets::ArdourButton _preset_browser_button;
 	/** a button to delete the reset the plugin params */
-	ArdourWidgets::ArdourButton reset_button;
+	ArdourWidgets::ArdourButton _reset_button;
 	/** a button to bypass the plugin */
-	ArdourWidgets::ArdourButton bypass_button;
+	ArdourWidgets::ArdourButton _bypass_button;
 	/** and self-explaining button :) */
-	ArdourWidgets::ArdourButton pin_management_button;
+	ArdourWidgets::ArdourButton _pin_management_button;
 	/** a button to acquire keyboard focus */
-	Gtk::EventBox focus_button;
+	Gtk::EventBox _focus_button;
 	/** an expander containing the plugin description */
 	Gtk::Expander description_expander;
 	/** an expander containing the plugin analysis graph */
 	Gtk::Expander plugin_analysis_expander;
+	/** an expander containing the plugin cpu profile */
+	Gtk::Expander cpuload_expander;
 	/** a button which, when clicked, opens the latency GUI */
-	ArdourWidgets::ArdourButton latency_button;
+	ArdourWidgets::ArdourButton _latency_button;
+	/** a button which, when clicked, opens the tailtime GUI */
+	ArdourWidgets::ArdourButton _tailtime_button;
 	/** a button which sets all controls' automation setting to Manual */
 	ArdourWidgets::ArdourButton automation_manual_all_button;
 	/** a button which sets all controls' automation setting to Play */
@@ -151,14 +170,18 @@ protected:
 	ArdourWidgets::ArdourButton automation_latch_all_button;
 
 	void set_latency_label ();
-
-	LatencyGUI* latency_gui;
+	TimeCtlGUI*   latency_gui;
 	ArdourWindow* latency_dialog;
 
-	PluginEqGui* eqgui;
+	void set_tailtime_label ();
+	TimeCtlGUI*   tailtime_gui;
+	ArdourWindow* tailtime_dialog;
 
-	Gtk::Image* focus_out_image;
-	Gtk::Image* focus_in_image;
+	PluginEqGui* eqgui;
+	PluginLoadStatsGui* stats_gui;
+	PluginPresetsUI* preset_gui;
+	ArdourWindow* preset_dialog;
+
 	int _no_load_preset;
 
 	virtual void preset_selected (ARDOUR::Plugin::PresetRecord preset);
@@ -166,44 +189,55 @@ protected:
 	void save_plugin_setting ();
 	void delete_plugin_setting ();
 	void reset_plugin_parameters ();
+	void browse_presets ();
 	void manage_pins ();
 	bool focus_toggled(GdkEventButton*);
 	bool bypass_button_release(GdkEventButton*);
 	void toggle_description ();
 	void toggle_plugin_analysis ();
-	void processor_active_changed (boost::weak_ptr<ARDOUR::Processor> p);
+	void toggle_cpuload_display ();
+	void processor_active_changed (std::weak_ptr<ARDOUR::Processor> p);
 	void plugin_going_away ();
 	void automation_state_changed ();
 	void preset_added_or_removed ();
 	void update_preset_modified ();
+
+	bool has_descriptive_presets () const;
 
 	PBD::ScopedConnection death_connection;
 	PBD::ScopedConnection active_connection;
 	PBD::ScopedConnection preset_added_connection;
 	PBD::ScopedConnection preset_removed_connection;
 	PBD::ScopedConnectionList control_connections;
+
+private:
+	Gtk::Image* _focus_out_image;
+	Gtk::Image* _focus_in_image;
 };
 
 class GenericPluginUI : public PlugUIBase, public Gtk::VBox
 {
 public:
-	GenericPluginUI (boost::shared_ptr<ARDOUR::PluginInsert> plug, bool scrollable=false);
+	GenericPluginUI (std::shared_ptr<ARDOUR::PlugInsertBase> plug, bool scrollable = false, bool ctrls_only = false);
 	~GenericPluginUI ();
 
 	gint get_preferred_height () { return prefheight; }
 	gint get_preferred_width () { return -1; }
+	bool empty () const { return _empty; }
 
 	bool start_updating(GdkEventAny*);
 	bool stop_updating(GdkEventAny*);
 
 private:
 	Gtk::VBox main_contents;
-	Gtk::HBox settings_box;
+	Gtk::VBox settings_box;
 	Gtk::HBox hpacker;
 	Gtk::Menu* automation_menu;
 
 	gint prefheight;
 	bool is_scrollable;
+	bool want_ctrl_only;
+	bool _empty;
 
 	struct MeterInfo {
 		ArdourWidgets::FastMeter* meter;
@@ -221,12 +255,12 @@ private:
 		const Evoral::Parameter parameter() const { return param; }
 
 		Evoral::Parameter                            param;
-		boost::shared_ptr<ARDOUR::AutomationControl> control;
+		std::shared_ptr<ARDOUR::AutomationControl> control;
 
 		/* input */
 
-		boost::shared_ptr<ARDOUR::ScalePoints>  scale_points;
-		boost::shared_ptr<AutomationController> controller;
+		std::shared_ptr<ARDOUR::ScalePoints>  scale_points;
+		std::shared_ptr<AutomationController> controller;
 
 		ArdourWidgets::ArdourButton             automate_button;
 		Gtk::Label                              label;
@@ -251,10 +285,6 @@ private:
 		ControlUI (const Evoral::Parameter& param);
 		~ControlUI ();
 
-		/* layout */
-		Gtk::Table* knobtable;
-		int x0, x1, y0, y1;
-
 		bool short_autostate; // modify with set_short_autostate below
 	};
 
@@ -270,14 +300,12 @@ private:
 
 	void build ();
 	void automatic_layout (const std::vector<ControlUI *>& control_uis);
-	void custom_layout (const std::vector<ControlUI *>& control_uis);
 
 	ControlUI* build_control_ui (const Evoral::Parameter&                     param,
 	                             const ARDOUR::ParameterDescriptor&           desc,
-	                             boost::shared_ptr<ARDOUR::AutomationControl> mcontrol,
+	                             std::shared_ptr<ARDOUR::AutomationControl> mcontrol,
 	                             float                                        value,
-	                             bool                                         is_input,
-	                             bool                                         use_knob = false);
+	                             bool                                         is_input);
 
 	void ui_parameter_changed (ControlUI* cui);
 	void update_control_display (ControlUI* cui);
@@ -291,11 +319,6 @@ private:
 
 	void knob_size_request(Gtk::Requisition* req, ControlUI* cui);
 
-	/* XXX: remove */
-	void print_parameter (char *buf, uint32_t len, uint32_t param);
-	bool integer_printer (char* buf, Gtk::Adjustment &, ControlUI *);
-	bool midinote_printer(char* buf, Gtk::Adjustment &, ControlUI *);
-
 	typedef std::map<uint32_t, Gtk::FileChooserButton*> FilePathControls;
 	FilePathControls _filepath_controls;
 	void set_path_property (const ARDOUR::ParameterDescriptor& desc,
@@ -306,15 +329,12 @@ private:
 	Gtk::ScrolledWindow scroller;
 
 	Gtk::Expander   _plugin_pianokeyboard_expander;
-	PianoKeyboard*  _piano;
-	Gtk::Widget*    _pianomm;
+	APianoKeyboard* _piano;
 	Gtk::VBox       _pianobox;
 	Gtk::SpinButton _piano_velocity;
 	Gtk::SpinButton _piano_channel;
 
-	static void _note_on_event_handler (GtkWidget*, int, gpointer);
-	static void _note_off_event_handler (GtkWidget*, int, gpointer);
-	void note_on_event_handler (int);
+	void note_on_event_handler (int, int);
 	void note_off_event_handler (int);
 
 	void toggle_pianokeyboard ();
@@ -330,9 +350,9 @@ private:
 class PluginUIWindow : public ArdourWindow
 {
 public:
-	PluginUIWindow (boost::shared_ptr<ARDOUR::PluginInsert> insert,
-	                bool scrollable=false,
-	                bool editor=true);
+	PluginUIWindow (std::shared_ptr<ARDOUR::PlugInsertBase>,
+	                bool scrollable = false,
+	                bool editor = true);
 	~PluginUIWindow ();
 
 	PlugUIBase& pluginui() { return *_pluginui; }
@@ -365,23 +385,25 @@ private:
 	void app_activated (bool);
 	void plugin_going_away ();
 
-	bool create_windows_vst_editor (boost::shared_ptr<ARDOUR::PluginInsert>);
-	bool create_lxvst_editor(boost::shared_ptr<ARDOUR::PluginInsert>);
-	bool create_mac_vst_editor(boost::shared_ptr<ARDOUR::PluginInsert>);
-	bool create_audiounit_editor (boost::shared_ptr<ARDOUR::PluginInsert>);
-	bool create_lv2_editor (boost::shared_ptr<ARDOUR::PluginInsert>);
+	bool create_windows_vst_editor (std::shared_ptr<ARDOUR::PlugInsertBase>);
+	bool create_lxvst_editor(std::shared_ptr<ARDOUR::PlugInsertBase>);
+	bool create_mac_vst_editor(std::shared_ptr<ARDOUR::PlugInsertBase>);
+	bool create_audiounit_editor (std::shared_ptr<ARDOUR::PlugInsertBase>);
+	bool create_lv2_editor (std::shared_ptr<ARDOUR::PlugInsertBase>);
+	bool create_vst3_editor (std::shared_ptr<ARDOUR::PlugInsertBase>);
+
+	static PluginUIWindow* the_plugin_window;
 };
 
 #ifdef MACVST_SUPPORT
 /* this function has to be in a .mm file
  * because MacVSTPluginUI has Cocoa members
  */
-extern VSTPluginUI* create_mac_vst_gui (boost::shared_ptr<ARDOUR::PluginInsert>);
+extern VSTPluginUI* create_mac_vst_gui (std::shared_ptr<ARDOUR::PlugInsertBase>);
 #endif
 
 #ifdef AUDIOUNIT_SUPPORT
 /* this function has to be in a .mm file */
-extern PlugUIBase* create_au_gui (boost::shared_ptr<ARDOUR::PluginInsert>, Gtk::VBox**);
+extern PlugUIBase* create_au_gui (std::shared_ptr<ARDOUR::PlugInsertBase>, Gtk::VBox**);
 #endif
 
-#endif /* __ardour_plugin_ui_h__ */

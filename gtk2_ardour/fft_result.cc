@@ -1,20 +1,19 @@
 /*
- * Copyright (C) 2006, 2016 Paul Davis
- * Written by Sampo Savolainen & Robin Gareus
+ * Copyright (C) 2008-2009 David Robillard <d@drobilla.net>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "fft_result.h"
@@ -27,35 +26,24 @@
 
 using namespace std;
 
-FFTResult::FFTResult(FFTGraph *graph, Gdk::Color color, string trackname)
-{
-	_graph = graph;
-
-	_windowSize = _graph->windowSize();
-	_dataSize   = _windowSize / 2;
-	_averages = 0;
-	_min_flat = _max_flat = 0.0;
-	_min_prop = _max_prop = 0.0;
-
-	_data_flat_avg = (float *) malloc (sizeof(float) * _dataSize);
-	_data_flat_min = (float *) malloc (sizeof(float) * _dataSize);
-	_data_flat_max = (float *) malloc (sizeof(float) * _dataSize);
-	_data_prop_avg = (float *) malloc (sizeof(float) * _dataSize);
-	_data_prop_min = (float *) malloc (sizeof(float) * _dataSize);
-	_data_prop_max = (float *) malloc (sizeof(float) * _dataSize);
-
-	for (unsigned int i = 0; i < _dataSize; i++) {
-		_data_flat_min[i] = FLT_MAX;
-		_data_flat_max[i] = FLT_MIN;
-		_data_flat_avg[i] = 0;
-		_data_prop_min[i] = FLT_MAX;
-		_data_prop_max[i] = FLT_MIN;
-		_data_prop_avg[i] = 0;
-	}
-
-	_color     = color;
-	_trackname = trackname;
-}
+FFTResult::FFTResult(FFTGraph *graph, Gdk::Color color, string trackname) :
+	_graph(graph),
+	_windowSize(_graph->windowSize()),
+	_dataSize(_windowSize / 2),
+	_averages(0),
+	_min_flat(0.0),
+	_max_flat(0.0),
+	_min_prop(0.0),
+	_max_prop(0.0),
+	_data_flat_avg(_dataSize, 0),
+	_data_flat_max(_dataSize, FLT_MIN),
+	_data_flat_min(_dataSize, FLT_MAX),
+	_data_prop_avg(_dataSize, 0),
+	_data_prop_max(_dataSize, FLT_MIN),
+	_data_prop_min(_dataSize, FLT_MAX),
+	_color(color),
+	_trackname(trackname)
+{}
 
 void
 FFTResult::analyzeWindow(float *window)
@@ -134,12 +122,3 @@ FFTResult::finalize()
 	_averages = 0;
 }
 
-FFTResult::~FFTResult()
-{
-	free(_data_flat_avg);
-	free(_data_flat_min);
-	free(_data_flat_max);
-	free(_data_prop_avg);
-	free(_data_prop_min);
-	free(_data_prop_max);
-}

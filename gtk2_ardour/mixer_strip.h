@@ -1,20 +1,27 @@
 /*
-    Copyright (C) 2000-2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2007-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2017 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2016-2017 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_mixer_strip__
 #define __ardour_mixer_strip__
@@ -23,16 +30,16 @@
 
 #include <cmath>
 
-#include <gtkmm/adjustment.h>
-#include <gtkmm/button.h>
-#include <gtkmm/box.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/label.h>
-#include <gtkmm/menu.h>
-#include <gtkmm/sizegroup.h>
-#include <gtkmm/textview.h>
-#include <gtkmm/togglebutton.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/button.h>
+#include <ytkmm/box.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/label.h>
+#include <ytkmm/menu.h>
+#include <ytkmm/sizegroup.h>
+#include <ytkmm/textview.h>
+#include <ytkmm/togglebutton.h>
 
 #include "pbd/stateful.h"
 
@@ -47,11 +54,14 @@
 
 #include "axis_view.h"
 #include "control_slave_ui.h"
+#include "io_button.h"
 #include "route_ui.h"
 #include "gain_meter.h"
 #include "panner_ui.h"
 #include "enums.h"
 #include "processor_box.h"
+#include "triggerbox_ui.h"
+#include "trigger_master.h"
 #include "visibility_group.h"
 
 namespace ARDOUR {
@@ -62,6 +72,7 @@ namespace ARDOUR {
 	class PortInsert;
 	class Bundle;
 	class Plugin;
+	class TriggerBox;
 }
 namespace Gtk {
 	class Window;
@@ -72,11 +83,13 @@ class Mixer_UI;
 class MotionController;
 class RouteGroupMenu;
 class ArdourWindow;
+class AutomationController;
+class TriggerBoxWidget;
 
 class MixerStrip : public AxisView, public RouteUI, public Gtk::EventBox
 {
 public:
-	MixerStrip (Mixer_UI&, ARDOUR::Session*, boost::shared_ptr<ARDOUR::Route>, bool in_mixer = true);
+	MixerStrip (Mixer_UI&, ARDOUR::Session*, std::shared_ptr<ARDOUR::Route>, bool in_mixer = true);
 	MixerStrip (Mixer_UI&, ARDOUR::Session*, bool in_mixer = true);
 	~MixerStrip ();
 
@@ -85,7 +98,7 @@ public:
 	bool marked_for_display () const;
 	bool set_marked_for_display (bool);
 
-	boost::shared_ptr<ARDOUR::Stripable> stripable() const { return RouteUI::stripable(); }
+	std::shared_ptr<ARDOUR::Stripable> stripable() const { return RouteUI::stripable(); }
 
 	void set_width_enum (Width, void* owner);
 	Width get_width_enum () const { return _width; }
@@ -98,15 +111,15 @@ public:
 	void fast_update ();
 	void set_embedded (bool);
 
-	void set_route (boost::shared_ptr<ARDOUR::Route>);
+	void set_route (std::shared_ptr<ARDOUR::Route>);
 	void set_button_names ();
-	void show_send (boost::shared_ptr<ARDOUR::Send>);
+	void show_send (std::shared_ptr<ARDOUR::Send>);
 	void revert_to_default_display ();
 
 	/** @return the delivery that is being edited using our fader; it will be the
-	 *  last send passed to ::show_send, or our route's main out delivery.
+	 *  last send passed to \ref show_send() , or our route's main out delivery.
 	 */
-	boost::shared_ptr<ARDOUR::Delivery> current_delivery () const {
+	std::shared_ptr<ARDOUR::Delivery> current_delivery () const {
 		return _current_delivery;
 	}
 
@@ -114,14 +127,17 @@ public:
 		return _mixer_owned;
 	}
 
+	/* used for screenshots */
+	void hide_master_spacer (bool);
+
 	void hide_things ();
 
 	sigc::signal<void> WidthChanged;
 
 	/** The delivery that we are handling the level for with our fader has changed */
-	PBD::Signal1<void, boost::weak_ptr<ARDOUR::Delivery> > DeliveryChanged;
+	PBD::Signal<void(std::weak_ptr<ARDOUR::Delivery> )> DeliveryChanged;
 
-	static PBD::Signal1<void,MixerStrip*> CatchDeletion;
+	static PBD::Signal<void(MixerStrip*)> CatchDeletion;
 
 	std::string state_id() const;
 
@@ -138,6 +154,8 @@ public:
 	void ab_plugins ();
 
 	void set_selected (bool yn);
+
+	void set_trigger_display (std::shared_ptr<ARDOUR::TriggerBox>);
 
 	static MixerStrip* entered_mixer_strip() { return _entered_mixer_strip; }
 
@@ -180,24 +198,24 @@ private:
 	Gtk::Table rec_mon_table;
 	Gtk::Table solo_iso_table;
 	Gtk::Table mute_solo_table;
+	Gtk::Table master_volume_table;
 	Gtk::Table bottom_button_table;
 
-	void vca_assign (boost::shared_ptr<ARDOUR::VCA>);
-	void vca_unassign (boost::shared_ptr<ARDOUR::VCA>);
+	void vca_assign (std::shared_ptr<ARDOUR::VCA>);
+	void vca_unassign (std::shared_ptr<ARDOUR::VCA>);
 
 	void meter_changed ();
 	void monitor_changed ();
+	void monitor_section_added_or_removed ();
 
-	ArdourWidgets::ArdourButton input_button;
-	ArdourWidgets::ArdourButton output_button;
+	IOButton input_button;
+	IOButton output_button;
 
 	ArdourWidgets::ArdourButton* monitor_section_button;
 
-	void input_button_resized (Gtk::Allocation&);
-	void output_button_resized (Gtk::Allocation&);
 	void comment_button_resized (Gtk::Allocation&);
 
-	ArdourWidgets::ArdourButton* midi_input_enable_button;
+	ArdourWidgets::ArdourButton midi_input_enable_button;
 	Gtk::HBox input_button_box;
 
 	std::string longest_label;
@@ -206,43 +224,29 @@ private:
 	bool input_active_button_press (GdkEventButton*);
 	bool input_active_button_release (GdkEventButton*);
 
-	void help_count_plugins (boost::weak_ptr<ARDOUR::Processor>);
-	uint32_t _plugin_insert_cnt;
-
 	gint    mark_update_safe ();
 	guint32 mode_switch_in_progress;
+
+	/*Trigger widget*/
+	FittedCanvasWidget _tmaster_widget;
+	TriggerMaster*     _tmaster;
 
 	ArdourWidgets::ArdourButton name_button;
 	ArdourWidgets::ArdourButton _comment_button;
 	ArdourWidgets::ArdourKnob   trim_control;
 
-	void trim_start_touch ();
-	void trim_end_touch ();
+	Gtk::Menu* _master_volume_menu;
+	ArdourWidgets::ArdourButton* _loudess_analysis_button;
+	std::shared_ptr<AutomationController> _volume_controller;
 
 	void setup_comment_button ();
+
+	void loudess_analysis_button_clicked ();
+	bool volume_controller_button_pressed (GdkEventButton*);
 
 	ArdourWidgets::ArdourButton group_button;
 	RouteGroupMenu*             group_menu;
 
-	gint input_press (GdkEventButton *);
-	gint input_release (GdkEventButton *);
-
-	gint output_press (GdkEventButton *);
-	gint output_release (GdkEventButton *);
-
-	Gtk::Menu input_menu;
-	std::list<boost::shared_ptr<ARDOUR::Bundle> > input_menu_bundles;
-	void maybe_add_bundle_to_input_menu (boost::shared_ptr<ARDOUR::Bundle>, ARDOUR::BundleList const &);
-
-	Gtk::Menu output_menu;
-	std::list<boost::shared_ptr<ARDOUR::Bundle> > output_menu_bundles;
-	void maybe_add_bundle_to_output_menu (boost::shared_ptr<ARDOUR::Bundle>, ARDOUR::BundleList const &,
-	                                      ARDOUR::DataType type = ARDOUR::DataType::NIL);
-
-	void bundle_input_chosen (boost::shared_ptr<ARDOUR::Bundle>);
-	void bundle_output_chosen (boost::shared_ptr<ARDOUR::Bundle>);
-
-	void diskstream_changed ();
 	void io_changed_proxy ();
 
 	Gtk::Menu *send_action_menu;
@@ -277,31 +281,25 @@ private:
 	void route_property_changed (const PBD::PropertyChange&);
 	void name_button_resized (Gtk::Allocation&);
 	void name_changed ();
+	void dpi_reset ();
 	void update_speed_display ();
 	void map_frozen ();
-	void hide_processor_editor (boost::weak_ptr<ARDOUR::Processor> processor);
+	void hide_processor_editor (std::weak_ptr<ARDOUR::Processor> processor);
 	void hide_redirect_editors ();
 
 	bool ignore_speed_adjustment;
 
 	static MixerStrip* _entered_mixer_strip;
 
-	void engine_running();
-	void engine_stopped();
+	virtual void bus_send_display_changed (std::shared_ptr<ARDOUR::Route>);
 
-	virtual void bus_send_display_changed (boost::shared_ptr<ARDOUR::Route>);
-
-	void set_current_delivery (boost::shared_ptr<ARDOUR::Delivery>);
+	void set_current_delivery (std::shared_ptr<ARDOUR::Delivery>);
 
 	void drop_send ();
 	PBD::ScopedConnection send_gone_connection;
 
 	void reset_strip_style ();
-
-	ARDOUR::DataType guess_main_type(bool for_input, bool favor_connected = true) const;
-
-	void update_io_button (bool input_button);
-	void port_connected_or_disconnected (boost::weak_ptr<ARDOUR::Port>, boost::weak_ptr<ARDOUR::Port>);
+	void update_sensitivity ();
 
 	bool mixer_strip_enter_event ( GdkEventCrossing * );
 	bool mixer_strip_leave_event ( GdkEventCrossing * );
@@ -314,7 +312,8 @@ private:
 	 *  the RC option editor.
 	 */
 	VisibilityGroup _visibility;
-	boost::optional<bool> override_solo_visibility () const;
+	std::optional<bool> override_solo_visibility () const;
+	std::optional<bool> override_rec_mon_visibility () const;
 
 	PBD::ScopedConnectionList _config_connection;
 

@@ -1,23 +1,22 @@
 /*
-    Copyright (C) 2017 Paul Davis
+ * Copyright (C) 2017 Johannes Mueller <github@johannes-mueller.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/container.h>
+#include <ytkmm/container.h>
 
 #include "gtkmm2ext/colors.h"
 #include "gtkmm2ext/gtk_ui.h"
@@ -30,7 +29,7 @@
 
 
 
-PluginDisplay::PluginDisplay (boost::shared_ptr<ARDOUR::Plugin> p, uint32_t max_height)
+PluginDisplay::PluginDisplay (std::shared_ptr<ARDOUR::Plugin> p, uint32_t max_height)
 	: _plug (p)
 	, _surf (0)
 	, _max_height (max_height)
@@ -38,9 +37,9 @@ PluginDisplay::PluginDisplay (boost::shared_ptr<ARDOUR::Plugin> p, uint32_t max_
 	, _scroll (false)
 {
 	add_events (Gdk::BUTTON_PRESS_MASK|Gdk::BUTTON_RELEASE_MASK);
-	_plug->DropReferences.connect (_death_connection, invalidator (*this), boost::bind (&PluginDisplay::plugin_going_away, this), gui_context());
+	_plug->DropReferences.connect (_death_connection, invalidator (*this), std::bind (&PluginDisplay::plugin_going_away, this), gui_context());
 	_plug->QueueDraw.connect (_qdraw_connection, invalidator (*this),
-			boost::bind (&Gtk::Widget::queue_draw, this), gui_context ());
+			std::bind (&Gtk::Widget::queue_draw, this), gui_context ());
 }
 
 PluginDisplay::~PluginDisplay ()
@@ -90,7 +89,7 @@ PluginDisplay::render_inline (cairo_t* cr, uint32_t width)
 	}
 
 	/* allocate a local image-surface,
-	 * We cannot re-use the data via cairo_image_surface_create_for_data(),
+	 * We cannot reuse the data via cairo_image_surface_create_for_data(),
 	 * since pixman keeps a reference to it.
 	 * we'd need to hand over the data and ha cairo_surface_destroy to free it.
 	 * it might be possible to work around via cairo_surface_set_user_data().
@@ -145,7 +144,7 @@ PluginDisplay::on_expose_event (GdkEventExpose* ev)
 
 	cairo_save (cr);
 	cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
-	display_sample(cr, width, height);
+	display_frame(cr, width, height);
 	cairo_clip (cr);
 	cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
 
@@ -168,7 +167,7 @@ PluginDisplay::on_expose_event (GdkEventExpose* ev)
 	std::string name = get_name();
 	Gtkmm2ext::Color fill_color = UIConfiguration::instance().color (string_compose ("%1: fill active", name), &failed);
 
-	display_sample(cr, width, height);
+	display_frame(cr, width, height);
 	cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
 	cairo_set_line_width(cr, 1.0);
 	if (failed) {
@@ -183,7 +182,7 @@ PluginDisplay::on_expose_event (GdkEventExpose* ev)
 }
 
 void
-PluginDisplay::display_sample (cairo_t* cr, double w, double h)
+PluginDisplay::display_frame (cairo_t* cr, double w, double h)
 {
 	cairo_rectangle (cr, 0.0, 0.0, w, h);
 }

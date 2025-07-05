@@ -1,20 +1,21 @@
 /*
-    Copyright (C) 2010 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2010 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef _WIDGETS_ARDOUR_BUTTON_H_
 #define _WIDGETS_ARDOUR_BUTTON_H_
@@ -22,7 +23,7 @@
 #include <list>
 #include <stdint.h>
 
-#include <gtkmm/action.h>
+#include <ytkmm/action.h>
 
 #include "pbd/signals.h"
 #include "gtkmm2ext/activatable.h"
@@ -38,15 +39,16 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 {
 	public:
 	enum Element {
-		Edge = 0x1,
-		Body = 0x2,
-		Text = 0x4,
-		Indicator = 0x8,
-		unused = 0x10,
-		Menu = 0x20,
-		Inactive = 0x40, // no _action is defined AND state is not used
-		VectorIcon = 0x80,
-		IconRenderCallback = 0x100,
+		Edge               = 0x001,
+		Body               = 0x002,
+		Text               = 0x004,
+		Indicator          = 0x008,
+		ColorBox           = 0x018, // also sets Indicator
+		Menu               = 0x020,
+		MetaMenu           = 0x040,
+		Inactive           = 0x080, // no _action is defined AND state is not used
+		VectorIcon         = 0x100,
+		IconRenderCallback = 0x200,
 	};
 
 	typedef void (* rendercallback_t) (cairo_t*, int, int, uint32_t, void*);
@@ -60,11 +62,18 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 	virtual ~ArdourButton ();
 
 	enum Tweaks {
-		Square = 0x1,
-		TrackHeader = 0x2,
-		OccasionalText = 0x4,
-		unused4 = 0x8,
+		Square         = 0x01,
+		TrackHeader    = 0x02,
+		OccasionalText = 0x04,
+		OccasionalLED  = 0x08,
+		ForceBoxy      = 0x10,
+		ForceFlat      = 0x20,
+		ExpandtoSquare = 0x40,
+		TransportIcon  = 0x80,
 	};
+
+	static Tweaks default_tweaks;
+	static void set_default_tweaks (Tweaks t) { default_tweaks = t; }
 
 	Tweaks tweaks() const { return _tweaks; }
 	void set_tweaks (Tweaks);
@@ -79,12 +88,26 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 	Element elements() const { return _elements; }
 	void set_elements (Element);
 	void add_elements (Element);
+	void remove_elements (Element);
 
 	ArdourIcon::Icon icon() const { return _icon; }
 	void set_icon (ArdourIcon::Icon);
 	void set_icon (rendercallback_t, void*);
 
+	enum CornerMask {
+		NONE         = 0x0,
+		TOP_LEFT     = 0x1,
+		TOP_RIGHT    = 0x2,
+		BOTTOM_LEFT  = 0x4,
+		BOTTOM_RIGHT = 0x8,
+		TOP          = 0x3,
+		BOTTOM       = 0xC,
+		LEFT         = 0x5,
+		RIGHT        = 0xA
+	};
+
 	void set_corner_radius (float);
+	void set_corner_mask (int);
 
 	void set_text (const std::string&, bool markup = false);
 	const std::string& get_text () const { return _text; }
@@ -99,30 +122,36 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 	void set_layout_ellipsize_width (int w);
 	void set_layout_font (const Pango::FontDescription&);
 	void set_text_ellipsize (Pango::EllipsizeMode);
+	void set_width_padding (float);
 
     /* Sets the text used for size request computation. Pass an
      * empty string to return to the default behavior which uses
      * the currently displayed text for measurement. */
-	void set_sizing_text (const std::string&);
-	const std::string& get_sizing_text () {return _sizing_text;}
+	void set_sizing_text (std::string const&);
+	void add_sizing_text (std::string const&);
+	void set_sizing_texts (std::vector<std::string> const&);
 
+	bool is_led_click (GdkEventButton*);
 	sigc::signal<void, GdkEventButton*> signal_led_clicked;
 	sigc::signal<void> signal_clicked;
 
-	boost::shared_ptr<PBD::Controllable> get_controllable() { return binding_proxy.get_controllable(); }
-	void set_controllable (boost::shared_ptr<PBD::Controllable> c);
+	std::shared_ptr<PBD::Controllable> get_controllable() { return binding_proxy.get_controllable(); }
+	void set_controllable (std::shared_ptr<PBD::Controllable> c);
 	void watch ();
 
 	void set_related_action (Glib::RefPtr<Gtk::Action>);
 
 	bool on_button_press_event (GdkEventButton*);
 	bool on_button_release_event (GdkEventButton*);
+	bool on_touch_begin_event (GdkEventTouch*);
+	bool on_touch_end_event (GdkEventTouch*);
 
 	void set_image (const Glib::RefPtr<Gdk::Pixbuf>&);
 
 	void set_fixed_colors   (const uint32_t active_color, const uint32_t inactive_color);
 	void set_active_color   (const uint32_t active_color);
 	void set_inactive_color (const uint32_t inactive_color);
+	void reset_fixed_colors ();
 
 	void set_fallthrough_to_parent(bool fall) { _fallthrough_to_parent = fall; }
 
@@ -152,7 +181,7 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 	Glib::RefPtr<Pango::Layout> _layout;
 	Glib::RefPtr<Gdk::Pixbuf>   _pixbuf;
 	std::string                 _text;
-	std::string                 _sizing_text;
+	std::vector<std::string>    _sizing_texts;
 	bool                        _markup;
 	Element                     _elements;
 	ArdourIcon::Icon            _icon;
@@ -163,9 +192,12 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 
 	void set_text_internal ();
 	void recalc_char_pixel_geometry ();
+
 	unsigned int _char_pixel_width;
 	unsigned int _char_pixel_height;
-	float _char_avg_pixel_width;
+	float        _char_avg_pixel_width;
+	float        _width_padding;
+	bool         _custom_font_set;
 
 	int   _text_width;
 	int   _text_height;
@@ -187,6 +219,10 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 	uint32_t led_custom_color;
 	bool     use_custom_led_color;
 
+	uint32_t outline_color;
+
+	std::optional<int> _squaresize;
+
 	cairo_pattern_t* convex_pattern;
 	cairo_pattern_t* concave_pattern;
 	cairo_pattern_t* led_inset_pattern;
@@ -197,6 +233,7 @@ class LIBWIDGETS_API ArdourButton : public CairoWidget , public Gtkmm2ext::Activ
 	bool _led_left;
 	bool _distinct_led_click;
 	bool _hovering;
+	bool _touching;
 	bool _focused;
 	int  _fixed_colors_set;
 	bool _fallthrough_to_parent;

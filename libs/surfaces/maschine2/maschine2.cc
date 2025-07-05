@@ -3,17 +3,17 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <stdio.h>
@@ -25,8 +25,6 @@
 
 #include "pbd/compose.h"
 #include "pbd/error.h"
-#include "pbd/i18n.h"
-#include "pbd/abstract_ui.cc" // instantiate template
 
 #include "ardour/async_midi_port.h"
 #include "ardour/audioengine.h"
@@ -43,6 +41,8 @@
 #include "m2_map_mikro.h"
 
 #include "canvas.h"
+
+#include "pbd/abstract_ui.inc.cc" // instantiate template, includes i18n
 
 using namespace ARDOUR;
 using namespace PBD;
@@ -83,7 +83,7 @@ class TestLayout : public Maschine2Layout
 
 			std::vector<std::string> strs;
 			strs.push_back("T|sg1");
-			strs.push_back("Test2asdjasdlkjasldkjasd");
+			strs.push_back("Test2");
 			strs.push_back("Test3");
 			strs.push_back("Test4");
 			strs.push_back("Test5");
@@ -102,6 +102,16 @@ class TestLayout : public Maschine2Layout
 
 static TestLayout* tl = NULL;
 #endif
+
+bool
+Maschine2::available ()
+{
+	if (hid_init()) {
+		return false;
+	}
+	hid_exit ();
+	return true;
+}
 
 Maschine2::Maschine2 (ARDOUR::Session& s)
 	: ControlProtocol (s, string (X_("NI Maschine2")))
@@ -123,12 +133,6 @@ Maschine2::~Maschine2 ()
 {
 	stop ();
 	hid_exit ();
-}
-
-void*
-Maschine2::request_factory (uint32_t num_requests)
-{
-	return request_buffer_factory (num_requests);
 }
 
 void
@@ -163,7 +167,7 @@ Maschine2::set_active (bool yn)
 }
 
 XMLNode&
-Maschine2::get_state()
+Maschine2::get_state() const
 {
 	XMLNode& node (ControlProtocol::get_state());
 	return node;
@@ -217,19 +221,19 @@ Maschine2::start ()
 		return -1;
 	}
 
-	boost::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out)->set_flush_at_cycle_start (true);
-	_output_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out).get();
+	std::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out)->set_flush_at_cycle_start (true);
+	_output_port = std::dynamic_pointer_cast<AsyncMIDIPort>(_midi_out).get();
 
 	switch (_maschine_type) {
 		case Mikro:
 			_hw = new Maschine2Mikro ();
 			_ctrl = new M2MapMikro ();
-			info << _("Maschine2 Mikro control surface intialized");
+			info << _("Maschine2 Mikro control surface initialized");
 			break;
 		case Maschine:
 			_hw = new Maschine2Mk2 ();
 			_ctrl = new M2MapMk2 ();
-			info << _("Maschine2 control surface intialized");
+			info << _("Maschine2 control surface initialized");
 			break;
 		case Studio:
 			error << _("Maschine2 Studio is not yet supported");
@@ -303,16 +307,9 @@ Maschine2::stop ()
 void
 Maschine2::thread_init ()
 {
-	pthread_set_name (event_loop_name().c_str());
 	ARDOUR::SessionEvent::create_per_thread_pool (event_loop_name(), 1024);
 	PBD::notify_event_loops_about_thread_creation (pthread_self(), event_loop_name(), 1024);
-
-	struct sched_param rtparam;
-	memset (&rtparam, 0, sizeof (rtparam));
-	rtparam.sched_priority = 9; /* XXX should be relative to audio (JACK) thread */
-	if (pthread_setschedparam (pthread_self(), SCHED_FIFO, &rtparam) != 0) {
-		// do we care? not particularly.
-	}
+	set_thread_priority ();
 }
 
 void

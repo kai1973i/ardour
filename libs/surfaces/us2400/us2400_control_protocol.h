@@ -1,20 +1,20 @@
 /*
-    Copyright (C) 2006,2007 John Anderson
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef ardour_us2400_control_protocol_h
 #define ardour_us2400_control_protocol_h
@@ -26,8 +26,6 @@
 
 #include <sys/time.h>
 #include <pthread.h>
-#include <boost/smart_ptr.hpp>
-
 #define ABSTRACT_UI_EXPORTS
 #include "pbd/abstract_ui.h"
 #include "midi++/types.h"
@@ -100,8 +98,8 @@ class US2400Protocol
 	const US2400::DeviceInfo& device_info() const { return _device_info; }
 	US2400::DeviceProfile& device_profile() { return _device_profile; }
 
-	PBD::Signal0<void> DeviceChanged;
-	PBD::Signal1<void,boost::shared_ptr<US2400::Surface> > ConnectionChange;
+	PBD::Signal<void()> DeviceChanged;
+	PBD::Signal<void(std::shared_ptr<US2400::Surface> )> ConnectionChange;
 
         void device_ready ();
 
@@ -111,26 +109,26 @@ class US2400Protocol
 
 	ViewMode view_mode () const { return _view_mode; }
 	SubViewMode subview_mode () const { return _subview_mode; }
-	static bool subview_mode_would_be_ok (SubViewMode, boost::shared_ptr<ARDOUR::Stripable>);
-	boost::shared_ptr<ARDOUR::Stripable> subview_stripable() const;
+	static bool subview_mode_would_be_ok (SubViewMode, std::shared_ptr<ARDOUR::Stripable>);
+	std::shared_ptr<ARDOUR::Stripable> subview_stripable() const;
 	bool zoom_mode () const { return modifier_state() & MODIFIER_ZOOM; }
 	bool     metering_active () const { return _metering_active; }
 
-	bool is_track (boost::shared_ptr<ARDOUR::Stripable>) const;
-	bool is_audio_track (boost::shared_ptr<ARDOUR::Stripable>) const;
-	bool is_midi_track (boost::shared_ptr<ARDOUR::Stripable>) const;
-	bool is_mapped (boost::shared_ptr<ARDOUR::Stripable>) const;
-	boost::shared_ptr<ARDOUR::Stripable> first_selected_stripable () const;
+	bool is_track (std::shared_ptr<ARDOUR::Stripable>) const;
+	bool is_audio_track (std::shared_ptr<ARDOUR::Stripable>) const;
+	bool is_midi_track (std::shared_ptr<ARDOUR::Stripable>) const;
+	bool is_mapped (std::shared_ptr<ARDOUR::Stripable>) const;
+	std::shared_ptr<ARDOUR::Stripable> first_selected_stripable () const;
 
 	void check_fader_automation_state ();
 	void update_fader_automation_state ();
 	void set_automation_state (ARDOUR::AutoState);
 
 	void set_view_mode (ViewMode);
-	int set_subview_mode (SubViewMode, boost::shared_ptr<ARDOUR::Stripable>);
+	int set_subview_mode (SubViewMode, std::shared_ptr<ARDOUR::Stripable>);
 	void display_view_mode ();
 
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
 	/* Note: because Mackie control is inherently a duplex protocol,
@@ -138,20 +136,17 @@ class US2400Protocol
 	   support for the protocol is not optional.
 	*/
 
-	static bool probe();
-	static void* request_factory (uint32_t);
-
 	mutable Glib::Threads::Mutex surfaces_lock;
-	typedef std::list<boost::shared_ptr<US2400::Surface> > Surfaces;
+	typedef std::list<std::shared_ptr<US2400::Surface> > Surfaces;
 	Surfaces surfaces;
 
-	boost::shared_ptr<US2400::Surface> get_surface_by_raw_pointer (void*) const;
-	boost::shared_ptr<US2400::Surface> nth_surface (uint32_t) const;
+	std::shared_ptr<US2400::Surface> get_surface_by_raw_pointer (void*) const;
+	std::shared_ptr<US2400::Surface> nth_surface (uint32_t) const;
 
 	uint32_t global_index (US2400::Strip&);
 	uint32_t global_index_locked (US2400::Strip&);
 
-	std::list<boost::shared_ptr<ARDOUR::Bundle> > bundles ();
+	std::list<std::shared_ptr<ARDOUR::Bundle> > bundles ();
 
 	void set_master_on_surface_strip (uint32_t surface, uint32_t strip);
 	void set_monitor_on_surface_strip (uint32_t surface, uint32_t strip);
@@ -199,12 +194,12 @@ class US2400Protocol
 	void update_global_led (int id, US2400::LedState);
 
 	ARDOUR::Session & get_session() { return *session; }
-	samplepos_t transport_frame() const;
+	samplepos_t transport_sample() const;
 
 	int modifier_state() const { return _modifier_state; }
 	int main_modifier_state() const { return _modifier_state & MAIN_MODIFIER_MASK; }
 
-	typedef std::list<boost::shared_ptr<ARDOUR::AutomationControl> > ControlList;
+	typedef std::list<std::shared_ptr<ARDOUR::AutomationControl> > ControlList;
 
 	void add_down_button (ARDOUR::AutomationType, int surface, int strip);
 	void remove_down_button (ARDOUR::AutomationType, int surface, int strip);
@@ -213,6 +208,10 @@ class US2400Protocol
 	void add_down_select_button (int surface, int strip);
 	void remove_down_select_button (int surface, int strip);
 	void select_range (uint32_t pressed);
+
+	int get_sends_bank ();
+
+	CONTROL_PROTOCOL_THREADS_NEED_TEMPO_MAP_DECL();
 
   protected:
 	// shut down the surface
@@ -233,7 +232,7 @@ class US2400Protocol
 	   Fetch the set of Stripables to be considered for control by the
 	   surface. Excluding master, hidden and control routes, and inactive routes
 	*/
-	typedef std::vector<boost::shared_ptr<ARDOUR::Stripable> > Sorted;
+	typedef std::vector<std::shared_ptr<ARDOUR::Stripable> > Sorted;
 	Sorted get_sorted_stripables();
 
 	// bank switching
@@ -246,7 +245,7 @@ class US2400Protocol
 
 	void thread_init ();
 
-	bool stripable_is_locked_to_strip (boost::shared_ptr<ARDOUR::Stripable>) const;
+	bool stripable_is_locked_to_strip (std::shared_ptr<ARDOUR::Stripable>) const;
 
   private:
 
@@ -281,29 +280,30 @@ class US2400Protocol
 	US2400::Timer            _frm_left_last;
 	// last written timecode string
 	std::string              _timecode_last;
-	samplepos_t				 _frame_last;
+	samplepos_t				 _sample_last;
 	// Which timecode are we displaying? BBT or Timecode
 	ARDOUR::AnyTime::Type    _timecode_type;
 	// Bundle to represent our input ports
-	boost::shared_ptr<ARDOUR::Bundle> _input_bundle;
+	std::shared_ptr<ARDOUR::Bundle> _input_bundle;
 	// Bundle to represent our output ports
-	boost::shared_ptr<ARDOUR::Bundle> _output_bundle;
+	std::shared_ptr<ARDOUR::Bundle> _output_bundle;
 	void*                    _gui;
 	bool                     _scrub_mode;
 	ViewMode                 _view_mode;
 	SubViewMode              _subview_mode;
-	boost::shared_ptr<ARDOUR::Stripable> _subview_stripable;
+	std::shared_ptr<ARDOUR::Stripable> _subview_stripable;
 	int                      _modifier_state;
 	ButtonMap                 button_map;
 	bool                     _metering_active;
 	bool                     _initialized;
-	XMLNode*                 configuration_state;
+	mutable XMLNode*         configuration_state;
 	int                      state_version;
 	int                      _last_bank[9];
 	bool                     marker_modifier_consumed_by_button;
 	bool                     nudge_modifier_consumed_by_button;
+	int						 _sends_bank;
 
-	boost::shared_ptr<ArdourSurface::US2400::Surface>	_master_surface;
+	std::shared_ptr<ArdourSurface::US2400::Surface>	_master_surface;
 
 	int create_surfaces ();
 	bool periodic();
@@ -314,17 +314,17 @@ class US2400Protocol
 	bool midi_input_handler (Glib::IOCondition ioc, MIDI::Port* port);
 	void clear_ports ();
 	void clear_surfaces ();
-	void force_special_stripable_to_strip (boost::shared_ptr<ARDOUR::Stripable> r, uint32_t surface, uint32_t strip_number);
+	void force_special_stripable_to_strip (std::shared_ptr<ARDOUR::Stripable> r, uint32_t surface, uint32_t strip_number);
 	void build_button_map ();
 	void stripable_selection_changed ();
        void initialize ();
         int set_device_info (const std::string& device_name);
-	void update_configuration_state ();
+	void update_configuration_state () const;
 
 	/* MIDI port connection management */
 
 	PBD::ScopedConnection port_connection;
-	void connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, boost::weak_ptr<ARDOUR::Port>, std::string name2, bool);
+	void connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool);
 
 	/* BUTTON HANDLING */
 

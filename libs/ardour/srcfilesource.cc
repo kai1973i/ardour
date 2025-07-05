@@ -1,22 +1,21 @@
 /*
-    Copyright (C) 2014 Paul Davis
-    Written by: Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2017 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/error.h"
 #include "pbd/failed_constructor.h"
@@ -30,9 +29,9 @@
 using namespace ARDOUR;
 using namespace PBD;
 
-const uint32_t SrcFileSource::max_blocksize = 2097152U; /* see AudioDiskstream::_do_refill_with_alloc, max */
+const uint32_t SrcFileSource::max_blocksize = 2097152U; /* see AudioDiskstream::do_refill_with_alloc, max */
 
-SrcFileSource::SrcFileSource (Session& s, boost::shared_ptr<AudioFileSource> src, SrcQuality srcq)
+SrcFileSource::SrcFileSource (Session& s, std::shared_ptr<AudioFileSource> src, SrcQuality srcq)
 	: Source(s, DataType::AUDIO, src->name(), Flag (src->flags() & ~(Writable|Removable|RemovableIfEmpty|RemoveAtDestroy)))
 	, AudioFileSource (s, src->path(), Flag (src->flags() & ~(Writable|Removable|RemovableIfEmpty|RemoveAtDestroy)))
 	, _source (src)
@@ -64,7 +63,7 @@ SrcFileSource::SrcFileSource (Session& s, boost::shared_ptr<AudioFileSource> src
 	}
 
 
-	_ratio = s.nominal_sample_rate() / _source->sample_rate();
+	_ratio = s.nominal_sample_rate() /  _source->sample_rate();
 	_src_data.src_ratio = _ratio;
 
 	src_buffer_size = ceil((double)max_blocksize / _ratio) + 2;
@@ -87,7 +86,7 @@ SrcFileSource::~SrcFileSource ()
 void
 SrcFileSource::close ()
 {
-	boost::shared_ptr<FileSource> fs = boost::dynamic_pointer_cast<FileSource> (_source);
+	std::shared_ptr<FileSource> fs = std::dynamic_pointer_cast<FileSource> (_source);
 	if (fs) {
 		fs->close ();
 	}
@@ -120,8 +119,7 @@ SrcFileSource::read_unlocked (Sample *dst, samplepos_t start, samplecnt_t cnt) c
 
 	_src_data.input_frames = _source->read (_src_buffer, _source_position, scnt);
 
-	if ((samplecnt_t) _src_data.input_frames * _ratio <= cnt
-			&& _source_position + scnt >= _source->length(0)) {
+	if ((samplecnt_t) _src_data.input_frames * _ratio <= cnt && _source_position + scnt >= _source->length().samples()) {
 		_src_data.end_of_input = true;
 		DEBUG_TRACE (DEBUG::AudioPlayback, "SRC: END OF INPUT\n");
 	} else {

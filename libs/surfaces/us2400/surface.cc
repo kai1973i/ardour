@@ -1,22 +1,21 @@
 /*
-    Copyright (C) 2012 Paul Davis
-	Copyright (C) 2017 Ben Loftis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <sstream>
 #include <iomanip>
@@ -26,12 +25,11 @@
 
 #include <glibmm/convert.h>
 
-#include "pbd/stacktrace.h"
-
 #include "midi++/port.h"
 
 #include "ardour/audioengine.h"
 #include "ardour/automation_control.h"
+#include "ardour/dB.h"
 #include "ardour/debug.h"
 #include "ardour/route.h"
 #include "ardour/panner.h"
@@ -165,7 +163,7 @@ Surface::~Surface ()
 }
 
 bool
-Surface::connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, boost::weak_ptr<ARDOUR::Port>, std::string name2, bool yn)
+Surface::connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool yn)
 {
 	if (!_port) {
 		return false;
@@ -234,7 +232,7 @@ Surface::connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, b
 }
 
 XMLNode&
-Surface::get_state()
+Surface::get_state() const
 {
 	XMLNode* node = new XMLNode (X_("Surface"));
 	node->set_property (X_("name"), _name);
@@ -371,7 +369,7 @@ Surface::master_monitor_may_have_changed ()
 void
 Surface::setup_master ()
 {
-	boost::shared_ptr<Stripable> m;
+	std::shared_ptr<Stripable> m;
 
 	if ((m = _mcp.get_session().monitor_out()) == 0) {
 		m = _mcp.get_session().master_out();
@@ -400,13 +398,13 @@ Surface::setup_master ()
 
 		DeviceInfo device_info = _mcp.device_info();
 		GlobalButtonInfo master_button = device_info.get_global_button(Button::MasterFaderTouch);
-		Button* bb = dynamic_cast<Button*> (Button::factory (
-		                                    *this,
-		                                    Button::MasterFaderTouch,
-		                                    master_button.id,
-		                                    master_button.label,
-		                                    *(group_it->second)
-		                                    ));
+		DEBUG_RESULT (Button*, bb, dynamic_cast<Button*> (Button::factory (
+			                                                  *this,
+			                                                  Button::MasterFaderTouch,
+			                                                  master_button.id,
+			                                                  master_button.label,
+			                                                  *(group_it->second)
+			                                                  )));
 
 		DEBUG_TRACE (DEBUG::US2400, string_compose ("surface %1 Master Fader new button BID %2 id %3\n",
 		                                                   number(), Button::MasterFaderTouch, bb->id()));
@@ -415,7 +413,7 @@ Surface::setup_master ()
 	}
 
 	_master_fader->set_control (m->gain_control());
-	m->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, boost::bind (&Surface::master_gain_changed, this), ui_context());
+	m->gain_control()->Changed.connect (master_connection, MISSING_INVALIDATOR, std::bind (&Surface::master_gain_changed, this), ui_context());
 	_last_master_gain_written = FLT_MAX; /* some essentially impossible value */
 	_port->write (_master_fader->set_position (0.0));
 	master_gain_changed ();
@@ -428,7 +426,7 @@ Surface::master_gain_changed ()
 		return;
 	}
 
-	boost::shared_ptr<AutomationControl> ac = _master_fader->control();
+	std::shared_ptr<AutomationControl> ac = _master_fader->control();
 	if (!ac) {
 		return;
 	}
@@ -476,20 +474,20 @@ Surface::connect_to_signals ()
 		MIDI::Parser* p = _port->input_port().parser();
 
 		/* Incoming sysex */
-		p->sysex.connect_same_thread (*this, boost::bind (&Surface::handle_midi_sysex, this, _1, _2, _3));
+		p->sysex.connect_same_thread (*this, std::bind (&Surface::handle_midi_sysex, this, _1, _2, _3));
 		/* V-Pot messages are Controller */
-		p->controller.connect_same_thread (*this, boost::bind (&Surface::handle_midi_controller_message, this, _1, _2));
+		p->controller.connect_same_thread (*this, std::bind (&Surface::handle_midi_controller_message, this, _1, _2));
 		/* Button messages are NoteOn */
-		p->note_on.connect_same_thread (*this, boost::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
+		p->note_on.connect_same_thread (*this, std::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
 		/* Button messages are NoteOn but libmidi++ sends note-on w/velocity = 0 as note-off so catch them too */
-		p->note_off.connect_same_thread (*this, boost::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
+		p->note_off.connect_same_thread (*this, std::bind (&Surface::handle_midi_note_on_message, this, _1, _2));
 		/* Fader messages are Pitchbend */
 		uint32_t i;
 		for (i = 0; i < _mcp.device_info().strip_cnt(); i++) {
-			p->channel_pitchbend[i].connect_same_thread (*this, boost::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, i));
+			p->channel_pitchbend[i].connect_same_thread (*this, std::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, i));
 		}
 		// Master fader
-		p->channel_pitchbend[_mcp.device_info().strip_cnt()].connect_same_thread (*this, boost::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, _mcp.device_info().strip_cnt()));
+		p->channel_pitchbend[_mcp.device_info().strip_cnt()].connect_same_thread (*this, std::bind (&Surface::handle_midi_pitchbend_message, this, _1, _2, _mcp.device_info().strip_cnt()));
 
 		_connected = true;
 	}
@@ -507,7 +505,7 @@ Surface::handle_midi_pitchbend_message (MIDI::Parser&, MIDI::pitchbend_t pb, uin
 	 */
 
 	DEBUG_TRACE (DEBUG::US2400, string_compose ("Surface::handle_midi_pitchbend_message on port %3, fader = %1 value = %2 (%4)\n",
-							   fader_id, pb, _number, pb/16384.0));
+							   fader_id, pb, _number, pb/16383.0));
 
 	turn_it_on ();
 
@@ -515,7 +513,7 @@ Surface::handle_midi_pitchbend_message (MIDI::Parser&, MIDI::pitchbend_t pb, uin
 
 	if (fader) {
 		Strip* strip = dynamic_cast<Strip*> (&fader->group());
-		float pos = pb / 16384.0;
+		float pos = pb / 16383.0;
 		if (strip) {
 			strip->handle_fader (*fader, pos);
 		} else {
@@ -619,38 +617,36 @@ Surface::handle_midi_controller_message (MIDI::Parser &, MIDI::EventTwoBytes* ev
 #endif
 	}
 
-#ifdef MIXBUS32C  //in 32C, we can use the joystick for the last 2 mixbus send level & pans
+#ifdef MIXBUS  //we can use the joystick for the last 2 mixbus send level & pans
 
 	if (_stype == st_joy && _joystick_active) {
 		if (ev->controller_number == 0x03) {
 			float value = (float)ev->value / 127.0;
 			float db_value = 20.0 * value;
 			float inv_db = 20.0 - db_value; 
-			boost::shared_ptr<Stripable> r = mcp().subview_stripable();
+			std::shared_ptr<Stripable> r = mcp().subview_stripable();
 			if (r && r->is_input_strip()) {
-				boost::shared_ptr<AutomationControl> pc = r->send_level_controllable (10);
+				std::shared_ptr<AutomationControl> pc = r->send_level_controllable (10);
 				if (pc) {
-					pc->set_value (-db_value , PBD::Controllable::NoGroup);
+					pc->set_value (dB_to_coefficient(-db_value) , PBD::Controllable::NoGroup);
 				}
 				pc = r->send_level_controllable (11);
 				if (pc) {
-					pc->set_value (-inv_db, PBD::Controllable::NoGroup);
+					pc->set_value (dB_to_coefficient(-inv_db), PBD::Controllable::NoGroup);
 				}
 			}
 		}
 		if (ev->controller_number == 0x02) {
 			float value = (float)ev->value / 127.0;
-			boost::shared_ptr<Stripable> r = mcp().subview_stripable();
+			std::shared_ptr<Stripable> r = mcp().subview_stripable();
 			if (r && r->is_input_strip()) {
-				boost::shared_ptr<AutomationControl> pc = r->send_pan_azi_controllable (10);
+				std::shared_ptr<AutomationControl> pc = r->send_pan_azimuth_controllable (10);
 				if (pc) {
-					float v = pc->interface_to_internal(value);
-					pc->set_value (v, PBD::Controllable::NoGroup);
+					pc->set_interface (value, true);
 				}
-				pc = r->send_pan_azi_controllable (11);
+				pc = r->send_pan_azimuth_controllable (11);
 				if (pc) {
-					float v = pc->interface_to_internal(value);
-					pc->set_value (v, PBD::Controllable::NoGroup);
+					pc->set_interface (value, true);
 				}
 			}
 		}
@@ -914,7 +910,7 @@ Surface::zero_controls ()
 }
 
 void
-Surface::periodic (uint64_t now_usecs)
+Surface::periodic (PBD::microseconds_t now_usecs)
 {
 	if (_active) {
 		master_gain_changed();
@@ -925,7 +921,7 @@ Surface::periodic (uint64_t now_usecs)
 }
 
 void
-Surface::redisplay (ARDOUR::microseconds_t now, bool force)
+Surface::redisplay (PBD::microseconds_t now, bool force)
 {
 	for (Strips::iterator s = strips.begin(); s != strips.end(); ++s) {
 		(*s)->redisplay (now, force);
@@ -952,9 +948,9 @@ Surface::update_strip_selection ()
 }
 
 void
-Surface::map_stripables (const vector<boost::shared_ptr<Stripable> >& stripables)
+Surface::map_stripables (const vector<std::shared_ptr<Stripable> >& stripables)
 {
-	vector<boost::shared_ptr<Stripable> >::const_iterator r;
+	vector<std::shared_ptr<Stripable> >::const_iterator r;
 	Strips::iterator s = strips.begin();
 
 	DEBUG_TRACE (DEBUG::US2400, string_compose ("Mapping %1 stripables to %2 strips\n", stripables.size(), strips.size()));
@@ -1017,7 +1013,7 @@ Surface::set_jog_mode (JogWheel::Mode)
 }
 
 bool
-Surface::stripable_is_locked_to_strip (boost::shared_ptr<Stripable> stripable) const
+Surface::stripable_is_locked_to_strip (std::shared_ptr<Stripable> stripable) const
 {
 	for (Strips::const_iterator s = strips.begin(); s != strips.end(); ++s) {
 		if ((*s)->stripable() == stripable && (*s)->locked()) {
@@ -1028,7 +1024,7 @@ Surface::stripable_is_locked_to_strip (boost::shared_ptr<Stripable> stripable) c
 }
 
 bool
-Surface::stripable_is_mapped (boost::shared_ptr<Stripable> stripable) const
+Surface::stripable_is_mapped (std::shared_ptr<Stripable> stripable) const
 {
 	for (Strips::const_iterator s = strips.begin(); s != strips.end(); ++s) {
 		if ((*s)->stripable() == stripable) {

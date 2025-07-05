@@ -1,25 +1,27 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2009 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2010 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/messagedialog.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/messagedialog.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/failed_constructor.h"
 
@@ -33,8 +35,10 @@
 #include "gtkmm2ext/utils.h"
 #include "widgets/prompter.h"
 
+#include "ardour_message.h"
 #include "gui_thread.h"
 #include "session_import_dialog.h"
+#include "ui_config.h"
 
 #include "pbd/i18n.h"
 
@@ -76,10 +80,12 @@ SessionImportDialog::SessionImportDialog (ARDOUR::Session* target) :
 	session_browser.set_name ("SessionBrowser");
 	session_browser.append_column (_("Elements"), sb_cols.name);
 	session_browser.append_column_editable (_("Import"), sb_cols.queued);
-	session_browser.set_tooltip_column (3);
 	session_browser.get_column(0)->set_min_width (180);
 	session_browser.get_column(1)->set_min_width (40);
 	session_browser.get_column(1)->set_sizing (TREE_VIEW_COLUMN_AUTOSIZE);
+	if (UIConfiguration::instance().get_use_tooltips()) {
+		session_browser.set_tooltip_column (3);
+	}
 
 	session_scroll.set_policy (POLICY_AUTOMATIC, POLICY_AUTOMATIC);
 	session_scroll.add (session_browser);
@@ -99,8 +105,8 @@ SessionImportDialog::SessionImportDialog (ARDOUR::Session* target) :
 	ok_button->signal_clicked().connect (sigc::mem_fun (*this, &SessionImportDialog::do_merge));
 
 	// prompt signals XXX: problem - handlers to be in the same thread since they return values
-	ElementImporter::Rename.connect_same_thread (connections, boost::bind (&SessionImportDialog::open_rename_dialog, this, _1, _2));
-	ElementImporter::Prompt.connect_same_thread (connections, boost::bind (&SessionImportDialog::open_prompt_dialog, this, _1));
+	ElementImporter::Rename.connect_same_thread (connections, std::bind (&SessionImportDialog::open_rename_dialog, this, _1, _2));
+	ElementImporter::Prompt.connect_same_thread (connections, std::bind (&SessionImportDialog::open_prompt_dialog, this, _1));
 
 	// Finalize
 	show_all();
@@ -114,11 +120,11 @@ SessionImportDialog::load_session (const string& filename)
 			error << string_compose (_("Cannot load XML for session from %1"), filename) << endmsg;
 			return;
 		}
-		boost::shared_ptr<AudioRegionImportHandler> region_handler (new AudioRegionImportHandler (tree, *_session));
-		boost::shared_ptr<AudioPlaylistImportHandler> pl_handler (new AudioPlaylistImportHandler (tree, *_session, *region_handler));
+		std::shared_ptr<AudioRegionImportHandler> region_handler (new AudioRegionImportHandler (tree, *_session));
+		std::shared_ptr<AudioPlaylistImportHandler> pl_handler (new AudioPlaylistImportHandler (tree, *_session, *region_handler));
 
-		handlers.push_back (boost::static_pointer_cast<ElementImportHandler> (region_handler));
-		handlers.push_back (boost::static_pointer_cast<ElementImportHandler> (pl_handler));
+		handlers.push_back (std::static_pointer_cast<ElementImportHandler> (region_handler));
+		handlers.push_back (std::static_pointer_cast<ElementImportHandler> (pl_handler));
 		handlers.push_back (HandlerPtr(new UnusedAudioPlaylistImportHandler (tree, *_session, *region_handler)));
 		handlers.push_back (HandlerPtr(new AudioTrackImportHandler (tree, *_session, *pl_handler)));
 		handlers.push_back (HandlerPtr(new LocationImportHandler (tree, *_session)));
@@ -129,7 +135,7 @@ SessionImportDialog::load_session (const string& filename)
 		if (ElementImportHandler::dirty()) {
 			// Warn user
 			string txt = _("Some elements had errors in them. Please see the log for details");
-			MessageDialog msg (txt, false, MESSAGE_WARNING, BUTTONS_OK, true);
+			ArdourMessageDialog msg (txt, false, MESSAGE_WARNING, BUTTONS_OK, true);
 			msg.run();
 		}
 	}
@@ -213,7 +219,7 @@ SessionImportDialog::do_merge ()
 	if (ElementImportHandler::errors()) {
 		// Warn user
 		string txt = _("Some elements had errors in them. Please see the log for details");
-		MessageDialog msg (txt, false, MESSAGE_WARNING, BUTTONS_OK, true);
+		ArdourMessageDialog msg (txt, false, MESSAGE_WARNING, BUTTONS_OK, true);
 		msg.run();
 	}
 }
@@ -229,10 +235,14 @@ SessionImportDialog::update (string path)
 		{
 			// Prompt user for verification
 			string txt = _("This will select all elements of this type!");
-			MessageDialog msg (txt, false, MESSAGE_QUESTION, BUTTONS_OK_CANCEL, true);
-			if (msg.run() == RESPONSE_CANCEL) {
-				(*cell)[sb_cols.queued] = false;
-				return;
+			ArdourMessageDialog msg (txt, false, MESSAGE_QUESTION, BUTTONS_OK_CANCEL, true);
+			switch (msg.run()) {
+				case Gtk::RESPONSE_ACCEPT:
+				case Gtk::RESPONSE_OK:
+					break;
+				default:
+					(*cell)[sb_cols.queued] = false;
+					return;
 			}
 		}
 
@@ -269,7 +279,7 @@ SessionImportDialog::show_info(const TreeModel::Path& path, TreeViewColumn*)
 	TreeModel::iterator cell = session_browser.get_model()->get_iter (path);
 	string info = (*cell)[sb_cols.info];
 
-	MessageDialog msg (info, false, MESSAGE_INFO, BUTTONS_OK, true);
+	ArdourMessageDialog msg (info, false, MESSAGE_INFO, BUTTONS_OK, true);
 	msg.run();
 }
 
@@ -306,7 +316,7 @@ SessionImportDialog::open_rename_dialog (string text, string name)
 bool
 SessionImportDialog::open_prompt_dialog (string text)
 {
-	MessageDialog msg (text, false, MESSAGE_QUESTION, BUTTONS_OK_CANCEL, true);
+	ArdourMessageDialog msg (text, false, MESSAGE_QUESTION, BUTTONS_OK_CANCEL, true);
 	if (msg.run() == RESPONSE_OK) {
 		return true;
 	}

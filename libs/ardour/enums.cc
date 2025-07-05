@@ -1,29 +1,37 @@
 /*
-    Copyright (C) 2000-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2012 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2012-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2013-2018 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2014-2019 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2015-2018 Len Ovens <len@ovenwerks.net>
+ * Copyright (C) 2015 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/enumwriter.h"
 #include "midi++/types.h"
 
-#include "evoral/Range.hpp" // shouldn't Evoral have its own enum registration?
-
 #include "ardour/delivery.h"
 #include "ardour/disk_io.h"
+#include "ardour/dsp_filter.h"
 #include "ardour/export_channel.h"
 #include "ardour/export_filename.h"
 #include "ardour/export_format_base.h"
@@ -38,6 +46,9 @@
 #include "ardour/source.h"
 #include "ardour/tempo.h"
 #include "ardour/track.h"
+#include "ardour/transport_fsm.h"
+#include "ardour/transport_master.h"
+#include "ardour/triggerbox.h"
 #include "ardour/types.h"
 
 using namespace std;
@@ -61,6 +72,7 @@ setup_enum_writer ()
 	DiskIOPoint _DiskIOPoint;
 	MeterType _MeterType;
 	TrackMode _TrackMode;
+	RecordMode _RecordMode;
 	NoteMode _NoteMode;
 	ChannelMode _ChannelMode;
 	ColorMode _ColorMode;
@@ -68,11 +80,14 @@ setup_enum_writer ()
 	MeterHold _MeterHold;
 	VUMeterStandard _VUMeterStandard;
 	MeterLineUp _MeterLineUp;
+	InputMeterLayout _InputMeterLayout;
 	EditMode _EditMode;
+	RippleMode _RippleMode;
 	RegionPoint _RegionPoint;
 	Placement _Placement;
 	MonitorModel _MonitorModel;
 	MonitorChoice _MonitorChoice;
+	FastWindOp _FastWindOp;
 	MonitorState _MonitorState;
 	PFLPosition _PFLPosition;
 	AFLPosition _AFLPosition;
@@ -86,15 +101,18 @@ setup_enum_writer ()
 	HeaderFormat _HeaderFormat;
 	PluginType _PluginType;
 	SyncSource _SyncSource;
-	ShuttleBehaviour _ShuttleBehaviour;
+	TransportRequestType _TransportRequestType;
 	ShuttleUnits _ShuttleUnits;
-	Session::RecordState _Session_RecordState;
+	RecordState _RecordState;
 	SessionEvent::Type _SessionEvent_Type;
 	SessionEvent::Action _SessionEvent_Action;
 	TimecodeFormat _Session_TimecodeFormat;
 	Session::PullupFormat _Session_PullupFormat;
 	FadeShape _FadeShape;
+	SnapTarget _SnapTarget;
 	RegionSelectionAfterSplit _RegionSelectionAfterSplit;
+	RangeSelectionAfterSplit _RangeSelectionAfterSplit;
+	TimeSelectionAfterSectionPaste _TimeSelectionAfterSectionPaste;
 	IOChange _IOChange;
 	AutomationType _AutomationType;
 	AutoState _AutoState;
@@ -104,8 +122,6 @@ setup_enum_writer ()
 	Source::Flag _Source_Flag;
 	DiskIOProcessor::Flag _DiskIOProcessor_Flag;
 	Location::Flags _Location_Flags;
-	PositionLockStyle _PositionLockStyle;
-	TempoSection::Type _TempoSection_Type;
 	Track::FreezeState _Track_FreezeState;
 	AutomationList::InterpolationStyle _AutomationList_InterpolationStyle;
 	AnyTime::Type _AnyTime_Type;
@@ -127,17 +143,33 @@ setup_enum_writer ()
 	MidiModel::NoteDiffCommand::Property _MidiModel_NoteDiffCommand_Property;
 	MidiModel::SysExDiffCommand::Property _MidiModel_SysExDiffCommand_Property;
 	MidiModel::PatchChangeDiffCommand::Property _MidiModel_PatchChangeDiffCommand_Property;
+	RegionEquivalence _RegionEquivalence;
 	WaveformScale _WaveformScale;
 	WaveformShape _WaveformShape;
+	ScreenSaverMode _ScreenSaverMode;
+	PluginGUIBehavior _PluginGUIBehavior;
+	AppleNSGLViewMode _AppleNSGLViewMode;
 	Session::PostTransportWork _Session_PostTransportWork;
-	Session::SlaveState _Session_SlaveState;
 	MTC_Status _MIDI_MTC_Status;
-	Evoral::OverlapType _OverlapType;
 	BufferingPreset _BufferingPreset;
 	AutoReturnTarget _AutoReturnTarget;
 	PresentationInfo::Flag _PresentationInfo_Flag;
 	MusicalMode::Type mode;
 	MidiPortFlags _MidiPortFlags;
+	TransportFSM::EventType _TransportFSM_EventType;
+	TransportFSM::MotionState _TransportFSM_MotionState;
+	TransportFSM::ButlerState _TransportFSM_ButlerState;
+	TransportFSM::DirectionState _TransportFSM_DirectionState;
+	LoopFadeChoice _LoopFadeChooice;
+	TransportState _TransportState;
+	LocateTransportDisposition _LocateTransportDisposition;
+	Trigger::State _TriggerState;
+	Trigger::LaunchStyle _TriggerLaunchStyle;
+	FollowAction::Type _FollowAction;
+	Trigger::StretchMode _TriggerStretchMode;
+	CueBehavior _CueBehavior;
+	DSP::PerceptualAnalyzer::Speed _DSPAnalyzerSpeed;
+	DSP::PerceptualAnalyzer::Warp _DSPAnalyzerWarp;
 
 #define REGISTER(e) enum_writer.register_distinct (typeid(e).name(), i, s); i.clear(); s.clear()
 #define REGISTER_BITS(e) enum_writer.register_bits (typeid(e).name(), i, s); i.clear(); s.clear()
@@ -179,6 +211,19 @@ setup_enum_writer ()
 	REGISTER_ENUM (MonitoringAutomation);
 	REGISTER_ENUM (BusSendLevel);
 	REGISTER_ENUM (BusSendEnable);
+	REGISTER_ENUM (SurroundSendLevel);
+	REGISTER_ENUM (InsertReturnLevel);
+	REGISTER_ENUM (MainOutVolume);
+	REGISTER_ENUM (MidiVelocityAutomation);
+	REGISTER_ENUM (PanSurroundX);
+	REGISTER_ENUM (PanSurroundY);
+	REGISTER_ENUM (PanSurroundZ);
+	REGISTER_ENUM (PanSurroundSize);
+	REGISTER_ENUM (PanSurroundSnap);
+	REGISTER_ENUM (BinauralRenderMode);
+	REGISTER_ENUM (PanSurroundElevationEnable);
+	REGISTER_ENUM (PanSurroundZones);
+	REGISTER_ENUM (PanSurroundRamp);
 	REGISTER (_AutomationType);
 
 	REGISTER_ENUM (Off);
@@ -227,8 +272,16 @@ setup_enum_writer ()
 
 	REGISTER_ENUM (Normal);
 	REGISTER_ENUM (NonLayered);
+	/* No longer used but we leave this here so that enumwriter can parse
+	 * strings containing "Destructive"
+	 */
 	REGISTER_ENUM (Destructive);
 	REGISTER (_TrackMode);
+
+	REGISTER_ENUM (RecLayered);
+	REGISTER_ENUM (RecNonLayered);
+	REGISTER_ENUM (RecSoundOnSound);
+	REGISTER (_RecordMode);
 
 	REGISTER_ENUM (Sustained);
 	REGISTER_ENUM (Percussive);
@@ -273,9 +326,18 @@ setup_enum_writer ()
 	REGISTER_ENUM (MeteringLineUp15);
 	REGISTER (_MeterLineUp);
 
+	REGISTER_ENUM (LayoutVertical);
+	REGISTER_ENUM (LayoutHorizontal);
+	REGISTER_ENUM (LayoutAutomatic);
+	REGISTER (_InputMeterLayout);
+
+	REGISTER_ENUM (RippleSelected);
+	REGISTER_ENUM (RippleAll);  //enum had to be disambiguated from EditMode:RippleAll
+	REGISTER_ENUM (RippleInterview);
+	REGISTER (_RippleMode);
+
 	REGISTER_ENUM (Slide);
-	REGISTER_ENUM (Splice);
-	REGISTER_ENUM (Ripple); // XXX do the old enum values have to stay in order?
+	REGISTER_ENUM (Ripple);
 	REGISTER_ENUM (Lock);
 	REGISTER (_EditMode);
 	/*
@@ -321,6 +383,11 @@ setup_enum_writer ()
 	REGISTER_ENUM (DeltaEditPoint);
 	REGISTER_ENUM (DeltaOriginMarker);
 	REGISTER (_ClockDeltaMode);
+
+	REGISTER_ENUM (FastWindOff);
+	REGISTER_ENUM (FastWindVarispeed);
+	REGISTER_ENUM (FastWindLocate);
+	REGISTER (_FastWindOp);
 
 	REGISTER_ENUM (DenormalNone);
 	REGISTER_ENUM (DenormalFTZ);
@@ -378,6 +445,7 @@ setup_enum_writer ()
 	REGISTER_ENUM (RF64);
 	REGISTER_ENUM (RF64_WAV);
 	REGISTER_ENUM (MBWF);
+	REGISTER_ENUM (FLAC);
 	REGISTER (_HeaderFormat);
 
 	REGISTER_ENUM (AudioUnit);
@@ -387,6 +455,7 @@ setup_enum_writer ()
 	REGISTER_ENUM (LXVST);
 	REGISTER_ENUM (MacVST);
 	REGISTER_ENUM (Lua);
+	REGISTER_ENUM (VST3);
 	REGISTER (_PluginType);
 
 	REGISTER_ENUM (MTC);
@@ -396,20 +465,22 @@ setup_enum_writer ()
 	REGISTER_ENUM (LTC);
 	REGISTER (_SyncSource);
 
-	REGISTER_ENUM (Sprung);
-	REGISTER_ENUM (Wheel);
-	REGISTER (_ShuttleBehaviour);
+	REGISTER_ENUM (TR_StartStop);
+	REGISTER_ENUM (TR_Speed);
+	REGISTER_ENUM (TR_Locate);
+	REGISTER (_TransportRequestType);
 
 	REGISTER_ENUM (Percentage);
 	REGISTER_ENUM (Semitones);
 	REGISTER (_ShuttleUnits);
 
-	REGISTER_CLASS_ENUM (Session, Disabled);
-	REGISTER_CLASS_ENUM (Session, Enabled);
-	REGISTER_CLASS_ENUM (Session, Recording);
-	REGISTER (_Session_RecordState);
+	REGISTER_ENUM (Disabled);
+	REGISTER_ENUM (Enabled);
+	REGISTER_ENUM (Recording);
+	REGISTER (_RecordState);
 
 	REGISTER_CLASS_ENUM (SessionEvent, SetTransportSpeed);
+	REGISTER_CLASS_ENUM (SessionEvent, SetDefaultPlaySpeed);
 	REGISTER_CLASS_ENUM (SessionEvent, Locate);
 	REGISTER_CLASS_ENUM (SessionEvent, LocateRoll);
 	REGISTER_CLASS_ENUM (SessionEvent, LocateRollLocate);
@@ -419,7 +490,7 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (SessionEvent, RangeStop);
 	REGISTER_CLASS_ENUM (SessionEvent, RangeLocate);
 	REGISTER_CLASS_ENUM (SessionEvent, Overwrite);
-	REGISTER_CLASS_ENUM (SessionEvent, SetSyncSource);
+	REGISTER_CLASS_ENUM (SessionEvent, OverwriteAll);
 	REGISTER_CLASS_ENUM (SessionEvent, Audition);
 	REGISTER_CLASS_ENUM (SessionEvent, SetPlayAudioRange);
 	REGISTER_CLASS_ENUM (SessionEvent, CancelPlayAudioRange);
@@ -428,9 +499,12 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (SessionEvent, AdjustCaptureBuffering);
 	REGISTER_CLASS_ENUM (SessionEvent, SetTimecodeTransmission);
 	REGISTER_CLASS_ENUM (SessionEvent, Skip);
-	REGISTER_CLASS_ENUM (SessionEvent, StopOnce);
+	REGISTER_CLASS_ENUM (SessionEvent, SetTransportMaster);
+	REGISTER_CLASS_ENUM (SessionEvent, StartRoll);
+	REGISTER_CLASS_ENUM (SessionEvent, EndRoll);
+	REGISTER_CLASS_ENUM (SessionEvent, TransportStateChange);
 	REGISTER_CLASS_ENUM (SessionEvent, AutoLoop);
-	REGISTER_CLASS_ENUM (SessionEvent, AutoLoopDeclick);
+	REGISTER_CLASS_ENUM (SessionEvent, SyncCues);
 	REGISTER (_SessionEvent_Type);
 
 	REGISTER_CLASS_ENUM (SessionEvent, Add);
@@ -439,28 +513,21 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (SessionEvent, Clear);
 	REGISTER (_SessionEvent_Action);
 
-	REGISTER_CLASS_ENUM (Session, Stopped);
-	REGISTER_CLASS_ENUM (Session, Waiting);
-	REGISTER_CLASS_ENUM (Session, Running);
-	REGISTER (_Session_SlaveState);
-
 	REGISTER_ENUM (MTC_Stopped);
 	REGISTER_ENUM (MTC_Forward);
 	REGISTER_ENUM (MTC_Backward);
 	REGISTER (_MIDI_MTC_Status);
 
 	REGISTER_CLASS_ENUM (Session, PostTransportStop);
-	REGISTER_CLASS_ENUM (Session, PostTransportDuration);
 	REGISTER_CLASS_ENUM (Session, PostTransportLocate);
-	REGISTER_CLASS_ENUM (Session, PostTransportRoll);
 	REGISTER_CLASS_ENUM (Session, PostTransportAbort);
 	REGISTER_CLASS_ENUM (Session, PostTransportOverWrite);
-	REGISTER_CLASS_ENUM (Session, PostTransportSpeed);
 	REGISTER_CLASS_ENUM (Session, PostTransportAudition);
 	REGISTER_CLASS_ENUM (Session, PostTransportReverse);
-	REGISTER_CLASS_ENUM (Session, PostTransportInputChange);
-	REGISTER_CLASS_ENUM (Session, PostTransportCurveRealloc);
 	REGISTER_CLASS_ENUM (Session, PostTransportClearSubstate);
+	REGISTER_CLASS_ENUM (Session, PostTransportAdjustPlaybackBuffering);
+	REGISTER_CLASS_ENUM (Session, PostTransportAdjustCaptureBuffering);
+	REGISTER_CLASS_ENUM (Session, PostTransportLoopChanged);
 	REGISTER_BITS (_Session_PostTransportWork);
 
 	REGISTER_CLASS_ENUM (Session, Clean);
@@ -502,6 +569,9 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (Source, RemovableIfEmpty);
 	REGISTER_CLASS_ENUM (Source, RemoveAtDestroy);
 	REGISTER_CLASS_ENUM (Source, NoPeakFile);
+	/* No longer used but we leave this here so that enumwriter can parse
+	 * strings containing "Destructive"
+	 */
 	REGISTER_CLASS_ENUM (Source, Destructive);
 	REGISTER_CLASS_ENUM (Source, Empty);
 	REGISTER_BITS (_Source_Flag);
@@ -522,10 +592,21 @@ setup_enum_writer ()
 	REGISTER_ENUM(ExistingNewlyCreatedRight);
 	REGISTER_ENUM(ExistingNewlyCreatedBoth);
 	REGISTER (_RegionSelectionAfterSplit);
+	REGISTER (_RangeSelectionAfterSplit);
+
+	REGISTER_ENUM (SnapTargetGrid);
+	REGISTER_ENUM (SnapTargetOther);
+	REGISTER_ENUM (SnapTargetBoth);
+	REGISTER (_SnapTarget);
+
+	REGISTER_ENUM(SectionSelectNoop);
+	REGISTER_ENUM(SectionSelectClear);
+	REGISTER_ENUM(SectionSelectRetain);
+	REGISTER_ENUM(SectionSelectRetainAndMovePlayhead);
+	REGISTER (_TimeSelectionAfterSectionPaste);
 
 	REGISTER_CLASS_ENUM (DiskIOProcessor, Recordable);
 	REGISTER_CLASS_ENUM (DiskIOProcessor, Hidden);
-	REGISTER_CLASS_ENUM (DiskIOProcessor, Destructive);
 	REGISTER_BITS (_DiskIOProcessor_Flag);
 
 	REGISTER_CLASS_ENUM (Location, IsMark);
@@ -537,11 +618,11 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (Location, IsRangeMarker);
 	REGISTER_CLASS_ENUM (Location, IsSkip);
 	REGISTER_CLASS_ENUM (Location, IsClockOrigin);
+	REGISTER_CLASS_ENUM (Location, IsXrun);
+	REGISTER_CLASS_ENUM (Location, IsCueMarker);
+	REGISTER_CLASS_ENUM (Location, IsSection);
+	REGISTER_CLASS_ENUM (Location, IsScene);
 	REGISTER_BITS (_Location_Flags);
-
-	REGISTER_CLASS_ENUM (TempoSection, Ramp);
-	REGISTER_CLASS_ENUM (TempoSection, Constant);
-	REGISTER (_TempoSection_Type);
 
 	REGISTER_CLASS_ENUM (Track, NoFreeze);
 	REGISTER_CLASS_ENUM (Track, Frozen);
@@ -575,6 +656,7 @@ setup_enum_writer ()
 
 	REGISTER_CLASS_ENUM (ExportFormatBase, T_None);
 	REGISTER_CLASS_ENUM (ExportFormatBase, T_Sndfile);
+	REGISTER_CLASS_ENUM (ExportFormatBase, T_FFMPEG);
 	REGISTER (_ExportFormatBase_Type);
 
 	REGISTER_CLASS_ENUM (ExportFormatBase, F_None);
@@ -587,6 +669,8 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (ExportFormatBase, F_FLAC);
 	REGISTER_CLASS_ENUM (ExportFormatBase, F_Ogg);
 	REGISTER_CLASS_ENUM (ExportFormatBase, F_CAF);
+	REGISTER_CLASS_ENUM (ExportFormatBase, F_FFMPEG);
+	REGISTER_CLASS_ENUM (ExportFormatBase, F_MPEG);
 	REGISTER (_ExportFormatBase_FormatId);
 
 	REGISTER_CLASS_ENUM (ExportFormatBase, E_FileDefault);
@@ -604,6 +688,8 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Float);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Double);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Vorbis);
+	REGISTER_CLASS_ENUM (ExportFormatBase, SF_Opus);
+	REGISTER_CLASS_ENUM (ExportFormatBase, SF_MPEG_LAYER_III);
 	REGISTER (_ExportFormatBase_SampleFormat);
 
 	REGISTER_CLASS_ENUM (ExportFormatBase, D_None);
@@ -623,6 +709,7 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_Session);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_8);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_22_05);
+	REGISTER_CLASS_ENUM (ExportFormatBase, SR_24);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_44_1);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_48);
 	REGISTER_CLASS_ENUM (ExportFormatBase, SR_88_2);
@@ -646,7 +733,6 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (RegionExportChannelFactory, None);
 	REGISTER_CLASS_ENUM (RegionExportChannelFactory, Raw);
 	REGISTER_CLASS_ENUM (RegionExportChannelFactory, Fades);
-	REGISTER_CLASS_ENUM (RegionExportChannelFactory, Processed);
 	REGISTER (_RegionExportChannelFactory_Type);
 
 	REGISTER_CLASS_ENUM (Delivery, Insert);
@@ -654,12 +740,15 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (Delivery, Listen);
 	REGISTER_CLASS_ENUM (Delivery, Main);
 	REGISTER_CLASS_ENUM (Delivery, Aux);
+	REGISTER_CLASS_ENUM (Delivery, Foldback);
+	REGISTER_CLASS_ENUM (Delivery, DirectOuts);
 	REGISTER_BITS (_Delivery_Role);
 
 	REGISTER_CLASS_ENUM (MuteMaster, PreFader);
 	REGISTER_CLASS_ENUM (MuteMaster, PostFader);
 	REGISTER_CLASS_ENUM (MuteMaster, Listen);
 	REGISTER_CLASS_ENUM (MuteMaster, Main);
+	REGISTER_CLASS_ENUM (MuteMaster, SurroundSend);
 	REGISTER_BITS (_MuteMaster_MutePoint);
 
 	REGISTER_CLASS_ENUM (IO, Input);
@@ -679,12 +768,19 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Time);
 	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Program);
 	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Bank);
+	REGISTER_CLASS_ENUM (MidiModel::PatchChangeDiffCommand, Channel);
 	REGISTER (_MidiModel_PatchChangeDiffCommand_Property);
 
 	REGISTER_ENUM(MidiPortMusic);
 	REGISTER_ENUM(MidiPortControl);
 	REGISTER_ENUM(MidiPortSelection);
 	REGISTER_BITS(_MidiPortFlags);
+
+	REGISTER_ENUM(Exact);
+	REGISTER_ENUM(Enclosed);
+	REGISTER_ENUM(Overlap);
+	REGISTER_ENUM(LayerTime);
+	REGISTER(_RegionEquivalence);
 
 	REGISTER_ENUM(Linear);
 	REGISTER_ENUM(Logarithmic);
@@ -694,16 +790,20 @@ setup_enum_writer ()
 	REGISTER_ENUM(Rectified);
 	REGISTER(_WaveformShape);
 
-	REGISTER_ENUM(AudioTime);
-	REGISTER_ENUM(MusicTime);
-	REGISTER(_PositionLockStyle);
+	REGISTER_ENUM(InhibitNever);
+	REGISTER_ENUM(InhibitWhileRecording);
+	REGISTER_ENUM(InhibitAlways);
+	REGISTER(_ScreenSaverMode);
 
-	REGISTER_ENUM (Evoral::OverlapNone);
-	REGISTER_ENUM (Evoral::OverlapInternal);
-	REGISTER_ENUM (Evoral::OverlapStart);
-	REGISTER_ENUM (Evoral::OverlapEnd);
-	REGISTER_ENUM (Evoral::OverlapExternal);
-	REGISTER(_OverlapType);
+	REGISTER_ENUM(PluginGUIHide);
+	REGISTER_ENUM(PluginGUIDestroyAny);
+	REGISTER_ENUM(PluginGUIDestroyVST);
+	REGISTER(_PluginGUIBehavior);
+
+	REGISTER_ENUM(NSGLHiRes);
+	REGISTER_ENUM(NSGLLoRes);
+	REGISTER_ENUM(NSGLDisable);
+	REGISTER(_AppleNSGLViewMode);
 
 	REGISTER_ENUM (Small);
 	REGISTER_ENUM (Medium);
@@ -727,6 +827,12 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (PresentationInfo, Auditioner);
 	REGISTER_CLASS_ENUM (PresentationInfo, Hidden);
 	REGISTER_CLASS_ENUM (PresentationInfo, OrderSet);
+	REGISTER_CLASS_ENUM (PresentationInfo, FoldbackBus);
+	REGISTER_CLASS_ENUM (PresentationInfo, TriggerTrack);
+	REGISTER_CLASS_ENUM (PresentationInfo, SurroundMaster);
+#ifdef MIXBUS
+	REGISTER_CLASS_ENUM (PresentationInfo, MixbusEditorHidden);
+#endif
 	REGISTER_BITS (_PresentationInfo_Flag);
 
 	REGISTER_CLASS_ENUM (MusicalMode,Dorian);
@@ -767,6 +873,96 @@ setup_enum_writer ()
 	REGISTER_CLASS_ENUM (MusicalMode, Persian);
 	REGISTER_CLASS_ENUM (MusicalMode, Algerian);
 	REGISTER (mode);
+
+	REGISTER_CLASS_ENUM (TransportFSM, ButlerDone);
+	REGISTER_CLASS_ENUM (TransportFSM, ButlerRequired);
+	REGISTER_CLASS_ENUM (TransportFSM, DeclickDone);
+	REGISTER_CLASS_ENUM (TransportFSM, StartTransport);
+	REGISTER_CLASS_ENUM (TransportFSM, StopTransport);
+	REGISTER_CLASS_ENUM (TransportFSM, Locate);
+	REGISTER_CLASS_ENUM (TransportFSM, LocateDone);
+	REGISTER_CLASS_ENUM (TransportFSM, SetSpeed);
+	REGISTER (_TransportFSM_EventType);
+
+	REGISTER_CLASS_ENUM (TransportFSM, Stopped);
+	REGISTER_CLASS_ENUM (TransportFSM, Rolling);
+	REGISTER_CLASS_ENUM (TransportFSM, DeclickToStop);
+	REGISTER_CLASS_ENUM (TransportFSM, DeclickToLocate);
+	REGISTER_CLASS_ENUM (TransportFSM, WaitingForLocate);
+	REGISTER (_TransportFSM_MotionState);
+
+	REGISTER_CLASS_ENUM (TransportFSM, NotWaitingForButler);
+	REGISTER_CLASS_ENUM (TransportFSM, WaitingForButler);
+	REGISTER (_TransportFSM_ButlerState);
+
+	REGISTER_CLASS_ENUM (TransportFSM, Forwards);
+	REGISTER_CLASS_ENUM (TransportFSM, Backwards);
+	REGISTER_CLASS_ENUM (TransportFSM, Reversing);
+	REGISTER (_TransportFSM_DirectionState);
+
+	REGISTER_ENUM (NoLoopFade);
+	REGISTER_ENUM (EndLoopFade);
+	REGISTER_ENUM (BothLoopFade);
+	REGISTER_ENUM (XFadeLoop);
+	REGISTER (_LoopFadeChooice);
+
+	REGISTER_ENUM (TransportStopped);
+	REGISTER_ENUM (TransportRolling);
+	REGISTER_ENUM (TransportLooping);
+	REGISTER_ENUM (TransportStarting);
+	REGISTER (_TransportState);
+
+	REGISTER_ENUM (MustStop);
+	REGISTER_ENUM (MustRoll);
+	REGISTER_ENUM (RollIfAppropriate);
+	REGISTER (_LocateTransportDisposition);
+
+	REGISTER_CLASS_ENUM (Trigger, Stopped);
+	REGISTER_CLASS_ENUM (Trigger, WaitingToStart);
+	REGISTER_CLASS_ENUM (Trigger, Running);
+	REGISTER_CLASS_ENUM (Trigger, WaitingForRetrigger);
+	REGISTER_CLASS_ENUM (Trigger, WaitingToStop);
+	REGISTER_CLASS_ENUM (Trigger, WaitingToSwitch);
+	REGISTER_CLASS_ENUM (Trigger, Stopping);
+	REGISTER (_TriggerState);
+
+	REGISTER_CLASS_ENUM (FollowAction, None);
+	REGISTER_CLASS_ENUM (FollowAction, Stop);
+	REGISTER_CLASS_ENUM (FollowAction, Again);
+	REGISTER_CLASS_ENUM (FollowAction, ForwardTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, ReverseTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, FirstTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, LastTrigger);
+	REGISTER_CLASS_ENUM (FollowAction, JumpTrigger);
+	REGISTER (_FollowAction);
+
+	REGISTER_CLASS_ENUM (Trigger, OneShot);
+	REGISTER_CLASS_ENUM (Trigger, ReTrigger);
+	REGISTER_CLASS_ENUM (Trigger, Gate);
+	REGISTER_CLASS_ENUM (Trigger, Toggle);
+	REGISTER_CLASS_ENUM (Trigger, Repeat);
+	REGISTER (_TriggerLaunchStyle);
+
+	REGISTER_CLASS_ENUM (Trigger, Crisp);
+	REGISTER_CLASS_ENUM (Trigger, Mixed);
+	REGISTER_CLASS_ENUM (Trigger, Smooth);
+	REGISTER (_TriggerStretchMode);
+
+	REGISTER_ENUM (FollowCues);
+	REGISTER_ENUM (ImplicitlyIgnoreCues);
+	REGISTER_BITS (_CueBehavior);
+
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Rapid);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Fast);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Moderate);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Slow);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Noise);
+	REGISTER (_DSPAnalyzerSpeed);
+
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Bark);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, Medium);
+	REGISTER_CLASS_ENUM (DSP::PerceptualAnalyzer, High);
+	REGISTER (_DSPAnalyzerWarp);
 }
 
 } /* namespace ARDOUR */

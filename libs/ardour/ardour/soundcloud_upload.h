@@ -4,8 +4,7 @@
 
 *****************************************************************************/
 
-#ifndef __ardour_soundcloud_upload_h__
-#define __ardour_soundcloud_upload_h__
+#pragma once
 
 #include <string>
 #include <stdio.h>
@@ -32,22 +31,21 @@ public:
 	SoundcloudUploader();
 	~SoundcloudUploader();
 
-	std::string	Get_Auth_Token(std::string username, std::string password);
+	std::string Get_Auth_Token(std::string username, std::string password);
 	std::string Upload (std::string file_path, std::string title, std::string token, bool ispublic, bool downloadable, ARDOUR::ExportHandler *caller);
-	static int progress_callback(void *caller, double dltotal, double dlnow, double ultotal, double ulnow);
+	static int  progress_callback(void *caller, double dltotal, double dlnow, double ultotal, double ulnow);
 
 
 private:
 
-	void		setcUrlOptions();
+	void setcUrlOptions();
 
 	CURL *curl_handle;
 	CURLM *multi_handle;
-	char errorBuffer[CURL_ERROR_SIZE];	// storage for cUrl error message
+	char errorBuffer[CURL_ERROR_SIZE]; // storage for cUrl error message
 
 	std::string title;
 	ARDOUR::ExportHandler *caller;
 
 };
 
-#endif /* __ardour_soundcloud_upload_h__ */

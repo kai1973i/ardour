@@ -1,22 +1,21 @@
 /*
-    Copyright (C) 2009-2013 Paul Davis
-    Authors: Sampo Savolainen, Jannis Pohlmann
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 
@@ -32,7 +31,7 @@ using namespace ARDOUR;
 using namespace PBD;
 using namespace std;
 
-#include "pbd/abstract_ui.cc" // instantiate template
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 void wiimote_control_protocol_mesg_callback (cwiid_wiimote_t *wiimote, int mesg_count, union cwiid_mesg mesg[], timespec *t);
 
@@ -49,12 +48,6 @@ WiimoteControlProtocol::WiimoteControlProtocol (Session& session)
 WiimoteControlProtocol::~WiimoteControlProtocol ()
 {
 	stop ();
-}
-
-bool
-WiimoteControlProtocol::probe ()
-{
-	return true;
 }
 
 int
@@ -86,7 +79,7 @@ WiimoteControlProtocol::set_active (bool yn)
 }
 
 XMLNode&
-WiimoteControlProtocol::get_state ()
+WiimoteControlProtocol::get_state () const
 {
 	XMLNode& node (ControlProtocol::get_state());
 	node.set_property (X_("feedback"), "0");
@@ -119,8 +112,8 @@ WiimoteControlProtocol::start ()
 	DEBUG_TRACE (DEBUG::WiimoteControl, "WiimoteControlProtocol::start init\n");
 
 	// update LEDs whenever the transport or recording state changes
-	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&WiimoteControlProtocol::update_led_state, this), this);
-	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, boost::bind (&WiimoteControlProtocol::update_led_state, this), this);
+	session->TransportStateChange.connect (session_connections, MISSING_INVALIDATOR, std::bind (&WiimoteControlProtocol::update_led_state, this), this);
+	session->RecordStateChanged.connect (session_connections, MISSING_INVALIDATOR, std::bind (&WiimoteControlProtocol::update_led_state, this), this);
 
 	// start the Wiimote control UI; it will run in its own thread context
 	BaseUI::run ();
@@ -160,8 +153,6 @@ void
 WiimoteControlProtocol::thread_init ()
 {
 	DEBUG_TRACE (DEBUG::WiimoteControl, "WiimoteControlProtocol::thread_init init\n");
-
-	pthread_set_name (X_("wiimote"));
 
 	// allow to make requests to the GUI and RT thread(s)
 	PBD::notify_event_loops_about_thread_creation (pthread_self (), X_("wiimote"), 2048);
@@ -300,7 +291,7 @@ WiimoteControlProtocol::update_led_state ()
 	}
 
 	// enable LED1 if Ardour is playing
-	if (session->transport_rolling ()) {
+	if (transport_rolling ()) {
 		DEBUG_TRACE (DEBUG::WiimoteControl, "WiimoteControlProtocol::update_led_state playing, activate LED1\n");
 		state |= CWIID_LED1_ON;
 	}
@@ -426,12 +417,12 @@ WiimoteControlProtocol::wiimote_callback (int mesg_count, union cwiid_mesg mesg[
 
 			// + = zoom in
 			if (b & CWIID_BTN_PLUS) {
-				access_action ("Editor/temporal-zoom-in");
+				access_action ("Editing/temporal-zoom-in");
 			}
 
 			// - = zoom out
 			if (b & CWIID_BTN_MINUS) {
-				access_action ("Editor/temporal-zoom-out");
+				access_action ("Editing/temporal-zoom-out");
 			}
 
 			// home = no-op
@@ -456,14 +447,3 @@ wiimote_control_protocol_mesg_callback (cwiid_wiimote_t *wiimote, int mesg_count
 	DEBUG_TRACE (DEBUG::WiimoteControl, "WiimoteControlProtocol::mesg_callback done\n");
 }
 
-
-void*
-WiimoteControlProtocol::request_factory (uint32_t num_requests)
-{
-	/* AbstractUI<T>::request_buffer_factory() is a template method only
-	   instantiated in this source module. To provide something visible for
-	   use in the interface/descriptor, we have this static method that is
-	   template-free.
-	*/
-	return request_buffer_factory (num_requests);
-}

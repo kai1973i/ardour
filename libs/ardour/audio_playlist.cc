@@ -1,21 +1,25 @@
 /*
-    Copyright (C) 2003 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006 Jesse Chappell <jesse@essej.net>
+ * Copyright (C) 2006 Sampo Savolainen <v2@iki.fi>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2011-2012 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 
@@ -33,6 +37,10 @@
 using namespace ARDOUR;
 using namespace std;
 using namespace PBD;
+
+#include "ardour/audioengine.h"
+#define S2SC(s) Temporal::samples_to_superclock (s, TEMPORAL_SAMPLE_RATE)
+#define SC2S(s) Temporal::superclock_to_samples (s, TEMPORAL_SAMPLE_RATE)
 
 AudioPlaylist::AudioPlaylist (Session& session, const XMLNode& node, bool hidden)
 	: Playlist (session, node, DataType::AUDIO, hidden)
@@ -58,18 +66,19 @@ AudioPlaylist::AudioPlaylist (Session& session, string name, bool hidden)
 {
 }
 
-AudioPlaylist::AudioPlaylist (boost::shared_ptr<const AudioPlaylist> other, string name, bool hidden)
+AudioPlaylist::AudioPlaylist (std::shared_ptr<const AudioPlaylist> other, string name, bool hidden)
 	: Playlist (other, name, hidden)
 {
 }
 
-AudioPlaylist::AudioPlaylist (boost::shared_ptr<const AudioPlaylist> other, samplepos_t start, samplecnt_t cnt, string name, bool hidden)
+AudioPlaylist::AudioPlaylist (std::shared_ptr<const AudioPlaylist> other, timepos_t const & start, timepos_t const & cnt, string name, bool hidden)
 	: Playlist (other, start, cnt, name, hidden)
 {
 	RegionReadLock rlock2 (const_cast<AudioPlaylist*> (other.get()));
 	in_set_state++;
 
-	samplepos_t const end = start + cnt - 1;
+	const timepos_t tend = start + cnt;
+	samplepos_t end = tend.samples();
 
 	/* Audio regions that have been created by the Playlist constructor
 	   will currently have the same fade in/out as the regions that they
@@ -78,54 +87,57 @@ AudioPlaylist::AudioPlaylist (boost::shared_ptr<const AudioPlaylist> other, samp
 
 	RegionList::iterator ours = regions.begin ();
 
-	for (RegionList::const_iterator i = other->regions.begin(); i != other->regions.end(); ++i) {
-		boost::shared_ptr<AudioRegion> region = boost::dynamic_pointer_cast<AudioRegion> (*i);
+	for (auto const & r : other->regions) {
+		std::shared_ptr<AudioRegion> region = std::dynamic_pointer_cast<AudioRegion> (r);
 		assert (region);
 
 		samplecnt_t fade_in = 64;
 		samplecnt_t fade_out = 64;
 
-		switch (region->coverage (start, end)) {
-		case Evoral::OverlapNone:
+		switch (region->coverage (start, tend)) {
+		case Temporal::OverlapNone:
 			continue;
 
-		case Evoral::OverlapInternal:
+		case Temporal::OverlapInternal:
 		{
-			samplecnt_t const offset = start - region->position ();
+			samplecnt_t const offset = start.samples() - region->position_sample ();
 			samplecnt_t const trim = region->last_sample() - end;
 			if (region->fade_in()->back()->when > offset) {
-				fade_in = region->fade_in()->back()->when - offset;
+				fade_in = region->fade_in()->back()->when.earlier (timepos_t (offset)).samples();
 			}
 			if (region->fade_out()->back()->when > trim) {
-				fade_out = region->fade_out()->back()->when - trim;
+				fade_out = region->fade_out()->back()->when.earlier (timepos_t (trim)).samples();
 			}
 			break;
 		}
 
-		case Evoral::OverlapStart: {
-			if (end > region->position() + region->fade_in()->back()->when)
-				fade_in = region->fade_in()->back()->when;  //end is after fade-in, preserve the fade-in
-			if (end > region->last_sample() - region->fade_out()->back()->when)
-				fade_out = region->fade_out()->back()->when - ( region->last_sample() - end );  //end is inside the fadeout, preserve the fades endpoint
+		case Temporal::OverlapStart: {
+			if (timepos_t (end) > region->position() + region->fade_in()->back()->when) {
+				fade_in = region->fade_in()->back()->when.samples();  //end is after fade-in, preserve the fade-in
+			}
+			if (timepos_t (end) >= region->end().earlier (region->fade_out()->back()->when)) {
+				fade_out = region->fade_out()->back()->when.earlier (timepos_t (region->last_sample() - end)).samples();  //end is inside the fadeout, preserve the fades endpoint
+			}
 			break;
 		}
 
-		case Evoral::OverlapEnd: {
-			if (start < region->last_sample() - region->fade_out()->back()->when)  //start is before fade-out, preserve the fadeout
-				fade_out = region->fade_out()->back()->when;
-
-			if (start < region->position() + region->fade_in()->back()->when)
-				fade_in = region->fade_in()->back()->when - (start - region->position());  //end is inside the fade-in, preserve the fade-in endpoint
+		case Temporal::OverlapEnd: {
+			if (start < region->end().earlier (region->fade_out()->back()->when)) {  //start is before fade-out, preserve the fadeout
+				fade_out = region->fade_out()->back()->when.samples();
+			}
+			if (start < region->position() + region->fade_in()->back()->when) {
+				fade_in = region->fade_in()->back()->when.earlier (start.distance (region->position())).samples();  //end is inside the fade-in, preserve the fade-in endpoint
+			}
 			break;
 		}
 
-		case Evoral::OverlapExternal:
-			fade_in = region->fade_in()->back()->when;
-			fade_out = region->fade_out()->back()->when;
+		case Temporal::OverlapExternal:
+			fade_in = region->fade_in()->back()->when.samples();
+			fade_out = region->fade_out()->back()->when.samples();
 			break;
 		}
 
-		boost::shared_ptr<AudioRegion> our_region = boost::dynamic_pointer_cast<AudioRegion> (*ours);
+		std::shared_ptr<AudioRegion> our_region = std::dynamic_pointer_cast<AudioRegion> (*ours);
 		assert (our_region);
 
 		our_region->set_fade_in_length (fade_in);
@@ -140,7 +152,7 @@ AudioPlaylist::AudioPlaylist (boost::shared_ptr<const AudioPlaylist> other, samp
 
 /** Sort by descending layer and then by ascending position */
 struct ReadSorter {
-    bool operator() (boost::shared_ptr<Region> a, boost::shared_ptr<Region> b) {
+    bool operator() (std::shared_ptr<Region> a, std::shared_ptr<Region> b) {
 	    if (a->layer() != b->layer()) {
 		    return a->layer() > b->layer();
 	    }
@@ -151,21 +163,29 @@ struct ReadSorter {
 
 /** A segment of region that needs to be read */
 struct Segment {
-	Segment (boost::shared_ptr<AudioRegion> r, Evoral::Range<samplepos_t> a) : region (r), range (a) {}
+	Segment (std::shared_ptr<AudioRegion> r, Temporal::Range a) : region (r), range (a) {}
 
-	boost::shared_ptr<AudioRegion> region; ///< the region
-	Evoral::Range<samplepos_t> range;       ///< range of the region to read, in session samples
+	std::shared_ptr<AudioRegion> region; ///< the region
+	Temporal::Range range;       ///< range of the region to read, in session samples
 };
 
 /** @param start Start position in session samples.
  *  @param cnt Number of samples to read.
  */
-ARDOUR::samplecnt_t
-AudioPlaylist::read (Sample *buf, Sample *mixdown_buffer, float *gain_buffer, samplepos_t start,
-		     samplecnt_t cnt, unsigned chan_n)
+ARDOUR::timecnt_t
+AudioPlaylist::read (Sample *buf, Sample *mixdown_buffer, float *gain_buffer, timepos_t const & start, timecnt_t const & cnt, uint32_t chan_n)
 {
 	DEBUG_TRACE (DEBUG::AudioPlayback, string_compose ("Playlist %1 read @ %2 for %3, channel %4, regions %5 mixdown @ %6 gain @ %7\n",
-							   name(), start, cnt, chan_n, regions.size(), mixdown_buffer, gain_buffer));
+							   name(), start.samples(), cnt.samples(), chan_n, regions.size(), mixdown_buffer, gain_buffer));
+
+	DEBUG_TRACE (DEBUG::AudioCacheRefill, string_compose ("Playlist '%1' chn: %2 from %3 to %4 [s] PH@ %5\n",
+				name (), chan_n,
+				std::setprecision (3), std::fixed,
+				start.samples() / (float)_session.sample_rate (),
+				(start.samples() + cnt.samples()) / (float)_session.sample_rate (),
+				_session.transport_sample () / (float)_session.sample_rate ()));
+
+	samplecnt_t const scnt (cnt.samples ());
 
 	/* optimizing this memset() away involves a lot of conditionals
 	   that may well cause more of a hit due to cache misses
@@ -180,7 +200,7 @@ AudioPlaylist::read (Sample *buf, Sample *mixdown_buffer, float *gain_buffer, sa
 	   zeroed.
 	*/
 
-	memset (buf, 0, sizeof (Sample) * cnt);
+	memset (buf, 0, sizeof (Sample) * scnt);
 
 	/* this function is never called from a realtime thread, so
 	   its OK to block (for short intervals).
@@ -191,58 +211,61 @@ AudioPlaylist::read (Sample *buf, Sample *mixdown_buffer, float *gain_buffer, sa
 	/* Find all the regions that are involved in the bit we are reading,
 	   and sort them by descending layer and ascending position.
 	*/
-	boost::shared_ptr<RegionList> all = regions_touched_locked (start, start + cnt - 1);
+	std::shared_ptr<RegionList> all = regions_touched_locked (start, start + cnt, true);
 	all->sort (ReadSorter ());
 
 	/* This will be a list of the bits of our read range that we have
 	   handled completely (ie for which no more regions need to be read).
 	   It is a list of ranges in session samples.
 	*/
-	Evoral::RangeList<samplepos_t> done;
+	Temporal::RangeList done;
 
 	/* This will be a list of the bits of regions that we need to read */
 	list<Segment> to_do;
 
 	/* Now go through the `all' list filling in `to_do' and `done' */
 	for (RegionList::iterator i = all->begin(); i != all->end(); ++i) {
-		boost::shared_ptr<AudioRegion> ar = boost::dynamic_pointer_cast<AudioRegion> (*i);
+		std::shared_ptr<AudioRegion> ar = std::dynamic_pointer_cast<AudioRegion> (*i);
 
 		/* muted regions don't figure into it at all */
-		if ( ar->muted() )
+		if (ar->muted()) {
 			continue;
+		}
 
 		/* check for the case of solo_selection */
-		bool force_transparent = ( _session.solo_selection_active() && SoloSelectedActive() && !SoloSelectedListIncludes( (const Region*) &(**i) ) );
-		if ( force_transparent )
+		const bool force_transparent = (_session.solo_selection_active() && SoloSelectedActive() && !SoloSelectedListIncludes( (const Region*) &(**i)));
+		if (force_transparent) {
 			continue;
+		}
 
 		/* Work out which bits of this region need to be read;
 		   first, trim to the range we are reading...
 		*/
-		Evoral::Range<samplepos_t> region_range = ar->range ();
-		region_range.from = max (region_range.from, start);
-		region_range.to = min (region_range.to, start + cnt - 1);
+		Temporal::Range rrange = ar->range_samples ();
+		Temporal::Range region_range (max (rrange.start(), start),
+		                              min (rrange.end() + ar->tail (), start + cnt));
 
 		/* ... and then remove the bits that are already done */
 
-		Evoral::RangeList<samplepos_t> region_to_do = Evoral::subtract (region_range, done);
+		Temporal::RangeList region_to_do = region_range.subtract (done);
 
 		/* Make a note to read those bits, adding their bodies (the parts between end-of-fade-in
 		   and start-of-fade-out) to the `done' list.
 		*/
 
-		Evoral::RangeList<samplepos_t>::List t = region_to_do.get ();
+		Temporal::RangeList::List t = region_to_do.get ();
 
-		for (Evoral::RangeList<samplepos_t>::List::iterator j = t.begin(); j != t.end(); ++j) {
-			Evoral::Range<samplepos_t> d = *j;
+		for (Temporal::RangeList::List::iterator j = t.begin(); j != t.end(); ++j) {
+			Temporal::Range d = *j;
 			to_do.push_back (Segment (ar, d));
 
 			if (ar->opaque ()) {
 				/* Cut this range down to just the body and mark it done */
-				Evoral::Range<samplepos_t> body = ar->body_range ();
-				if (body.from < d.to && body.to > d.from) {
-					d.from = max (d.from, body.from);
-					d.to = min (d.to, body.to);
+				Temporal::Range body = ar->body_range ();
+
+				if (body.start() < d.end().earlier (ar->tail ()) && body.end() > d.start()) {
+					d.set_start (max (d.start(), body.start()));
+					d.set_end (min (d.end().earlier (ar->tail ()), body.end()));
 					done.add (d);
 				}
 			}
@@ -250,12 +273,42 @@ AudioPlaylist::read (Sample *buf, Sample *mixdown_buffer, float *gain_buffer, sa
 	}
 
 	/* Now go backwards through the to_do list doing the actual reads */
+
 	for (list<Segment>::reverse_iterator i = to_do.rbegin(); i != to_do.rend(); ++i) {
 		DEBUG_TRACE (DEBUG::AudioPlayback, string_compose ("\tPlaylist %1 read %2 @ %3 for %4, channel %5, buf @ %6 offset %7\n",
-								   name(), i->region->name(), i->range.from,
-								   i->range.to - i->range.from + 1, (int) chan_n,
-								   buf, i->range.from - start));
-		i->region->read_at (buf + i->range.from - start, mixdown_buffer, gain_buffer, i->range.from, i->range.to - i->range.from + 1, chan_n);
+		                                                   name(), i->region->name(), i->range.start(),
+		                                                   i->range.length(), (int) chan_n,
+		                                                   buf, i->range.start().earlier (start)));
+
+		samplepos_t read_pos (i->range.start().samples());
+		samplecnt_t read_cnt (i->range.start().distance (i->range.end()).samples());
+		samplecnt_t soffset = start.distance (i->range.start()).samples();
+
+		assert (soffset < scnt);
+
+		if (soffset + read_cnt > scnt) {
+			read_cnt = scnt - soffset;
+		}
+		assert (soffset + read_cnt <= scnt);
+		samplecnt_t nread = i->region->read_at (buf + soffset, mixdown_buffer, gain_buffer, read_pos, read_cnt, chan_n);
+		if (nread != read_cnt) {
+			std::cerr << name() << " tried to read " << read_cnt
+				<< " got " << nread
+				<< " in " << i->region->name()
+				<< " for chn " << chan_n
+				<< " to offset " << soffset
+				<< " using range " << i->range.start().samples() << " .. " << i->range.end().samples()
+				<< " len " << i->range.length().samples() << std::endl;
+#ifndef NDEBUG
+			/* forward error to DiskReader::audio_read. This does 2 things:
+			 *  - error "DiskReader %1: when refilling, cannot read ..."
+			 *  - emit Underrun() - "Disk is too slow"
+			 * (ideally only the first would happen)
+			 * Since the buffer is zero'ed above, failed reads are not an issue.
+			 */
+			return timecnt_t (0);
+#endif
+		}
 	}
 
 	return cnt;
@@ -264,7 +317,7 @@ AudioPlaylist::read (Sample *buf, Sample *mixdown_buffer, float *gain_buffer, sa
 void
 AudioPlaylist::dump () const
 {
-	boost::shared_ptr<Region>r;
+	std::shared_ptr<Region>r;
 
 	cerr << "Playlist \"" << _name << "\" " << endl
 	     << regions.size() << " regions "
@@ -283,9 +336,9 @@ AudioPlaylist::dump () const
 }
 
 bool
-AudioPlaylist::destroy_region (boost::shared_ptr<Region> region)
+AudioPlaylist::destroy_region (std::shared_ptr<Region> region)
 {
-	boost::shared_ptr<AudioRegion> r = boost::dynamic_pointer_cast<AudioRegion> (region);
+	std::shared_ptr<AudioRegion> r = std::dynamic_pointer_cast<AudioRegion> (region);
 
         if (!r) {
                 return false;
@@ -309,9 +362,9 @@ AudioPlaylist::destroy_region (boost::shared_ptr<Region> region)
 			i = tmp;
 		}
 
-		for (set<boost::shared_ptr<Region> >::iterator x = all_regions.begin(); x != all_regions.end(); ) {
+		for (set<std::shared_ptr<Region> >::iterator x = all_regions.begin(); x != all_regions.end(); ) {
 
-			set<boost::shared_ptr<Region> >::iterator xtmp = x;
+			set<std::shared_ptr<Region> >::iterator xtmp = x;
 			++xtmp;
 
 			if ((*x) == region) {
@@ -322,7 +375,7 @@ AudioPlaylist::destroy_region (boost::shared_ptr<Region> region)
 			x = xtmp;
 		}
 
-		region->set_playlist (boost::shared_ptr<Playlist>());
+		region->set_playlist (std::shared_ptr<Playlist>());
 	}
 
 	if (changed) {
@@ -334,7 +387,7 @@ AudioPlaylist::destroy_region (boost::shared_ptr<Region> region)
 }
 
 bool
-AudioPlaylist::region_changed (const PropertyChange& what_changed, boost::shared_ptr<Region> region)
+AudioPlaylist::region_changed (const PropertyChange& what_changed, std::shared_ptr<Region> region)
 {
 	if (in_flush || in_set_state) {
 		return false;
@@ -342,7 +395,6 @@ AudioPlaylist::region_changed (const PropertyChange& what_changed, boost::shared
 
 	PropertyChange bounds;
 	bounds.add (Properties::start);
-	bounds.add (Properties::position);
 	bounds.add (Properties::length);
 
 	PropertyChange our_interests;
@@ -367,14 +419,14 @@ AudioPlaylist::region_changed (const PropertyChange& what_changed, boost::shared
 }
 
 void
-AudioPlaylist::pre_combine (vector<boost::shared_ptr<Region> >& copies)
+AudioPlaylist::pre_combine (vector<std::shared_ptr<Region> >& copies)
 {
 	RegionSortByPosition cmp;
-	boost::shared_ptr<AudioRegion> ar;
+	std::shared_ptr<AudioRegion> ar;
 
 	sort (copies.begin(), copies.end(), cmp);
 
-	ar = boost::dynamic_pointer_cast<AudioRegion> (copies.front());
+	ar = std::dynamic_pointer_cast<AudioRegion> (copies.front());
 
 	/* disable fade in of the first region */
 
@@ -382,7 +434,7 @@ AudioPlaylist::pre_combine (vector<boost::shared_ptr<Region> >& copies)
 		ar->set_fade_in_active (false);
 	}
 
-	ar = boost::dynamic_pointer_cast<AudioRegion> (copies.back());
+	ar = std::dynamic_pointer_cast<AudioRegion> (copies.back());
 
 	/* disable fade out of the last region */
 
@@ -392,19 +444,19 @@ AudioPlaylist::pre_combine (vector<boost::shared_ptr<Region> >& copies)
 }
 
 void
-AudioPlaylist::post_combine (vector<boost::shared_ptr<Region> >& originals, boost::shared_ptr<Region> compound_region)
+AudioPlaylist::post_combine (vector<std::shared_ptr<Region> >& originals, std::shared_ptr<Region> compound_region)
 {
 	RegionSortByPosition cmp;
-	boost::shared_ptr<AudioRegion> ar;
-	boost::shared_ptr<AudioRegion> cr;
+	std::shared_ptr<AudioRegion> ar;
+	std::shared_ptr<AudioRegion> cr;
 
-	if ((cr = boost::dynamic_pointer_cast<AudioRegion> (compound_region)) == 0) {
+	if ((cr = std::dynamic_pointer_cast<AudioRegion> (compound_region)) == 0) {
 		return;
 	}
 
 	sort (originals.begin(), originals.end(), cmp);
 
-	ar = boost::dynamic_pointer_cast<AudioRegion> (originals.front());
+	ar = std::dynamic_pointer_cast<AudioRegion> (originals.front());
 
 	/* copy the fade in of the first into the compound region */
 
@@ -412,7 +464,7 @@ AudioPlaylist::post_combine (vector<boost::shared_ptr<Region> >& originals, boos
 		cr->set_fade_in (ar->fade_in());
 	}
 
-	ar = boost::dynamic_pointer_cast<AudioRegion> (originals.back());
+	ar = std::dynamic_pointer_cast<AudioRegion> (originals.back());
 
 	if (ar) {
 		/* copy the fade out of the last into the compound region */
@@ -421,11 +473,11 @@ AudioPlaylist::post_combine (vector<boost::shared_ptr<Region> >& originals, boos
 }
 
 void
-AudioPlaylist::pre_uncombine (vector<boost::shared_ptr<Region> >& originals, boost::shared_ptr<Region> compound_region)
+AudioPlaylist::pre_uncombine (vector<std::shared_ptr<Region> >& originals, std::shared_ptr<Region> compound_region)
 {
 	RegionSortByPosition cmp;
-	boost::shared_ptr<AudioRegion> ar;
-	boost::shared_ptr<AudioRegion> cr = boost::dynamic_pointer_cast<AudioRegion>(compound_region);
+	std::shared_ptr<AudioRegion> ar;
+	std::shared_ptr<AudioRegion> cr = std::dynamic_pointer_cast<AudioRegion>(compound_region);
 
 	if (!cr) {
 		return;
@@ -437,9 +489,9 @@ AudioPlaylist::pre_uncombine (vector<boost::shared_ptr<Region> >& originals, boo
 	 * done within Playlist::uncombine ()
 	 */
 
-	for (vector<boost::shared_ptr<Region> >::iterator i = originals.begin(); i != originals.end(); ++i) {
+	for (vector<std::shared_ptr<Region> >::iterator i = originals.begin(); i != originals.end(); ++i) {
 
-		if ((ar = boost::dynamic_pointer_cast<AudioRegion> (*i)) == 0) {
+		if ((ar = std::dynamic_pointer_cast<AudioRegion> (*i)) == 0) {
 			continue;
 		}
 
@@ -508,7 +560,7 @@ AudioPlaylist::load_legacy_crossfades (const XMLNode& node, int version)
 				continue;
 			}
 
-			boost::shared_ptr<Region> in = region_by_id (PBD::ID (p->value ()));
+			std::shared_ptr<Region> in = region_by_id (PBD::ID (p->value ()));
 
 			if (!in) {
 				warning << string_compose (_("Legacy crossfade involved an incoming region not present in playlist \"%1\" - crossfade discarded"),
@@ -517,14 +569,14 @@ AudioPlaylist::load_legacy_crossfades (const XMLNode& node, int version)
 				continue;
 			}
 
-			boost::shared_ptr<AudioRegion> in_a = boost::dynamic_pointer_cast<AudioRegion> (in);
+			std::shared_ptr<AudioRegion> in_a = std::dynamic_pointer_cast<AudioRegion> (in);
 			assert (in_a);
 
 			if ((p = (*i)->property (X_("out"))) == 0) {
 				continue;
 			}
 
-			boost::shared_ptr<Region> out = region_by_id (PBD::ID (p->value ()));
+			std::shared_ptr<Region> out = region_by_id (PBD::ID (p->value ()));
 
 			if (!out) {
 				warning << string_compose (_("Legacy crossfade involved an outgoing region not present in playlist \"%1\" - crossfade discarded"),
@@ -533,7 +585,7 @@ AudioPlaylist::load_legacy_crossfades (const XMLNode& node, int version)
 				continue;
 			}
 
-			boost::shared_ptr<AudioRegion> out_a = boost::dynamic_pointer_cast<AudioRegion> (out);
+			std::shared_ptr<AudioRegion> out_a = std::dynamic_pointer_cast<AudioRegion> (out);
 			assert (out_a);
 
 			/* now decide whether to add a fade in or fade out

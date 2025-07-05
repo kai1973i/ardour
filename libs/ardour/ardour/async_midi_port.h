@@ -1,35 +1,34 @@
 /*
-    Copyright (C) 1998-2010 Paul Barton-Davis
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef  __libardour_async_midiport_h__
-#define  __libardour_async_midiport_h__
+#pragma once
 
 #include <string>
 #include <iostream>
 
-#include <boost/function.hpp>
 
 #include "pbd/xml++.h"
 #include "pbd/crossthread.h"
 #include "pbd/signals.h"
 #include "pbd/ringbuffer.h"
 
-#include "evoral/Event.hpp"
+#include "evoral/Event.h"
 
 #include "midi++/types.h"
 #include "midi++/parser.h"
@@ -72,7 +71,7 @@ class LIBARDOUR_API AsyncMIDIPort : public ARDOUR::MidiPort, public MIDI::Port {
 
 		/* Not selectable; use ios() */
 		int selectable() const { return -1; }
-		void set_timer (boost::function<samplecnt_t (void)>&);
+		void set_timer (std::function<samplecnt_t (void)>&);
 
 		static void set_process_thread (pthread_t);
 		static pthread_t get_process_thread () { return _process_thread; }
@@ -83,7 +82,7 @@ class LIBARDOUR_API AsyncMIDIPort : public ARDOUR::MidiPort, public MIDI::Port {
 		MIDI::timestamp_t       _last_write_timestamp;
 		bool                    _flush_at_cycle_start;
 		bool                    have_timer;
-		boost::function<samplecnt_t (void)> timer;
+		std::function<samplecnt_t (void)> timer;
 		PBD::RingBuffer< Evoral::Event<double> > output_fifo;
 		EventRingBuffer<MIDI::timestamp_t> input_fifo;
 		Glib::Threads::Mutex output_fifo_lock;
@@ -107,4 +106,3 @@ class LIBARDOUR_API AsyncMIDIPort : public ARDOUR::MidiPort, public MIDI::Port {
 
 } // namespace ARDOUR
 
-#endif /* __libardour_async_midiport_h__ */

@@ -1,25 +1,26 @@
 /*
-    Copyright (C) 2001 Paul Davis
-    Code derived from various headers from the Linux kernel
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2007-2008 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2008-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2018-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_cycles_h__
-#define __ardour_cycles_h__
+#pragma once
 
 #include <stdint.h>
 
@@ -41,11 +42,9 @@
  */
 typedef uint64_t cycles_t;
 
-extern cycles_t cacheflush_time;
-
 #if defined(__x86_64__)
 
-#define rdtscll(lo, hi)						\
+#define rdtscll(lo, hi) \
 	__asm__ __volatile__("rdtsc" : "=a" (lo), "=d" (hi))
 
 static inline cycles_t get_cycles (void)
@@ -58,7 +57,7 @@ static inline cycles_t get_cycles (void)
 
 #else
 
-#define rdtscll(val)				\
+#define rdtscll(val) \
 __asm__ __volatile__("rdtsc" : "=A" (val))
 
 static inline cycles_t get_cycles (void)
@@ -70,9 +69,28 @@ static inline cycles_t get_cycles (void)
 }
 #endif
 
+#elif defined(__powerpc64__)
+
+#ifdef __linux__
+#include <sys/platform/ppc.h>
+typedef uint64_t cycles_t;
+static inline cycles_t get_cycles(void)
+{
+	return __ppc_get_timebase();
+}
+#elif defined(__FreeBSD__)
+typedef uint64_t cycles_t;
+static inline cycles_t get_cycles(void)
+{
+       cycles_t tbr;
+       asm volatile("mfspr %0, 268" : "=r"(tbr));
+       return tbr;
+}
+#endif
+	
 #elif defined(__powerpc__)
 
-#define CPU_FTR_601			0x00000100
+#define CPU_FTR_601 0x00000100
 
 typedef uint32_t cycles_t;
 
@@ -81,20 +99,18 @@ typedef uint32_t cycles_t;
  * Currently only used on SMP.
  */
 
-extern cycles_t cacheflush_time;
-
 static inline cycles_t get_cycles(void)
 {
 	cycles_t ret = 0;
 
 	__asm__ __volatile__(
-		"98:	mftb %0\n"
+		"98: mftb %0\n"
 		"99:\n"
 		".section __ftr_fixup,\"a\"\n"
-		"	.long %1\n"
-		"	.long 0\n"
-		"	.long 98b\n"
-		"	.long 99b\n"
+		" .long %1\n"
+		" .long 0\n"
+		" .long 98b\n"
+		" .long 99b\n"
 		".previous"
 		: "=r" (ret) : "i" (CPU_FTR_601));
 	return ret;
@@ -225,8 +241,6 @@ static inline cycles_t get_cycles (void)
 
 typedef long cycles_t;
 
-extern cycles_t cacheflush_time;
-
 static inline cycles_t get_cycles(void)
 {
 	struct timeval tv;
@@ -237,4 +251,3 @@ static inline cycles_t get_cycles(void)
 
 #endif
 
-#endif /* __ardour_cycles_h__ */

@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2007-2010 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/user_bundle.h"
 #include "ardour/types_convert.h"
@@ -96,7 +97,7 @@ ARDOUR::UserBundle::set_state (XMLNode const & node, int /*version*/)
 }
 
 XMLNode&
-ARDOUR::UserBundle::get_state ()
+ARDOUR::UserBundle::get_state () const
 {
 	XMLNode *node;
 
@@ -111,12 +112,12 @@ ARDOUR::UserBundle::get_state ()
 	{
 		Glib::Threads::Mutex::Lock lm (_channel_mutex);
 
-		for (std::vector<Channel>::iterator i = _channel.begin(); i != _channel.end(); ++i) {
+		for (std::vector<Channel>::const_iterator i = _channel.begin(); i != _channel.end(); ++i) {
 			XMLNode* c = new XMLNode ("Channel");
 			c->set_property ("name", i->name);
 			c->set_property ("type", i->type);
 
-			for (PortList::iterator j = i->ports.begin(); j != i->ports.end(); ++j) {
+			for (PortList::const_iterator j = i->ports.begin(); j != i->ports.end(); ++j) {
 				XMLNode* p = new XMLNode ("Port");
 				p->set_property ("name", *j);
 				c->add_child_nocopy (*p);

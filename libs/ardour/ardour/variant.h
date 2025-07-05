@@ -1,24 +1,22 @@
 /*
-    Copyright (C) 2014 Paul Davis
-    Author: David Robillard
+ * Copyright (C) 2014-2015 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __ardour_variant_h__
-#define __ardour_variant_h__
+#pragma once
 
 #include <stdint.h>
 #include <limits.h>
@@ -94,7 +92,7 @@ public:
 			                                std::min(value, (double)INT64_MAX)));
 			break;
 		case BEATS:
-			_beats = Temporal::Beats(value);
+			_beats = Temporal::Beats::from_double (value);
 			break;
 		default:
 			_type = NOTHING;
@@ -110,7 +108,7 @@ public:
 		case FLOAT:  return _float;
 		case INT:    return _int;
 		case LONG:   return _long;
-		case BEATS:  return _beats.to_double();
+		case BEATS:  return Temporal::DoubleableBeats (_beats).to_double();
 		default:     return 0.0;
 		}
 	}
@@ -218,4 +216,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif // __ardour_variant_h__

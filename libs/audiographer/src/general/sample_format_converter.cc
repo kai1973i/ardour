@@ -1,30 +1,31 @@
 /*
-    Copyright (C) 2012 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2014 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2010-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+#include "pbd/compose.h"
 
 #include "audiographer/general/sample_format_converter.h"
 
 #include "audiographer/exception.h"
 #include "audiographer/type_utils.h"
 #include "private/gdither/gdither.h"
-
-#include <boost/format.hpp>
 
 namespace AudioGrapher
 {
@@ -71,9 +72,9 @@ void
 SampleFormatConverter<int16_t>::init (samplecnt_t max_samples, int type, int data_width)
 {
 	if (throw_level (ThrowObject) && data_width > 16) {
-		throw Exception (*this, boost::str(boost::format
-		    ("Data width (%1%) too large for int16_t")
-		    % data_width));
+		throw Exception (*this, string_compose
+				("Data width (%1) too large for int16_t",
+				data_width));
 	}
 	init_common (max_samples);
 	dither = gdither_new ((GDitherType) type, channels, GDither16bit, data_width);
@@ -84,9 +85,9 @@ void
 SampleFormatConverter<uint8_t>::init (samplecnt_t max_samples, int type, int data_width)
 {
 	if (throw_level (ThrowObject) && data_width > 8) {
-		throw Exception (*this, boost::str(boost::format
-		    ("Data width (%1%) too large for uint8_t")
-		    % data_width));
+		throw Exception (*this, string_compose
+				("Data width (%1) too large for uint8_t",
+				 data_width));
 	}
 	init_common (max_samples);
 	dither = gdither_new ((GDitherType) type, channels, GDither8bit, data_width);
@@ -196,15 +197,15 @@ void
 SampleFormatConverter<TOut>::check_sample_and_channel_count (samplecnt_t samples, ChannelCount channels_)
 {
 	if (throw_level (ThrowStrict) && channels_ != channels) {
-		throw Exception (*this, boost::str (boost::format
-			("Wrong channel count given to process(), %1% instead of %2%")
-			% channels_ % channels));
+		throw Exception (*this, string_compose
+				("Wrong channel count given to process(), %1 instead of %2",
+				 channels_, channels));
 	}
 
 	if (throw_level (ThrowProcess) && samples  > data_out_size) {
-		throw Exception (*this, boost::str (boost::format
-			("Too many samples given to process(), %1% instead of %2%")
-			% samples % data_out_size));
+		throw Exception (*this, string_compose
+				("Too many samples given to process(), %1 instead of %2",
+				 samples, data_out_size));
 	}
 }
 

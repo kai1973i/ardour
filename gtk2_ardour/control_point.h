@@ -1,27 +1,28 @@
 /*
-    Copyright (C) 2002-2007 Paul Davis
+ * Copyright (C) 2007-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2014 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_control_point_h__
-#define __ardour_control_point_h__
+#pragma once
 
 #include <sys/types.h>
-#include <gdk/gdkevents.h>
+#include <ydk/gdkevents.h>
 
 #include "ardour/automation_list.h"
 
@@ -54,6 +55,7 @@ public:
 		End
 	};
 
+	void move_to (double x, double y);
 	void move_to (double x, double y, ShapeType);
 	void reset (double x, double y, ARDOUR::AutomationList::iterator, uint32_t, ShapeType);
 	double get_x() const { return _x; }
@@ -77,14 +79,17 @@ public:
 
 	ArdourCanvas::Item& item() const;
 
-	ARDOUR::AutomationList::iterator model() const { return _model; }
-	AutomationLine&                  line()  const { return _line; }
+	/* used from ~EditorAutomationLine */
+	void unset_item () { _item = 0 ; }
 
-	static PBD::Signal1<void, ControlPoint *> CatchDeletion;
+	ARDOUR::AutomationList::iterator model() const { return _model; }
+	AutomationLine&              line()  const { return _line; }
+
+	static PBD::Signal<void(ControlPoint *)> CatchDeletion;
 
 private:
-	ArdourCanvas::Rectangle*        _item;
-	AutomationLine&                  _line;
+	ArdourCanvas::Rectangle *        _item;
+	AutomationLine&              _line;
 	ARDOUR::AutomationList::iterator _model;
 	uint32_t                         _view_index;
 	bool                             _can_slide;
@@ -98,5 +103,4 @@ private:
 };
 
 
-#endif /* __ardour_control_point_h__ */
 

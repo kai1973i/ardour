@@ -1,22 +1,24 @@
 /*
-    Copyright (C) 2012 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2010 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2016 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+#include "pbd/compose.h"
 
 #include "audiographer/general/sr_converter.h"
 
@@ -24,12 +26,9 @@
 #include "audiographer/type_utils.h"
 
 #include <cmath>
-#include <boost/format.hpp>
 
 namespace AudioGrapher
 {
-using boost::format;
-using boost::str;
 
 SampleRateConverter::SampleRateConverter (uint32_t channels)
   : active (false)
@@ -59,9 +58,9 @@ SampleRateConverter::init (samplecnt_t in_rate, samplecnt_t out_rate, int qualit
 	int err;
 	src_state = src_new (quality, channels, &err);
 	if (throw_level (ThrowObject) && !src_state) {
-		throw Exception (*this, str (format
-			("Cannot initialize sample rate converter: %1%")
-			% src_strerror (err)));
+		throw Exception (*this, string_compose
+				("Cannot initialize sample rate converter: %1",
+				 src_strerror (err)));
 	}
 
 	src_data.src_ratio = (double) out_rate / (double) in_rate;
@@ -113,9 +112,9 @@ SampleRateConverter::process (ProcessContext<float> const & c)
 	float * in = const_cast<float *> (c.data()); // TODO check if this is safe!
 
 	if (throw_level (ThrowProcess) && samples > max_samples_in) {
-		throw Exception (*this, str (format (
-			"process() called with too many samples, %1% instead of %2%")
-			% samples % max_samples_in));
+		throw Exception (*this, string_compose
+				("process() called with too many samples, %1 instead of %2",
+				 samples, max_samples_in));
 	}
 
 	int err;
@@ -163,9 +162,7 @@ SampleRateConverter::process (ProcessContext<float> const & c)
 
 		err = src_process (src_state, &src_data);
 		if (throw_level (ThrowProcess) && err) {
-			throw Exception (*this, str (format
-			("An error occurred during sample rate conversion: %1%")
-			% src_strerror (err)));
+			throw Exception (*this, string_compose ("An error occurred during sample rate conversion: %1",src_strerror (err)));
 		}
 
 		leftover_samples = src_data.input_frames - src_data.input_frames_used;
@@ -191,9 +188,9 @@ SampleRateConverter::process (ProcessContext<float> const & c)
 		}
 
 		if (throw_level (ThrowProcess) && src_data.output_frames_gen == 0 && leftover_samples) {
-			throw Exception (*this, boost::str (boost::format
-				("No output samples generated with %1% leftover samples")
-				% leftover_samples));
+			throw Exception (*this, string_compose
+					("No output samples generated with %1 leftover samples",
+					 leftover_samples));
 		}
 
 	} while (leftover_samples > samples);

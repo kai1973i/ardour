@@ -1,21 +1,23 @@
 /*
-    Copyright (C) 2016 Robin Gareus <robin@gareus.org>
-    Copyright (C) 2006 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Julien "_FrnchFrgg_" RIVAUD <frnchfrgg@free.fr>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <glib.h>
 #include <glibmm/miscutils.h>
@@ -49,15 +51,20 @@ LuaProc::LuaProc (AudioEngine& engine,
 #ifdef USE_TLSF
 	, lua (lua_newstate (&PBD::TLSF::lalloc, &_mempool))
 #elif defined USE_MALLOC
-	, lua ()
+	, lua (true, true)
 #else
 	, lua (lua_newstate (&PBD::ReallocPool::lalloc, &_mempool))
 #endif
 	, _lua_dsp (0)
+	, _lua_latency (0)
 	, _script (script)
 	, _lua_does_channelmapping (false)
 	, _lua_has_inline_display (false)
+	, _requires_fixed_sized_buffers (false)
+	, _connect_all_audio_outputs (false)
+	, _set_time_info (false)
 	, _designated_bypass_port (UINT32_MAX)
+	, _signal_latency (0)
 	, _control_data (0)
 	, _shadow_data (0)
 	, _configured (false)
@@ -66,7 +73,7 @@ LuaProc::LuaProc (AudioEngine& engine,
 {
 	init ();
 
-	/* when loading a session, or pasing a processor,
+	/* when loading a session, or passing a processor,
 	 * the script is set during set_state();
 	 */
 	if (!_script.empty () && load_script ()) {
@@ -80,16 +87,18 @@ LuaProc::LuaProc (const LuaProc &other)
 #ifdef USE_TLSF
 	, lua (lua_newstate (&PBD::TLSF::lalloc, &_mempool))
 #elif defined USE_MALLOC
-	, lua ()
+	, lua (true, true)
 #else
 	, lua (lua_newstate (&PBD::ReallocPool::lalloc, &_mempool))
 #endif
 	, _lua_dsp (0)
+	, _lua_latency (0)
 	, _script (other.script ())
 	, _origin (other._origin)
 	, _lua_does_channelmapping (false)
 	, _lua_has_inline_display (false)
 	, _designated_bypass_port (UINT32_MAX)
+	, _signal_latency (0)
 	, _control_data (0)
 	, _shadow_data (0)
 	, _configured (false)
@@ -123,8 +132,9 @@ LuaProc::~LuaProc () {
 				_stats_max[1] * (float)_stats_cnt / _stats_avg[1]);
 	}
 #endif
-	lua.do_command ("collectgarbage();");
+	lua.collect_garbage ();
 	delete (_lua_dsp);
+	delete (_lua_latency);
 	delete [] _control_data;
 	delete [] _shadow_data;
 }
@@ -166,32 +176,46 @@ LuaProc::init ()
 	luabridge::push <LuaProc *> (L, this);
 	lua_setglobal (L, "self");
 
-	// sandbox
-	lua.sandbox (true);
 #if 0
 	lua.do_command ("for n in pairs(_G) do print(n) end print ('----')"); // print global env
 #endif
 	lua.do_command ("function ardour () end");
 }
 
-boost::weak_ptr<Route>
+void
+LuaProc::drop_references ()
+{
+	lua.collect_garbage ();
+	Plugin::drop_references ();
+}
+
+std::weak_ptr<Route>
 LuaProc::route () const
 {
 	if (!_owner) {
-		return boost::weak_ptr<Route>();
+		return std::weak_ptr<Route>();
 	}
 	return static_cast<Route*>(_owner)->weakroute ();
 }
 
 void
 LuaProc::lua_print (std::string s) {
-	std::cout <<"LuaProc: " << s << "\n";
-	PBD::error << "LuaProc: " << s << "\n";
+#ifndef NDEBUG
+	std::cout << "LuaProc: " << s << "\n";
+#endif
+	/* This is dangerous and can lead to crashes.A
+	 * PBD::Transmitter is neither thread-safe nor rt-safe.
+	 * (see also fe0e997335c34af0d71e7536fd507e1cab322d24)
+	 */
+	PBD::info << "LuaProc: " << s << endmsg;
 }
 
 bool
 LuaProc::load_script ()
 {
+	if (_script.empty ()) {
+		return true;
+	}
 	assert (!_lua_dsp); // don't allow to re-initialize
 	LuaPluginInfoPtr lpi;
 
@@ -234,15 +258,71 @@ LuaProc::load_script ()
 	}
 	else {
 		assert (0);
+		return true;
+	}
+
+	luabridge::LuaRef lua_dsp_latency = luabridge::getGlobal (L, "dsp_latency");
+	if (lua_dsp_latency.type () == LUA_TFUNCTION) {
+		_lua_latency = new luabridge::LuaRef (lua_dsp_latency);
+	}
+
+	/* parse I/O options */
+	luabridge::LuaRef ioconfig = luabridge::getGlobal (L, "dsp_ioconfig");
+	if (ioconfig.isFunction ()) {
+		try {
+			luabridge::LuaRef iotable = ioconfig ();
+			if (iotable.isTable ()) {
+				for (luabridge::Iterator i (iotable); !i.isNil (); ++i) {
+					if (!i.key().isString()) {
+						continue;
+					}
+					if (i.key().cast<std::string> () == "connect_all_audio_outputs" && i.value().isBoolean ()) {
+						_connect_all_audio_outputs = i.value().cast<bool> ();
+					}
+				}
+			}
+		} catch (...) {
+			return true;
+		}
+	}
+
+	/* parse options */
+	luabridge::LuaRef options = luabridge::getGlobal (L, "dsp_options");
+	if (options.isFunction ()) {
+		try {
+			luabridge::LuaRef opts = options ();
+			if (opts.isTable ()) {
+				for (luabridge::Iterator i (opts); !i.isNil (); ++i) {
+					if (!i.key().isString()) {
+						continue;
+					}
+					if (i.key().cast<std::string> () == "time_info" && i.value().isBoolean ()) {
+						_set_time_info = i.value().cast<bool> ();
+					}
+					if (i.key().cast<std::string> () == "regular_block_length" && i.value().isBoolean ()) {
+						_requires_fixed_sized_buffers = i.value().cast<bool> ();
+					}
+				}
+			}
+		} catch (...) {
+			return true;
+		}
 	}
 
 	// initialize the DSP if needed
 	luabridge::LuaRef lua_dsp_init = luabridge::getGlobal (L, "dsp_init");
 	if (lua_dsp_init.type () == LUA_TFUNCTION) {
 		try {
-			lua_dsp_init (_session.nominal_sample_rate ());
+			lua_dsp_init (_session.sample_rate ());
 		} catch (luabridge::LuaException const& e) {
-		} catch (...) { }
+#ifndef NDEBUG
+			std::cerr << "LuaException:" << e.what () << std::endl;
+#endif
+			PBD::warning << "LuaException: " << e.what () << endmsg;
+			return true; // error
+		} catch (...) {
+			return true;
+		}
 	}
 
 	_ctrl_params.clear ();
@@ -251,6 +331,8 @@ LuaProc::load_script ()
 	if (lua_render.isFunction ()) {
 		_lua_has_inline_display = true;
 	}
+
+	std::map<std::string, uint32_t> param_map;
 
 	luabridge::LuaRef lua_params = luabridge::getGlobal (L, "dsp_params");
 	if (lua_params.isFunction ()) {
@@ -262,27 +344,29 @@ LuaProc::load_script ()
 
 			for (luabridge::Iterator i (params); !i.isNil (); ++i) {
 				// required fields
-				if (!i.key ().isNumber ())           { return false; }
-				if (!i.value ().isTable ())          { return false; }
-				if (!i.value ()["type"].isString ()) { return false; }
-				if (!i.value ()["name"].isString ()) { return false; }
-				if (!i.value ()["min"].isNumber ())  { return false; }
-				if (!i.value ()["max"].isNumber ())  { return false; }
+				if (!i.key ().isNumber ())           { return true; }
+				if (!i.value ().isTable ())          { return true; }
+				if (!i.value ()["type"].isString ()) { return true; }
+				if (!i.value ()["name"].isString ()) { return true; }
+				if (!i.value ()["min"].isNumber ())  { return true; }
+				if (!i.value ()["max"].isNumber ())  { return true; }
 
 				int pn = i.key ().cast<int> ();
 				std::string type = i.value ()["type"].cast<std::string> ();
 				if (type == "input") {
-					if (!i.value ()["default"].isNumber ()) { return false; }
+					if (!i.value ()["default"].isNumber ()) {
+						return true; // error
+					}
 					_ctrl_params.push_back (std::make_pair (false, pn));
 				}
 				else if (type == "output") {
 					_ctrl_params.push_back (std::make_pair (true, pn));
 				} else {
-					return false;
+					return true; // error
 				}
 				assert (pn == (int) _ctrl_params.size ());
 
-				//_param_desc[pn] = boost::shared_ptr<ParameterDescriptor> (new ParameterDescriptor());
+				//_param_desc[pn] = std::shared_ptr<ParameterDescriptor> (new ParameterDescriptor());
 				luabridge::LuaRef lr = i.value ();
 
 				if (type == "input") {
@@ -296,6 +380,7 @@ LuaProc::load_script ()
 				_param_desc[pn].logarithmic  = lr["logarithmic"].isBoolean () && (lr["logarithmic"]).cast<bool> ();
 				_param_desc[pn].integer_step = lr["integer"].isBoolean () && (lr["integer"]).cast<bool> ();
 				_param_desc[pn].sr_dependent = lr["ratemult"].isBoolean () && (lr["ratemult"]).cast<bool> ();
+				_param_desc[pn].inline_ctrl  = lr["inline"].isBoolean () && (lr["inline"]).cast<bool> ();
 				_param_desc[pn].enumeration  = lr["enum"].isBoolean () && (lr["enum"]).cast<bool> ();
 
 				if (lr["bypass"].isBoolean () && (lr["bypass"]).cast<bool> ()) {
@@ -310,6 +395,10 @@ LuaProc::load_script ()
 				}
 				_param_desc[pn].label        = (lr["name"]).cast<std::string> ();
 				_param_desc[pn].scale_points = parse_scale_points (&lr);
+
+				if (type == "input") {
+					param_map[_param_desc[pn].label] = pn - 1;
+				}
 
 				luabridge::LuaRef doc = lr["doc"];
 				if (doc.isString ()) {
@@ -331,6 +420,52 @@ LuaProc::load_script ()
 		}
 	}
 
+	/* parse factory presets */
+	luabridge::LuaRef lua_presets = luabridge::getGlobal (L, "presets");
+	if (lua_presets.isFunction ()) {
+		luabridge::LuaRef preset_tbl = lua_presets ();
+		if (preset_tbl.isTable () && parameter_count () > 0) {
+			std::vector<ARDOUR::Plugin::PresetRecord> psets;
+			try {
+				for (luabridge::Iterator p (preset_tbl); !p.isNil (); ++p) {
+					if (!p.value ().isTable ()) { continue; }
+					if (!p.value ()["name"].isString ()) { continue; }
+					if (!p.value ()["params"].isTable ()) { continue; }
+
+					FactoryPreset pset;
+					pset.name = p.value ()["name"].cast<std::string> ();
+
+					luabridge::LuaRef params = p.value ()["params"];
+					for (luabridge::Iterator i (params); !i.isNil (); ++i) {
+						if (!i.value ().isNumber ()) { continue; }
+						uint32_t param_index = 0;
+						if (i.key ().isString ()) {
+							std::string key = i.key ().cast<std::string> ();
+							if (param_map.find (key) == param_map.end ()) {
+								continue;
+							}
+							param_index = param_map[key];
+						} else if (i.key ().isNumber ()) {
+							param_index = i.key ().cast<int> ();
+						} else {
+							continue;
+						}
+						pset.param[param_index] = i.value().cast<float> ();
+					}
+
+					_factory_presets.insert (make_pair (preset_name_to_uri (pset.name), pset));
+				}
+			} catch (...) {
+			}
+
+			std::vector<Plugin::PresetRecord> fps;
+			for (auto const& p : _factory_presets) {
+				fps.push_back (PresetRecord (p.first, p.second.name, false));
+			}
+			lpi->set_factory_presets (fps);
+		}
+	}
+
 	// expose ctrl-ports to global lua namespace
 	luabridge::push <float *> (L, _control_data);
 	lua_setglobal (L, "CtrlPorts");
@@ -339,9 +474,12 @@ LuaProc::load_script ()
 }
 
 bool
-LuaProc::can_support_io_configuration (const ChanCount& in, ChanCount& out, ChanCount* imprecise)
+LuaProc::match_variable_io (ChanCount& in, ChanCount& aux_in, ChanCount& out)
 {
-	// caller must hold process lock (no concurrent calls to interpreter
+	/* Lua does not have dedicated sidechain busses */
+	in += aux_in;
+
+	/* caller must hold process lock (no concurrent calls to interpreter */
 	_output_configs.clear ();
 
 	lua_State* L = lua.getState ();
@@ -390,49 +528,43 @@ LuaProc::can_support_io_configuration (const ChanCount& in, ChanCount& out, Chan
 	float penalty = 9999;
 	bool found = false;
 
-#define FOUNDCFG_PENALTY(in, out, p) {                              \
-  _output_configs.insert (out);                                     \
-  if (p < penalty) {                                                \
-    audio_out = (out);                                              \
-    midi_out = possible_midiout;                                    \
-    if (imprecise) {                                                \
-      imprecise->set (DataType::AUDIO, (in));                       \
-      imprecise->set (DataType::MIDI, possible_midiin);             \
-    }                                                               \
-    _has_midi_input = (possible_midiin > 0);                        \
-    _has_midi_output = (possible_midiout > 0);                      \
-    penalty = p;                                                    \
-    found = true;                                                   \
-  }                                                                 \
+#define FOUNDCFG_PENALTY(n_in, n_out, p) {     \
+  _output_configs.insert (n_out);              \
+  if (p < penalty) {                           \
+    audio_out = (n_out);                       \
+    midi_out = possible_midiout;               \
+    in.set (DataType::AUDIO, (n_in));          \
+    in.set (DataType::MIDI, possible_midiin);  \
+    _has_midi_input = (possible_midiin > 0);   \
+    _has_midi_output = (possible_midiout > 0); \
+    penalty = p;                               \
+    found = true;                              \
+  }                                            \
 }
 
-#define FOUNDCFG_IMPRECISE(in, out) {                               \
-  const float p = fabsf ((float)(out) - preferred_out) *            \
-                      (((out) > preferred_out) ? 1.1 : 1)           \
+#define FOUNDCFG_IMPRECISE(n_in, n_out) {                                  \
+  const float p = fabsf ((float)(n_out) - preferred_out) *                 \
+                      (((n_out) > preferred_out) ? 1.1 : 1)                \
                 + fabsf ((float)possible_midiout - preferred_midiout) *    \
                       ((possible_midiout - preferred_midiout) ? 0.6 : 0.5) \
-                + fabsf ((float)(in) - audio_in) *                  \
-                      (((in) > audio_in) ? 275 : 250)               \
-                + fabsf ((float)possible_midiin - midi_in) *        \
-                      ((possible_midiin - midi_in) ? 100 : 110);    \
-  FOUNDCFG_PENALTY(in, out, p);                                     \
+                + fabsf ((float)(n_in) - audio_in) *                       \
+                      (((n_in) > audio_in) ? 275 : 250)                    \
+                + fabsf ((float)possible_midiin - midi_in) *               \
+                      ((possible_midiin - midi_in) ? 100 : 110);           \
+  FOUNDCFG_PENALTY(n_in, n_out, p);                                        \
 }
 
-#define FOUNDCFG(out)                                               \
-  FOUNDCFG_IMPRECISE(audio_in, out)
+#define FOUNDCFG(n_out)              \
+  FOUNDCFG_IMPRECISE(audio_in, n_out)
 
-#define ANYTHINGGOES                                                \
+#define ANYTHINGGOES          \
   _output_configs.insert (0);
 
-#define UPTO(nch) {                                                 \
-  for (int n = 1; n < nch; ++n) {                                   \
-    _output_configs.insert (n);                                     \
-  }                                                                 \
+#define UPTO(nch) {               \
+  for (int n = 1; n < nch; ++n) { \
+    _output_configs.insert (n);   \
+  }                               \
 }
-
-	if (imprecise) {
-		*imprecise = in;
-	}
 
 	for (luabridge::Iterator i (iotable); !i.isNil (); ++i) {
 		luabridge::LuaRef io (i.value ());
@@ -444,10 +576,6 @@ LuaProc::can_support_io_configuration (const ChanCount& in, ChanCount& out, Chan
 		int possible_out = io["audio_out"].isNumber() ? io["audio_out"] : -1;
 		int possible_midiin = io["midi_in"].isNumber() ? io["midi_in"] : 0;
 		int possible_midiout = io["midi_out"].isNumber() ? io["midi_out"] : 0;
-
-		if (midi_in != possible_midiin && !imprecise) {
-			continue;
-		}
 
 		// exact match
 		if ((possible_in == audio_in) && (possible_out == preferred_out)) {
@@ -475,7 +603,7 @@ LuaProc::can_support_io_configuration (const ChanCount& in, ChanCount& out, Chan
 			} else if (possible_out < -2) {
 				/* variable number of outputs up to -N,
 				 * invalid if in == -2 but we accept it anyway */
-				FOUNDCFG (min (-possible_out, preferred_out));
+				FOUNDCFG (std::min (-possible_out, preferred_out));
 				UPTO (-possible_out)
 			} else {
 				/* exact number of outputs */
@@ -491,13 +619,9 @@ LuaProc::can_support_io_configuration (const ChanCount& in, ChanCount& out, Chan
 				desired_in = possible_in;
 			} else {
 				/* configuration can match up to -possible_in */
-				desired_in = min (-possible_in, audio_in);
+				desired_in = std::min (-possible_in, audio_in);
 			}
-			if (!imprecise && audio_in != desired_in) {
-				/* skip that configuration, it cannot match
-				 * the required audio input count, and we
-				 * cannot ask for change via \imprecise */
-			} else if (possible_out == -1 || possible_out == -2) {
+			if (possible_out == -1 || possible_out == -2) {
 				/* any output configuration possible
 				 * out == -2 is invalid, interpreted as out == -1.
 				 * Really imprecise only if desired_in != audio_in */
@@ -507,7 +631,7 @@ LuaProc::can_support_io_configuration (const ChanCount& in, ChanCount& out, Chan
 				/* variable number of outputs up to -N
 				 * not specified if in > 0, but we accept it anyway.
 				 * Really imprecise only if desired_in != audio_in */
-				FOUNDCFG_IMPRECISE (desired_in, min (-possible_out, preferred_out));
+				FOUNDCFG_IMPRECISE (desired_in, std::min (-possible_out, preferred_out));
 				UPTO (-possible_out)
 			} else {
 				/* exact number of outputs
@@ -522,27 +646,29 @@ LuaProc::can_support_io_configuration (const ChanCount& in, ChanCount& out, Chan
 		return false;
 	}
 
-	if (imprecise) {
-		_selected_in = *imprecise;
-	} else {
-		_selected_in = in;
-	}
-
 	out.set (DataType::MIDI, midi_out);
 	out.set (DataType::AUDIO, audio_out);
+
+	_selected_in = in; // TODO remove after testing
 	_selected_out = out;
+
+	/* restore side-chain input count */
+	in -= aux_in;
 
 	return true;
 }
 
 bool
-LuaProc::configure_io (ChanCount in, ChanCount out)
+LuaProc::reconfigure_io (ChanCount in, ChanCount aux_in, ChanCount out)
 {
+	in += aux_in;
+	assert (in == _selected_in && out ==_selected_out);
+
 	in.set (DataType::MIDI, _has_midi_input ? 1 : 0);
 	out.set (DataType::MIDI, _has_midi_output ? 1 : 0);
 
-	_info->n_inputs = _selected_in;
-	_info->n_outputs = _selected_out;
+	_info->n_inputs = in;
+	_info->n_outputs = out;
 
 	// configure the DSP if needed
 	if (in != _configured_in || out != _configured_out || !_configured) {
@@ -550,10 +676,10 @@ LuaProc::configure_io (ChanCount in, ChanCount out)
 		luabridge::LuaRef lua_dsp_configure = luabridge::getGlobal (L, "dsp_configure");
 		if (lua_dsp_configure.type () == LUA_TFUNCTION) {
 			try {
-				luabridge::LuaRef io = lua_dsp_configure (&in, &out);
+				luabridge::LuaRef io = lua_dsp_configure (in, out);
 				if (io.isTable ()) {
-					ChanCount lin (_selected_in);
-					ChanCount lout (_selected_out);
+					ChanCount lin (in);
+					ChanCount lout (out);
 
 					if (io["audio_in"].type() == LUA_TNUMBER) {
 						const int c = io["audio_in"].cast<int> ();
@@ -584,10 +710,10 @@ LuaProc::configure_io (ChanCount in, ChanCount out)
 				}
 				_configured = true;
 			} catch (luabridge::LuaException const& e) {
-				PBD::error << "LuaException: " << e.what () << "\n";
 #ifndef NDEBUG
 				std::cerr << "LuaException: " << e.what () << "\n";
 #endif
+				PBD::warning << "LuaException: " << e.what () << "\n";
 				return false;
 			} catch (...) {
 				return false;
@@ -604,7 +730,7 @@ LuaProc::configure_io (ChanCount in, ChanCount out)
 int
 LuaProc::connect_and_run (BufferSet& bufs,
 		samplepos_t start, samplepos_t end, double speed,
-		ChanMapping in, ChanMapping out,
+		ChanMapping const& in, ChanMapping const& out,
 		pframes_t nframes, samplecnt_t offset)
 {
 	if (!_lua_dsp) {
@@ -614,13 +740,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 	Plugin::connect_and_run (bufs, start, end, speed, in, out, nframes, offset);
 
 	// This is needed for ARDOUR::Session requests :(
-	if (! SessionEvent::has_per_thread_pool ()) {
-		char name[64];
-		snprintf (name, 64, "Proc-%p", this);
-		pthread_set_name (name);
-		SessionEvent::create_per_thread_pool (name, 64);
-		PBD::notify_event_loops_about_thread_creation (pthread_self(), name, 64);
-	}
+	assert (SessionEvent::has_per_thread_pool ());
 
 	uint32_t const n = parameter_count ();
 	for (uint32_t i = 0; i < n; ++i) {
@@ -634,15 +754,53 @@ LuaProc::connect_and_run (BufferSet& bufs,
 #endif
 
 	try {
+		lua_State* L = lua.getState ();
+
+		if (_set_time_info) {
+			using namespace Temporal;
+			TempoMap::SharedPtr tmap (TempoMap::use ());
+			const TempoMetric&  metric (tmap->metric_at (timepos_t (start)));
+			const TempoMetric&  metric_end (tmap->metric_at (timepos_t (end)));
+
+			luabridge::LuaRef lua_time (luabridge::newTable (L));
+
+			lua_time["sample"]     = start;
+			lua_time["sample_end"] = end;
+
+			lua_time["tempo"]     = metric.tempo ().quarter_notes_per_minute ();
+			lua_time["tempo_end"] = metric_end.tempo ().quarter_notes_per_minute ();
+			lua_time["beat"]      = DoubleableBeats (metric.tempo ().quarters_at_sample (start)).to_double ();
+			lua_time["beat_end"]  = DoubleableBeats (metric_end.tempo ().quarters_at_sample (end)).to_double ();
+
+			lua_time["ts_numerator"]   = metric.meter ().divisions_per_bar ();
+			lua_time["ts_denominator"] = metric.meter ().note_value ();
+
+			lua_time["tc_fps"]       = _session.timecode_frames_per_second ();
+			lua_time["tc_dropframe"] = _session.timecode_drop_frames ();
+
+			if (_session.get_play_loop ()) {
+				Location* looploc = _session.locations ()->auto_loop_location ();
+				lua_time["looping"]         = true;
+				lua_time["loop_start"]      = looploc->start ().samples ();
+				lua_time["loop_end"]        = looploc->end ().samples ();
+				lua_time["loop_beat_start"] = DoubleableBeats (tmap->quarters_at (looploc->start ())).to_double ();
+				lua_time["loop_beat_end"]   = DoubleableBeats (tmap->quarters_at (looploc->end ())).to_double ();
+			} else {
+				lua_time["looping"] = false;
+			}
+
+			luabridge::push (L, lua_time);
+			lua_setglobal (L, "time");
+		}
+
 		if (_lua_does_channelmapping) {
 			// run the DSP function
-			(*_lua_dsp)(&bufs, in, out, nframes, offset);
+			(*_lua_dsp)(&bufs, &in, &out, nframes, offset);
 		} else {
 			// map buffers
 			BufferSet& silent_bufs  = _session.get_silent_buffers (ChanCount (DataType::AUDIO, 1));
 			BufferSet& scratch_bufs = _session.get_scratch_buffers (ChanCount (DataType::AUDIO, 1));
 
-			lua_State* L = lua.getState ();
 			luabridge::LuaRef in_map (luabridge::newTable (L));
 			luabridge::LuaRef out_map (luabridge::newTable (L));
 
@@ -656,7 +814,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				if (valid) {
 					in_map[ap + 1] = bufs.get_audio (buf_index).data (offset);
 				} else {
-					in_map[ap + 1] = silent_bufs.get_audio (0).data (offset);
+					in_map[ap + 1] = silent_bufs.get_audio (0).data (0);
 				}
 			}
 			for (uint32_t ap = 0; ap < audio_out; ++ap) {
@@ -665,7 +823,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				if (valid) {
 					out_map[ap + 1] = bufs.get_audio (buf_index).data (offset);
 				} else {
-					out_map[ap + 1] = scratch_bufs.get_audio (0).data (offset);
+					out_map[ap + 1] = scratch_bufs.get_audio (0).data (0);
 				}
 			}
 
@@ -677,6 +835,9 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				if (valid) {
 					for (MidiBuffer::iterator m = bufs.get_midi(idx).begin();
 							m != bufs.get_midi(idx).end(); ++m, ++e) {
+						if ((*m).time() < offset || (*m).time() >= offset + nframes) {
+							continue;
+						}
 						const Evoral::Event<samplepos_t> ev(*m, false);
 						luabridge::LuaRef lua_midi_data (luabridge::newTable (L));
 						const uint8_t* data = ev.buffer();
@@ -684,7 +845,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 							lua_midi_data [i + 1] = data[i];
 						}
 						luabridge::LuaRef lua_midi_event (luabridge::newTable (L));
-						lua_midi_event["time"] = 1 + (*m).time();
+						lua_midi_event["time"] = 1 + (*m).time() - offset;
 						lua_midi_event["data"] = lua_midi_data;
 						lua_midi_event["bytes"] = data;
 						lua_midi_event["size"] = ev.size();
@@ -714,7 +875,7 @@ LuaProc::connect_and_run (BufferSet& bufs,
 				const uint32_t idx = out.get(DataType::MIDI, 0, &valid);
 				if (valid && bufs.count().n_midi() > idx) {
 					MidiBuffer& mbuf = bufs.get_midi(idx);
-					mbuf.silence(0, 0);
+					mbuf.silence (nframes, offset);
 					for (luabridge::Iterator i (lua_midi_sink_tbl); !i.isNil (); ++i) {
 						if (!i.key ().isNumber ()) { continue; }
 						if (!i.value ()["time"].isNumber ()) { continue; }
@@ -728,18 +889,30 @@ LuaProc::connect_and_run (BufferSet& bufs,
 							data[size] = di.value ();
 						}
 						if (size > 0 && size < 64) {
-							mbuf.push_back(tme - 1, size, data);
+							if (tme >= 1 && tme < nframes + 1) {
+								Evoral::Event<samplepos_t> ev;
+								ev.set (data, size, tme - 1 + offset);
+								ev.set_event_type (Evoral::MIDI_EVENT);
+								mbuf.insert_event (ev);
+							} else {
+								std::cerr << string_compose ("LuaException: MIDI Event timestamp %1 is out of bounds (0, %2)\n", tme, nframes + 1);
+							}
 						}
 					}
 
 				}
 			}
 		}
+
+		if (_lua_latency) {
+			_signal_latency = (*_lua_latency)();
+		}
+
 	} catch (luabridge::LuaException const& e) {
-		PBD::error << "LuaException: " << e.what () << "\n";
 #ifndef NDEBUG
 		std::cerr << "LuaException: " << e.what () << "\n";
 #endif
+		PBD::warning << "LuaException: " << e.what () << "\n";
 		return -1;
 	} catch (...) {
 		return -1;
@@ -831,11 +1004,9 @@ LuaProc::set_script_from_state (const XMLNode& node)
 int
 LuaProc::set_state (const XMLNode& node, int version)
 {
-#ifndef NO_PLUGIN_STATE
 	XMLNodeList nodes;
 	XMLNodeConstIterator iter;
 	XMLNode *child;
-#endif
 
 	if (_script.empty ()) {
 		if (set_script_from_state (node)) {
@@ -843,7 +1014,6 @@ LuaProc::set_state (const XMLNode& node, int version)
 		}
 	}
 
-#ifndef NO_PLUGIN_STATE
 	if (node.name() != state_node_name()) {
 		error << _("Bad node sent to LuaProc::set_state") << endmsg;
 		return -1;
@@ -866,9 +1036,8 @@ LuaProc::set_state (const XMLNode& node, int version)
 			continue;
 		}
 
-		set_parameter (port_id, value);
+		set_parameter (port_id, value, 0);
 	}
-#endif
 
 	return Plugin::set_state (node, version);
 }
@@ -891,14 +1060,14 @@ LuaProc::default_value (uint32_t port)
 }
 
 void
-LuaProc::set_parameter (uint32_t port, float val)
+LuaProc::set_parameter (uint32_t port, float val, sampleoffset_t when)
 {
 	assert (port < parameter_count ());
 	if (get_parameter (port) == val) {
 		return;
 	}
 	_shadow_data[port] = val;
-	Plugin::set_parameter (port, val);
+	Plugin::set_parameter (port, val, when);
 }
 
 float
@@ -926,6 +1095,7 @@ LuaProc::get_parameter_descriptor (uint32_t port, ParameterDescriptor& desc) con
 	desc.integer_step = d.integer_step;
 	desc.sr_dependent = d.sr_dependent;
 	desc.enumeration  = d.enumeration;
+	desc.inline_ctrl  = d.inline_ctrl;
 	desc.unit         = d.unit;
 	desc.label        = d.label;
 	desc.scale_points = d.scale_points;
@@ -988,27 +1158,14 @@ LuaProc::describe_parameter (Evoral::Parameter param)
 	return "??";
 }
 
-void
-LuaProc::print_parameter (uint32_t param, char* buf, uint32_t len) const
-{
-	if (buf && len) {
-		if (param < parameter_count ()) {
-			snprintf (buf, len, "%.3f", get_parameter (param));
-		} else {
-			strcat (buf, "0");
-		}
-	}
-}
-
-boost::shared_ptr<ScalePoints>
+std::shared_ptr<ScalePoints>
 LuaProc::parse_scale_points (luabridge::LuaRef* lr)
 {
 	if (!(*lr)["scalepoints"].isTable()) {
-		return boost::shared_ptr<ScalePoints> ();
+		return std::shared_ptr<ScalePoints> ();
 	}
 
-	int cnt = 0;
-	boost::shared_ptr<ScalePoints> rv = boost::shared_ptr<ScalePoints>(new ScalePoints());
+	std::shared_ptr<ScalePoints> rv = std::shared_ptr<ScalePoints>(new ScalePoints());
 	luabridge::LuaRef scalepoints ((*lr)["scalepoints"]);
 
 	for (luabridge::Iterator i (scalepoints); !i.isNil (); ++i) {
@@ -1016,16 +1173,15 @@ LuaProc::parse_scale_points (luabridge::LuaRef* lr)
 		if (!i.value ().isNumber ())  { continue; }
 		rv->insert(make_pair(i.key ().cast<std::string> (),
 					i.value ().cast<float> ()));
-		++cnt;
 	}
 
 	if (rv->size() > 0) {
 		return rv;
 	}
-	return boost::shared_ptr<ScalePoints> ();
+	return std::shared_ptr<ScalePoints> ();
 }
 
-boost::shared_ptr<ScalePoints>
+std::shared_ptr<ScalePoints>
 LuaProc::get_scale_points (uint32_t port) const
 {
 	int lp = _ctrl_params[port].second;
@@ -1115,7 +1271,34 @@ LuaProc::presets_tree () const
 bool
 LuaProc::load_preset (PresetRecord r)
 {
-	boost::shared_ptr<XMLTree> t (presets_tree ());
+	if (!r.user) {
+		return load_factory_preset (r);
+	} else {
+		return load_user_preset (r);
+	}
+}
+
+bool
+LuaProc::load_factory_preset (PresetRecord const& r)
+{
+	auto const i = _factory_presets.find (r.uri);
+	if (i == _factory_presets.end ()) {
+		return false;
+	}
+
+	FactoryPreset const& fp = i->second;
+	for (auto const& pv : fp.param) {
+		set_parameter (pv.first, pv.second, 0);
+		PresetPortSetValue (pv.first, pv.second); /* EMIT SIGNAL */
+	}
+
+	return Plugin::load_preset(r);
+}
+
+bool
+LuaProc::load_user_preset (PresetRecord const& r)
+{
+	std::shared_ptr<XMLTree> t (presets_tree ());
 	if (t == 0) {
 		return false;
 	}
@@ -1137,8 +1320,9 @@ LuaProc::load_preset (PresetRecord r)
 				if (!(*j)->get_property (X_("index"), index) ||
 				    !(*j)->get_property (X_("value"), value)) {
 					assert (false);
+					continue;
 				}
-				set_parameter (index, value);
+				set_parameter (index, value, 0);
 				PresetPortSetValue (index, value); /* EMIT SIGNAL */
 			}
 		}
@@ -1150,7 +1334,7 @@ LuaProc::load_preset (PresetRecord r)
 std::string
 LuaProc::do_save_preset (std::string name) {
 
-	boost::shared_ptr<XMLTree> t (presets_tree ());
+	std::shared_ptr<XMLTree> t (presets_tree ());
 	if (t == 0) {
 		return "";
 	}
@@ -1184,7 +1368,7 @@ LuaProc::do_save_preset (std::string name) {
 void
 LuaProc::do_remove_preset (std::string name)
 {
-	boost::shared_ptr<XMLTree> t (presets_tree ());
+	std::shared_ptr<XMLTree> t (presets_tree ());
 	if (t == 0) {
 		return;
 	}
@@ -1197,7 +1381,12 @@ LuaProc::do_remove_preset (std::string name)
 void
 LuaProc::find_presets ()
 {
-	boost::shared_ptr<XMLTree> t (presets_tree ());
+	for (auto const& p : _factory_presets) {
+		PresetRecord r (p.first, p.second.name, false);
+		_presets.insert (make_pair (r.uri, r));
+	}
+
+	std::shared_ptr<XMLTree> t (presets_tree ());
 	if (t) {
 		XMLNode* root = t->root ();
 		for (XMLNodeList::const_iterator i = root->children().begin(); i != root->children().end(); ++i) {
@@ -1231,6 +1420,8 @@ LuaPluginInfo::LuaPluginInfo (LuaScriptInfoPtr lsi) {
 	n_outputs.set (DataType::AUDIO, 1);
 	type = Lua;
 
+	// TODO, parse script, get 'dsp_ioconfig', see match_variable_io()
+	_max_outputs = 0;
 }
 
 PluginPtr
@@ -1243,7 +1434,7 @@ LuaPluginInfo::load (Session& session)
 
 	try {
 		script = Glib::file_get_contents (path);
-	} catch (Glib::FileError err) {
+	} catch (Glib::FileError const& err) {
 		return PluginPtr ();
 	}
 
@@ -1263,9 +1454,14 @@ LuaPluginInfo::load (Session& session)
 }
 
 std::vector<Plugin::PresetRecord>
-LuaPluginInfo::get_presets (bool /*user_only*/) const
+LuaPluginInfo::get_presets (bool user_only) const
 {
 	std::vector<Plugin::PresetRecord> p;
+
+	if (!user_only) {
+		p.insert (p.end (), _factory_presets.begin (), _factory_presets.end ());
+	}
+
 	XMLTree* t = new XMLTree;
 	std::string pf = Glib::build_filename (ARDOUR::user_config_directory (), "presets", string_compose ("lua-%1", unique_id));
 	if (Glib::file_test (pf, Glib::FILE_TEST_EXISTS)) {

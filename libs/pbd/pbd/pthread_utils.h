@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2000-2007 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2014 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2017-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __pbd_pthread_utils__
 #define __pbd_pthread_utils__
@@ -47,25 +48,78 @@
 #include "pbd/libpbd_visibility.h"
 #include "pbd/signals.h"
 
-LIBPBD_API int  pthread_create_and_store (std::string name, pthread_t  *thread, void * (*start_routine)(void *), void * arg);
+#define PBD_RT_STACKSIZE_PROC 0x80000 // 512kB
+#define PBD_RT_STACKSIZE_HELP 0x08000 // 32kB
+
+/* these are relative to sched_get_priority_max()
+ * see pbd_absolute_rt_priority()
+ */
+# define PBD_RT_PRI_MAIN pbd_pthread_priority (THREAD_MAIN)
+# define PBD_RT_PRI_MIDI pbd_pthread_priority (THREAD_MIDI)
+# define PBD_RT_PRI_PROC pbd_pthread_priority (THREAD_PROC)
+# define PBD_RT_PRI_CTRL pbd_pthread_priority (THREAD_CTRL)
+# define PBD_RT_PRI_IOFX pbd_pthread_priority (THREAD_IOFX)
+
+LIBPBD_API int  pthread_create_and_store (std::string name, pthread_t  *thread, void * (*start_routine)(void *), void * arg, uint32_t stacklimit = 0x80000 /*512kB*/);
 LIBPBD_API void pthread_cancel_one (pthread_t thread);
 LIBPBD_API void pthread_cancel_all ();
 LIBPBD_API void pthread_kill_all (int signum);
 LIBPBD_API const char* pthread_name ();
 LIBPBD_API void pthread_set_name (const char* name);
 
+LIBPBD_API void pbd_set_engine_rt_priority (int);
+
+enum PBDThreadClass {
+	THREAD_MAIN, // main audio I/O thread
+	THREAD_MIDI, // MIDI I/O threads
+	THREAD_PROC, // realtime worker
+	THREAD_CTRL, // Automation watch, BaseUI
+	THREAD_IOFX  // non-realtime I/O and regionFX
+};
+
+LIBPBD_API int pbd_pthread_priority (PBDThreadClass);
+
+LIBPBD_API int pbd_pthread_create (
+		const size_t stacksize,
+		pthread_t *thread,
+		void *(*start_routine) (void *),
+		void *arg);
+
+
 LIBPBD_API int pbd_realtime_pthread_create (
+		std::string const& debug_name,
 		const int policy, int priority, const size_t stacksize,
 		pthread_t *thread,
 		void *(*start_routine) (void *),
 		void *arg);
 
-LIBPBD_API int  pbd_set_thread_priority (pthread_t, const int policy, int priority);
-LIBPBD_API bool pbd_mach_set_realtime_policy (pthread_t thread_id, double period_ns);
+LIBPBD_API int  pbd_absolute_rt_priority (int policy, int priority);
+LIBPBD_API int  pbd_set_thread_priority (pthread_t, int policy, int priority);
+LIBPBD_API bool pbd_mach_set_realtime_policy (pthread_t thread_id, double period_ns, bool main);
 
 namespace PBD {
 	LIBPBD_API extern void notify_event_loops_about_thread_creation (pthread_t, const std::string&, int requests = 256);
-	LIBPBD_API extern PBD::Signal3<void,pthread_t,std::string,uint32_t> ThreadCreatedWithRequestSize;
+	LIBPBD_API extern PBD::Signal<void(pthread_t,std::string,uint32_t)> ThreadCreatedWithRequestSize;
+
+	class LIBPBD_API Thread {
+		public:
+		static Thread* create (std::function<void ()> const&, std::string const& name);
+		static Thread* self ();
+		void join ();
+		bool caller_is_self () const;
+
+		private:
+		Thread ();
+		Thread (std::function<void ()> const&, std::string const& name = "");
+		Thread (Thread const&); /* precent copy-construction */
+
+		static void* _run (void*);
+
+		pthread_t                _t;
+		std::string              _name;
+		std::function<void ()> _slot;
+		bool                     _joinable;
+	};
 }
 
 /* pthread-w32 does not support realtime scheduling

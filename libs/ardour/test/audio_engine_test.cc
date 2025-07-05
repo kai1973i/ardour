@@ -36,8 +36,6 @@ AudioEngineTest::test_backends ()
 		i != backends.end(); ++i) {
 		print_audio_backend_info(*i);
 	}
-
-	AudioEngine::destroy ();
 }
 
 void
@@ -47,17 +45,13 @@ AudioEngineTest::test_start ()
 
 	CPPUNIT_ASSERT (AudioEngine::instance ());
 
-	boost::shared_ptr<AudioBackend> backend = engine->set_backend ("None (Dummy)", "Unit-Test", "");
+	std::shared_ptr<AudioBackend> backend = engine->set_backend ("None (Dummy)", "Unit-Test", "");
 
 	CPPUNIT_ASSERT (backend);
-
-	init_post_engine ();
 
 	CPPUNIT_ASSERT (engine->start () == 0);
 
 	Glib::usleep(2000);
 
 	CPPUNIT_ASSERT (engine->stop () == 0);
-
-	AudioEngine::destroy ();
 }

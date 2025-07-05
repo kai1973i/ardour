@@ -32,7 +32,7 @@ def include_config_h(self):
     self.env.append_value('INCPATHS', self.bld.bldnode.abspath())
 
 def set_options(opt, debug_by_default=False):
-    "Add standard autowaf options if they havn't been added yet"
+    "Add standard autowaf options if they haven't been added yet"
     global g_step
     if g_step > 0:
         return
@@ -66,10 +66,10 @@ def set_options(opt, debug_by_default=False):
     # Build options
     if debug_by_default:
         opt.add_option('--optimize', action='store_false', default=True, dest='debug',
-                       help="Build optimized binaries")
+                       help="Build optimized binaries (not debug)")
     else:
         opt.add_option('--debug', action='store_true', default=False, dest='debug',
-                       help="Build debuggable binaries")
+                       help="Build debuggable binaries (not optimized)")
 
     opt.add_option('--pardebug', action='store_true', default=False, dest='pardebug',
                        help="Build parallel-installable debuggable libraries with D suffix")
@@ -140,14 +140,13 @@ def check_pkg(conf, name, **args):
         found = None
         pkg_var_name = 'PKG_' + name.replace('-', '_')
         pkg_name = name
-        if conf.env.PARDEBUG:
-            args['mandatory'] = False  # Smash mandatory arg
-            found = conf.check_cfg(package=pkg_name + 'D', args="--cflags --libs", **args)
-            if found:
-                pkg_name += 'D'
         if mandatory:
             args['mandatory'] = True  # Unsmash mandatory arg
-        if not found:
+        if 'atleast_version' in args:
+            if not 'msg' in args:
+                args['msg'] = 'Checking for %r >= %s' %(pkg_name, args['atleast_version'])
+            found = conf.check_cfg(package=pkg_name, args=[pkg_name + " >= " + args['atleast_version'], '--cflags', '--libs'], **args)
+        else:
             found = conf.check_cfg(package=pkg_name, args="--cflags --libs", **args)
         if found:
             conf.env[pkg_var_name] = pkg_name
@@ -400,45 +399,6 @@ def build_dir(name, subdir):
         return os.path.join('build', name, subdir)
     else:
         return os.path.join('build', subdir)
-
-# Clean up messy Doxygen documentation after it is built
-def make_simple_dox(name):
-    name = name.lower()
-    NAME = name.upper()
-    try:
-        top = os.getcwd()
-        os.chdir(build_dir(name, 'doc/html'))
-        page = 'group__%s.html' % name
-        if not os.path.exists(page):
-            return
-        for i in [
-            ['%s_API ' % NAME, ''],
-            ['%s_DEPRECATED ' % NAME, ''],
-            ['group__%s.html' % name, ''],
-            ['&#160;', ''],
-            ['<script.*><\/script>', ''],
-            ['<hr\/><a name="details" id="details"><\/a><h2>.*<\/h2>', ''],
-            ['<link href=\"tabs.css\" rel=\"stylesheet\" type=\"text\/css\"\/>',
-             ''],
-            ['<img class=\"footer\" src=\"doxygen.png\" alt=\"doxygen\"\/>',
-             'Doxygen']]:
-            os.system("sed -i 's/%s/%s/g' %s" % (i[0], i[1], page))
-        os.rename('group__%s.html' % name, 'index.html')
-        for i in (glob.glob('*.png') +
-                  glob.glob('*.html') +
-                  glob.glob('*.js') +
-                  glob.glob('*.css')):
-            if i != 'index.html' and i != 'style.css':
-                os.remove(i)
-        os.chdir(top)
-        os.chdir(build_dir(name, 'doc/man/man3'))
-        for i in glob.glob('*.3'):
-            os.system("sed -i 's/%s_API //' %s" % (NAME, i))
-        for i in glob.glob('_*'):
-            os.remove(i)
-        os.chdir(top)
-    except Exception as e:
-        Logs.error("Failed to fix up %s documentation: %s" % (name, e))
 
 # Doxygen API documentation
 def build_dox(bld, name, version, srcdir, blddir, outdir=''):

@@ -1,22 +1,12 @@
 #!/usr/bin/env python
 from waflib.extras import autowaf as autowaf
-from waflib import Options
-import os
 import re
 import sys
 
 HIDAPI_VERSION = '0.8.0'
 
-# Variables for 'waf dist'
-APPNAME = 'hidapi'
-VERSION = HIDAPI_VERSION
-
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    autowaf.set_options(opt)
+    pass
 
 def configure(conf):
     if conf.is_defined('USE_EXTERNAL_LIBS'):
@@ -33,8 +23,6 @@ def configure(conf):
                 conf.define ('HAVE_HIDAPI', 1)
         else:
             print ("hidapi is not yet available for the given system")
-        conf.load('compiler_c')
-        autowaf.configure(conf)
 
 def build(bld):
     if bld.is_defined('USE_EXTERNAL_LIBS'):
@@ -47,17 +35,19 @@ def build(bld):
     autowaf.ensure_visible_symbols (obj, False)
     obj.export_includes    = ['hidapi']
     obj.includes           = ['hidapi']
+    obj.defines            = ['_POSIX_C_SOURCE=200809L']
     obj.name               = 'hidapi'
     obj.target             = 'hidapi'
     obj.vnum               = HIDAPI_VERSION
     obj.install_path       = bld.env['LIBDIR']
+    obj.defines            = '_POSIX_C_SOURCE=200809L'
 
     if bld.env['build_target'] == 'mingw':
         obj.source         = 'windows/hid.c'
         obj.linkflags      = [ '-lsetupapi', '-mwindows' ]
         obj.uselib         = 'SETUPAPI'
     else:
-        obj.cflags        += [ '-fPIC' ]
+        obj.cflags        += [ bld.env['compiler_flags_dict']['pic'] ]
         if sys.platform == 'darwin':
             obj.source     = 'mac/hid.c'
             obj.framework  = [ 'IOKit', 'CoreFoundation' ]
@@ -65,6 +55,3 @@ def build(bld):
             obj.source     = 'linux/hid.c'
             if re.search ("linux", sys.platform) != None:
                 obj.uselib = 'UDEV'
-
-def shutdown():
-    autowaf.shutdown()

@@ -20,20 +20,60 @@
 #include <cassert>
 
 #include "temporal/bbt_time.h"
+#include "temporal/bbt_argument.h"
 
-using namespace Timecode;
+using namespace Temporal;
 
-/* This defines the smallest division of a "beat".
+int64_t
+BBT_Time::as_integer () const
+{
+	/* up to 256 beats in a bar, 4095 ticks in a beat,
+	   and whatever is left for bars (a lot!)
+	*/
+	return (((int64_t) bars)<<20)|(beats<<12)|ticks;
+}
 
-   The number is intended to have as many integer factors as possible so that
-   1/Nth divisions are integer numbers of ticks.
+BBT_Time
+BBT_Time::from_integer (int64_t v)
+{
+	int32_t B = v>>20;
+	int32_t b = (v>>12) & 0xff;
+	int32_t t= v & 0xfff;
+	return BBT_Time (B, b, t);
+}
 
-   1920 has many factors, though going up to 3840 gets a couple more.
+BBT_Time
+BBT_Time::round_up_to_bar() const
+{
+	if (ticks == 0 && beats == 1) {
+		return *this;
+	}
+	BBT_Time b = round_up_to_beat ();
+	if (b.beats > 1) {
+		b.bars += 1;
+		b.beats = 1;
+	}
+	return b;
+}
 
-   This needs to match Temporal::Beats::PPQN
-*/
+BBT_Time
+BBT_Time::round_up_to_beat_div (int beat_div) const
+{
+	/* XXX this doesn't work where "beats" are not quarters, because
+	   we could have B|b|0 and this is not on a beat_div, even though it is
+	   an integer beat position (think triplets.
+	*/
 
-const double BBT_Time::ticks_per_beat = 1920.0;
+	const int32_t div_ticks = ticks_per_beat / beat_div;
+	int32_t rounded_up = ticks + div_ticks - 1;
+	rounded_up -= rounded_up % div_ticks;
+
+	if (rounded_up == ticks_per_beat) {
+		return BBT_Time (bars, beats+1, 0);
+	}
+
+	return BBT_Time (bars, beats, rounded_up);
+}
 
 BBT_Offset::BBT_Offset (double dbeats)
 {
@@ -45,6 +85,64 @@ BBT_Offset::BBT_Offset (double dbeats)
 	assert (dbeats >= 0);
 
 	bars = 0;
-	beats = lrint (floor (dbeats));
-	ticks = lrint (floor (BBT_Time::ticks_per_beat * fmod (dbeats, 1.0)));
+	beats = (int32_t) lrint (floor (dbeats));
+	ticks = (int32_t) lrint (floor (Temporal::ticks_per_beat * fmod (dbeats, 1.0)));
 }
+
+std::ostream&
+std::operator<< (std::ostream& o, Temporal::BBT_Time const & bbt)
+{
+	o << bbt.bars << '|' << bbt.beats << '|' << bbt.ticks;
+	return o;
+}
+
+std::ostream&
+std::operator<< (std::ostream& o, const Temporal::BBT_Offset& bbt)
+{
+	o << bbt.bars << '|' << bbt.beats << '|' << bbt.ticks;
+	return o;
+}
+
+std::istream&
+std::operator>>(std::istream& i, Temporal::BBT_Offset& bbt)
+{
+	int32_t B, b, t;
+	char skip_pipe_char;
+
+	i >> B;
+	i >> skip_pipe_char;
+	i >> b;
+	i >> skip_pipe_char;
+	i >> t;
+
+	bbt = Temporal::BBT_Offset (B, b, t);
+
+	return i;
+}
+
+std::istream&
+std::operator>>(std::istream& i, Temporal::BBT_Time& bbt)
+{
+	int32_t B, b, t;
+	char skip_pipe_char;
+
+	i >> B;
+	i >> skip_pipe_char;
+	i >> b;
+	i >> skip_pipe_char;
+	i >> t;
+
+	bbt = Temporal::BBT_Time (B, b, t);
+
+	return i;
+}
+
+/* define this here to avoid adding another .cc file for just this operator */
+
+std::ostream&
+std::operator<< (std::ostream& o, Temporal::BBT_Argument const & bbt)
+{
+	o << '@' << bbt.reference() << ':' << bbt.bars << '|' << bbt.beats << '|' << bbt.ticks;
+	return o;
+}
+

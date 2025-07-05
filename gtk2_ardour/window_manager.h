@@ -1,21 +1,22 @@
 /*
-  Copyright (C) 2013 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2016 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2013-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __gtk2_ardour_window_manager_h__
 #define __gtk2_ardour_window_manager_h__
@@ -23,12 +24,15 @@
 #include <string>
 #include <map>
 
-#include <boost/function.hpp>
-#include <glibmm/refptr.h>
 #include <sigc++/trackable.h>
 
+#include "gtkmm2ext/actions.h"
 #include "gtkmm2ext/bindings.h"
 #include "gtkmm2ext/window_proxy.h"
+
+#include <glibmm/refptr.h>
+
+#include "ardour/session_handle.h"
 
 class XMLNode;
 
@@ -97,7 +101,6 @@ class ProxyTemporary: public ProxyBase
 {
 public:
 	ProxyTemporary (const std::string& name, Gtk::Window* win);
-	~ProxyTemporary();
 
 	Gtk::Window* get (bool create = false) {
 		(void) create;
@@ -109,16 +112,18 @@ public:
 	}
 
 	ARDOUR::SessionHandlePtr* session_handle ();
+
+	void explicit_delete () { _window = 0 ; delete this; }
 };
 
 template<typename T>
 class ProxyWithConstructor: public ProxyBase
 {
 public:
-	ProxyWithConstructor (const std::string& name, const std::string& menu_name, const boost::function<T*()>& c)
+	ProxyWithConstructor (const std::string& name, const std::string& menu_name, const std::function<T*()>& c)
 		: ProxyBase (name, menu_name) , creator (c) {}
 
-	ProxyWithConstructor (const std::string& name, const std::string& menu_name, const boost::function<T*()>& c, const XMLNode* node)
+	ProxyWithConstructor (const std::string& name, const std::string& menu_name, const std::function<T*()>& c, const XMLNode* node)
 		: ProxyBase (name, menu_name, *node) , creator (c) {}
 
 	Gtk::Window* get (bool create = false) {
@@ -148,15 +153,23 @@ public:
 
 	void set_session(ARDOUR::Session *s) {
 		SessionHandlePtr::set_session (s);
+		if (!s) {
+			return;
+		}
 		ARDOUR::SessionHandlePtr* sp = session_handle ();
 		if (sp) {
 			sp->set_session (s);
-			dynamic_cast<T*>(_window)->set_session(s);
+		}
+		ARDOUR::SessionHandlePtr* wsp = dynamic_cast<T*>(_window);
+		if (wsp && wsp != sp) {
+			/* can this happen ? */
+			assert (0);
+			wsp->set_session(s);
 		}
 	}
 
 private:
-	boost::function<T*()>	creator;
+	std::function<T*()>	creator;
 };
 
 template<typename T>
@@ -196,15 +209,23 @@ public:
 
 	void set_session(ARDOUR::Session *s) {
 		SessionHandlePtr::set_session (s);
+		if (!s) {
+			return;
+		}
 		ARDOUR::SessionHandlePtr* sp = session_handle ();
 		if (sp) {
 			sp->set_session (s);
-			dynamic_cast<T*>(_window)->set_session(s);
+		}
+		ARDOUR::SessionHandlePtr* wsp = dynamic_cast<T*>(_window);
+		if (wsp && wsp != sp) {
+			/* can this happen ? */
+			assert (0);
+			wsp->set_session(s);
 		}
 	}
 
 private:
-	boost::function<T*()>	creator;
+	std::function<T*()>	creator;
 };
 
 } /* namespace */

@@ -14,18 +14,7 @@ EVORAL_VERSION = '0.0.0'
 #   0.0.0 = 0,0,0
 EVORAL_LIB_VERSION = '0.0.0'
 
-# Variables for 'waf dist'
-APPNAME = 'evoral'
-VERSION = EVORAL_VERSION
-
-# Mandatory variables
-top = '.'
-out = 'build'
-
 def options(opt):
-    opt.load('compiler_c')
-    opt.load('compiler_cxx')
-    autowaf.set_options(opt)
     opt.add_option('--test', action='store_true', default=False, dest='build_tests',
                     help="Build unit tests")
     opt.add_option('--test-coverage', action='store_true', default=False, dest='test_coverage',
@@ -34,21 +23,12 @@ def options(opt):
                    help='Build internal libs as shared libraries')
 
 def configure(conf):
-    conf.load('compiler_c')
-    conf.load('compiler_cxx')
-    autowaf.configure(conf)
     #autowaf.display_header('Evoral Configuration')
 
-    autowaf.check_pkg(conf, 'cppunit', uselib_store='CPPUNIT', atleast_version='1.12.0', mandatory=False)
-    autowaf.check_pkg(conf, 'glib-2.0', uselib_store='GLIB', atleast_version='2.2')
-    autowaf.check_pkg(conf, 'glibmm-2.4', uselib_store='GLIBMM', atleast_version='2.14.0')
-    autowaf.check_pkg(conf, 'gthread-2.0', uselib_store='GTHREAD', atleast_version='2.14.0')
     if not autowaf.is_child():
         autowaf.check_pkg(conf, 'libpbd-4', uselib_store='LIBPBD', atleast_version='4.0.0', mandatory=True)
 
     # Boost headers
-    autowaf.check_header(conf, 'cxx', 'boost/shared_ptr.hpp')
-    autowaf.check_header(conf, 'cxx', 'boost/weak_ptr.hpp')
 
     conf.env['BUILD_TESTS'] = Options.options.build_tests
     conf.env['TEST_COVERAGE'] = Options.options.test_coverage
@@ -61,20 +41,20 @@ def configure(conf):
 def build(bld):
     # Headers
     #bld.install_files('${INCLUDEDIR}/evoral', 'evoral/*.h')
-    #bld.install_files('${INCLUDEDIR}/evoral', 'evoral/*.hpp')
+    #bld.install_files('${INCLUDEDIR}/evoral', 'evoral/*.h')
 
     # Pkgconfig file
     #autowaf.build_pc(bld, 'EVORAL', EVORAL_VERSION, 'GLIBMM GTHREAD')
 
     libsmf = bld(features = 'c cstlib')
     libsmf.source = '''
-            src/libsmf/smf.c
-            src/libsmf/smf_decode.c
-            src/libsmf/smf_load.c
-            src/libsmf/smf_save.c
-            src/libsmf/smf_tempo.c
+            libsmf/smf.c
+            libsmf/smf_decode.c
+            libsmf/smf_load.c
+            libsmf/smf_save.c
+            libsmf/smf_tempo.c
     '''
-    libsmf.export_includes = ['./src/libsmf']
+    libsmf.export_includes = ['.']
     libsmf.defines      = ['SMF_VERSION="1.2"', 'LIBSMF_DLL_EXPORTS']
     libsmf.includes     = ['./src']
     libsmf.name         = 'libsmf'
@@ -83,20 +63,19 @@ def build(bld):
     libsmf.use          = [ 'libtemporal' ]
     libsmf.install_path = None
     if bld.env['build_target'] != 'mingw':
-        libsmf.cxxflags     = [ '-fPIC' ]
-        libsmf.cflags       = [ '-fPIC' ]
+        libsmf.cxxflags     = [ bld.env['compiler_flags_dict']['pic'] ]
+        libsmf.cflags       = [ bld.env['compiler_flags_dict']['pic'] ]
 
     lib_source = '''
-            src/Control.cpp
-            src/ControlList.cpp
-            src/ControlSet.cpp
-            src/Curve.cpp
-            src/Event.cpp
-            src/Note.cpp
-            src/SMF.cpp
-            src/Sequence.cpp
-            src/TimeConverter.cpp
-            src/debug.cpp
+            Control.cc
+            ControlList.cc
+            ControlSet.cc
+            Curve.cc
+            Event.cc
+            Note.cc
+            SMF.cc
+            Sequence.cc
+            debug.cc
     '''
 
     # Library
@@ -106,20 +85,21 @@ def build(bld):
         obj.defines      = [ 'LIBEVORAL_DLL_EXPORTS' ]
     else:
         obj              = bld.stlib(features = 'c cxx cstlib cxxstlib', source=lib_source)
-        obj.cxxflags     = [ '-fPIC' ]
-        obj.cflags       = [ '-fPIC' ]
+        obj.cxxflags     = [ bld.env['compiler_flags_dict']['pic'] ]
+        obj.cflags       = [ bld.env['compiler_flags_dict']['pic'] ]
         obj.defines      = [ ]
 
     obj.export_includes = ['.']
     obj.includes       = ['.', './src']
     obj.name           = 'libevoral'
     obj.target         = 'evoral'
-    obj.uselib         = 'GLIBMM GTHREAD SMF XML LIBPBD'
+    obj.uselib         = 'GLIBMM GTHREAD SMF XML LIBPBD OSX'
     obj.use            = 'libsmf libpbd'
     obj.vnum           = EVORAL_LIB_VERSION
     obj.install_path   = bld.env['LIBDIR']
     obj.defines       += [ 'PACKAGE="libevoral"' ]
 
+    # disable unit-tests -- build is broken with nutempo
     if bld.env['BUILD_TESTS'] and bld.is_defined('HAVE_CPPUNIT'):
         # Static library (for unit test code coverage)
         obj = bld(features = 'cxx cstlib')
@@ -140,17 +120,16 @@ def build(bld):
 
         # Unit tests
         obj              = bld(features = 'cxx cxxprogram')
-        obj.source       = '''
-                test/SequenceTest.cpp
-                test/SMFTest.cpp
-                test/RangeTest.cpp
-                test/NoteTest.cpp
-                test/CurveTest.cpp
-                test/testrunner.cpp
-        '''
+        obj.source       = [
+                'test/SequenceTest.cc',
+                'test/SMFTest.cc',
+                'test/NoteTest.cc',
+                'test/CurveTest.cc',
+                'test/testrunner.cc',
+                ]
         obj.includes     = ['.', './src']
         obj.use          = 'libevoral_static'
-        obj.uselib       = 'CPPUNIT SNDFILE LIBPBD'
+        obj.uselib       = 'GLIBMM GTHREAD SMF XML LIBPBD OSX CPPUNIT'
         obj.target       = 'run-tests'
         obj.name         = 'libevoral-tests'
         obj.install_path = ''
@@ -161,8 +140,8 @@ def build(bld):
             obj.cxxflags       = ['--coverage']
 
 def test(ctx):
-    autowaf.pre_test(ctx, APPNAME)
+    autowaf.pre_test(ctx, 'evoral')
     print(os.getcwd())
     os.environ['EVORAL_TEST_PATH'] = os.path.abspath('../test/testdata/')
-    autowaf.run_tests(ctx, APPNAME, ['./run-tests'])
-    autowaf.post_test(ctx, APPNAME)
+    autowaf.run_tests(ctx, 'evoral', ['./run-tests'])
+    autowaf.post_test(ctx, 'evoral')

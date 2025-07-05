@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2011-2016 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_push2_level_meter_h__
 #define __ardour_push2_level_meter_h__
@@ -23,8 +23,10 @@
 #include "canvas/container.h"
 #include "canvas/meter.h"
 
+#include "ardour/chan_count.h"
+#include "ardour/types.h"
+
 namespace ARDOUR {
-	class Session;
 	class PeakMeter;
 }
 
@@ -54,21 +56,19 @@ class LevelMeter : public ArdourCanvas::Container, public sigc::trackable
 	void setup_meters (int len=0, int width=3, int thin=2);
 	void set_max_audio_meter_count (uint32_t cnt = 0);
 
-	void set_type (ARDOUR::MeterType);
-	ARDOUR::MeterType get_type () { return meter_type; }
 
   private:
-	Push2& p2;
-	ARDOUR::PeakMeter* _meter;
+	Push2&                           _p2;
+	ARDOUR::PeakMeter*               _meter;
 	ArdourCanvas::Meter::Orientation _meter_orientation;
-	ArdourCanvas::Box* meter_packer;
+	ArdourCanvas::Box*               _meter_packer;
 
 	struct MeterInfo {
 		ArdourCanvas::Meter* meter;
-		gint16 width;
-		int    length;
-		bool   packed;
-		float  max_peak;
+		gint16               width;
+		int                  length;
+		bool                 packed;
+		float                max_peak;
 
 		MeterInfo() {
 			meter = 0;
@@ -79,16 +79,15 @@ class LevelMeter : public ArdourCanvas::Container, public sigc::trackable
 		}
 	};
 
-	guint16                regular_meter_width;
-	int                    meter_length;
-	guint16                thin_meter_width;
-	std::vector<MeterInfo> meters;
-	float                  max_peak;
-	ARDOUR::MeterType      meter_type;
-	ARDOUR::MeterType      visible_meter_type;
-	uint32_t               midi_count;
-	uint32_t               meter_count;
-	uint32_t               max_visible_meters;
+	guint16                _regular_meter_width;
+	int                    _meter_length;
+	guint16                _thin_meter_width;
+	std::vector<MeterInfo> _meters;
+	float                  _max_peak;
+	ARDOUR::MeterType      _visible_meter_type;
+	uint32_t               _midi_count;
+	uint32_t               _meter_count;
+	uint32_t               _max_visible_meters;
 
 	PBD::ScopedConnection _configuration_connection;
 	PBD::ScopedConnection _meter_type_connection;

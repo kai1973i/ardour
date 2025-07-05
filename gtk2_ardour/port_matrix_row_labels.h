@@ -1,32 +1,32 @@
 /*
-    Copyright (C) 2002-2009 Paul Davis
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+#include <memory>
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __port_matrix_row_labels_h__
-#define __port_matrix_row_labels_h__
-
-#include <boost/shared_ptr.hpp>
-#include <gdkmm/color.h>
+#include <ydkmm/color.h>
 #include "port_matrix_labels.h"
 
 class PortMatrix;
 class PortMatrixBody;
 class PortMatrixNode;
+class PortMatrixColumnLabels;
 
 namespace ARDOUR {
 	class Bundle;
@@ -41,7 +41,7 @@ namespace Gtk {
 class PortMatrixRowLabels : public PortMatrixLabels
 {
 public:
-	PortMatrixRowLabels (PortMatrix *, PortMatrixBody *);
+	PortMatrixRowLabels (PortMatrix *, PortMatrixBody *, PortMatrixColumnLabels&);
 
 	void button_press (double, double, GdkEventButton *);
 
@@ -54,20 +54,21 @@ public:
 
 private:
 	void render_channel_name (cairo_t *, Gdk::Color, Gdk::Color, double, double, ARDOUR::BundleChannel const &);
-	void render_bundle_name (cairo_t *, Gdk::Color, Gdk::Color, double, double, boost::shared_ptr<ARDOUR::Bundle>);
+	void render_bundle_name (cairo_t *, Gdk::Color, Gdk::Color, double, double, std::shared_ptr<ARDOUR::Bundle>);
 	double channel_x (ARDOUR::BundleChannel const &) const;
 	double channel_y (ARDOUR::BundleChannel const &) const;
 
 	void render (cairo_t *);
 	void compute_dimensions ();
-	void remove_channel_proxy (boost::weak_ptr<ARDOUR::Bundle>, uint32_t);
-	void rename_channel_proxy (boost::weak_ptr<ARDOUR::Bundle>, uint32_t);
+	void remove_channel_proxy (std::weak_ptr<ARDOUR::Bundle>, uint32_t);
+	void rename_channel_proxy (std::weak_ptr<ARDOUR::Bundle>, uint32_t);
 	void queue_draw_for (ARDOUR::BundleChannel const &);
 	double port_name_x () const;
 	double bundle_name_x () const;
 
 	double _longest_port_name;
 	double _longest_bundle_name;
+
+	PortMatrixColumnLabels& _column_labels;
 };
 
-#endif

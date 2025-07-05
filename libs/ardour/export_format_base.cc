@@ -1,22 +1,21 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/export_format_base.h"
 
@@ -64,22 +63,22 @@ ExportFormatBase::~ExportFormatBase ()
 
 }
 
-boost::shared_ptr<ExportFormatBase>
+std::shared_ptr<ExportFormatBase>
 ExportFormatBase::get_intersection (ExportFormatBase const & other) const
 {
 	return do_set_operation (other, SetIntersection);
 }
 
-boost::shared_ptr<ExportFormatBase>
+std::shared_ptr<ExportFormatBase>
 ExportFormatBase::get_union (ExportFormatBase const & other) const
 {
 	return do_set_operation (other, SetUnion);
 }
 
-boost::shared_ptr<ExportFormatBase>
+std::shared_ptr<ExportFormatBase>
 ExportFormatBase::do_set_operation (ExportFormatBase const & other, SetOperation operation) const
 {
-	boost::shared_ptr<ExportFormatBase> result (new ExportFormatBase ());
+	std::shared_ptr<ExportFormatBase> result (new ExportFormatBase ());
 
 	/* Sets */
 
@@ -193,6 +192,7 @@ ExportFormatBase::nearest_sample_rate (samplecnt_t sample_rate)
 
 	DO_SR_COMPARISON(SR_8);
 	DO_SR_COMPARISON(SR_22_05);
+	DO_SR_COMPARISON(SR_24);
 	DO_SR_COMPARISON(SR_44_1);
 	DO_SR_COMPARISON(SR_48);
 	DO_SR_COMPARISON(SR_88_2);

@@ -1,25 +1,28 @@
 /*
-    Copyright (C) 2013 Paul Davis
-    Author: Robin Gareus
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <list>
 
 #include <sigc++/bind.h>
+
+#include "pbd/unwind.h"
 
 #include "ardour/logmeter.h"
 #include "ardour/session.h"
@@ -39,6 +42,7 @@
 
 #include "gui_thread.h"
 #include "ardour_window.h"
+#include "context_menu_helper.h"
 #include "ui_config.h"
 #include "utils.h"
 
@@ -57,21 +61,24 @@ using namespace Gtkmm2ext;
 using namespace std;
 using namespace ArdourMeter;
 
-PBD::Signal1<void,MeterStrip*> MeterStrip::CatchDeletion;
-PBD::Signal0<void> MeterStrip::MetricChanged;
-PBD::Signal0<void> MeterStrip::ConfigurationChanged;
+PBD::Signal<void(MeterStrip*)> MeterStrip::CatchDeletion;
+PBD::Signal<void()> MeterStrip::MetricChanged;
+PBD::Signal<void()> MeterStrip::ConfigurationChanged;
 
 #define PX_SCALE(pxmin, dflt) rint(std::max((double)pxmin, (double)dflt * UIConfiguration::instance().get_ui_scale()))
 
 MeterStrip::MeterStrip (int metricmode, MeterType mt)
 	: RouteUI ((Session*) 0)
+	, metric_type (MeterPeak)
+	, _clear_meters (true)
+	, _meter_peaked (false)
+	, _has_midi (false)
+	, _tick_bar (0)
+	, _strip_type (0)
+	, _metricmode (-1)
+	, level_meter (0)
+	, _suspend_menu_callbacks (false)
 {
-	level_meter = 0;
-	_strip_type = 0;
-	_tick_bar = 0;
-	_metricmode = -1;
-	metric_type = MeterPeak;
-
 	mtr_vbox.set_spacing (PX_SCALE(2, 2));
 	nfo_vbox.set_spacing (PX_SCALE(2, 2));
 	peakbx.set_size_request (-1, PX_SCALE(14, 14));
@@ -117,22 +124,25 @@ MeterStrip::MeterStrip (int metricmode, MeterType mt)
 	UIConfiguration::instance().DPIReset.connect (sigc::mem_fun (*this, &MeterStrip::on_theme_changed));
 }
 
-MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
+MeterStrip::MeterStrip (Session* sess, std::shared_ptr<ARDOUR::Route> rt)
 	: SessionHandlePtr (sess)
-	, RouteUI(0)
-	, _route(rt)
-	, peak_display()
+	, RouteUI ((Session*) 0)
+	, _route (rt)
+	, metric_type (MeterPeak)
+	, _clear_meters (true)
+	, _meter_peaked (false)
+	, _has_midi (false)
+	, _tick_bar (0)
+	, _strip_type (0)
+	, _metricmode (-1)
+	, level_meter (0)
+	, gain_control (ArdourKnob::default_elements, ArdourKnob::Detent)
+	, _suspend_menu_callbacks (false)
 {
 	mtr_vbox.set_spacing (PX_SCALE(2, 2));
 	nfo_vbox.set_spacing (PX_SCALE(2, 2));
-	SessionHandlePtr::set_session (sess);
 	RouteUI::init ();
 	RouteUI::set_route (rt);
-
-	_has_midi = false;
-	_tick_bar = 0;
-	_metricmode = -1;
-	metric_type = MeterPeak;
 
 	// note: level_meter->setup_meters() does the scaling
 	int meter_width = 6;
@@ -144,10 +154,9 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	level_meter = new LevelMeterHBox(sess);
 	level_meter->set_meter (_route->shared_peak_meter().get());
 	level_meter->clear_meters();
-	level_meter->set_meter_type (_route->meter_type());
 	level_meter->setup_meters (220, meter_width, 6);
-	level_meter->ButtonPress.connect_same_thread (level_meter_connection, boost::bind (&MeterStrip::level_meter_button_press, this, _1));
-	level_meter->MeterTypeChanged.connect_same_thread (level_meter_connection, boost::bind (&MeterStrip::meter_type_changed, this, _1));
+	level_meter->ButtonPress.connect_same_thread (level_meter_connection, std::bind (&MeterStrip::level_meter_button_press, this, _1));
+	_route->shared_peak_meter()->MeterTypeChanged.connect (meter_route_connections, invalidator (*this), std::bind (&MeterStrip::meter_type_changed, this, _1), gui_context());
 
 	meter_align.set(0.5, 0.5, 0.0, 1.0);
 	meter_align.add(*level_meter);
@@ -160,8 +169,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	peak_display.set_name ("meterbridge peakindicator");
 	peak_display.set_elements((ArdourButton::Element) (ArdourButton::Edge|ArdourButton::Body));
 	set_tooltip (peak_display, _("Reset Peak"));
-	max_peak = minus_infinity();
-	peak_display.unset_flags (Gtk::CAN_FOCUS);
+	peak_display.set_can_focus (false);
 	peak_display.set_size_request(PX_SCALE(12, 12), PX_SCALE(8, 8));
 	peak_display.set_corner_radius(2); // ardour-button scales this
 
@@ -211,6 +219,17 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	solobox.pack_start(*solo_button, true, false);
 	btnbox.pack_start(solobox, false, false, 1);
 
+	/* Fader/Gain */
+	gain_control.set_size_request (PX_SCALE (18, 18), PX_SCALE (18, 18));
+	gain_control.set_tooltip_prefix (_("Level: "));
+	gain_control.set_name ("trim knob"); // XXX
+	gain_control.StartGesture.connect (sigc::mem_fun (*this, &MeterStrip::gain_start_touch));
+	gain_control.StopGesture.connect (sigc::mem_fun (*this, &MeterStrip::gain_end_touch));
+	gain_control.set_controllable (_route->gain_control ());
+
+	gain_box.pack_start(gain_control, true, false);
+	btnbox.pack_start(gain_box, false, false, 1);
+
 	rec_enable_button->set_corner_radius(2);
 	rec_enable_button->set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 
@@ -231,6 +250,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	recbox.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 	mon_in_box.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 	mon_disk_box.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
+	gain_box.set_size_request (PX_SCALE(18, 18), PX_SCALE(18, 18));
 	spacer.set_size_request(-1,0);
 
 	update_button_box();
@@ -255,6 +275,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	name_label.show();
 	peak_display.show();
 	peakbx.show();
+	gain_control.show ();
 	meter_ticks1_area.show();
 	meter_ticks2_area.show();
 	meterbox.show();
@@ -269,7 +290,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	nfo_vbox.show();
 	namenumberbx.show();
 
-	if (boost::dynamic_pointer_cast<Track>(_route)) {
+	if (std::dynamic_pointer_cast<Track>(_route)) {
 		monitor_input_button->show();
 		monitor_disk_button->show();
 	} else {
@@ -278,7 +299,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	}
 
 	_route->shared_peak_meter()->ConfigurationChanged.connect (
-			meter_route_connections, invalidator (*this), boost::bind (&MeterStrip::meter_configuration_changed, this, _1), gui_context()
+			meter_route_connections, invalidator (*this), std::bind (&MeterStrip::meter_configuration_changed, this, _1), gui_context()
 			);
 
 	ResetAllPeakDisplays.connect (sigc::mem_fun(*this, &MeterStrip::reset_peak_display));
@@ -294,7 +315,7 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	meter_ticks1_area.signal_expose_event().connect (sigc::mem_fun(*this, &MeterStrip::meter_ticks1_expose));
 	meter_ticks2_area.signal_expose_event().connect (sigc::mem_fun(*this, &MeterStrip::meter_ticks2_expose));
 
-	_route->DropReferences.connect (meter_route_connections, invalidator (*this), boost::bind (&MeterStrip::self_delete, this), gui_context());
+	_route->DropReferences.connect (meter_route_connections, invalidator (*this), std::bind (&MeterStrip::self_delete, this), gui_context());
 
 	peak_display.signal_button_release_event().connect (sigc::mem_fun(*this, &MeterStrip::peak_button_release), false);
 	name_label.signal_button_release_event().connect (sigc::mem_fun(*this, &MeterStrip::name_label_button_release), false);
@@ -308,12 +329,12 @@ MeterStrip::MeterStrip (Session* sess, boost::shared_ptr<ARDOUR::Route> rt)
 	if (_route->is_master()) {
 		_strip_type = 4;
 	}
-	else if (boost::dynamic_pointer_cast<AudioTrack>(_route) == 0
-			&& boost::dynamic_pointer_cast<MidiTrack>(_route) == 0) {
+	else if (std::dynamic_pointer_cast<AudioTrack>(_route) == 0
+			&& std::dynamic_pointer_cast<MidiTrack>(_route) == 0) {
 		/* non-master bus */
 		_strip_type = 3;
 	}
-	else if (boost::dynamic_pointer_cast<MidiTrack>(_route)) {
+	else if (std::dynamic_pointer_cast<MidiTrack>(_route)) {
 		_strip_type = 2;
 	}
 	else {
@@ -412,12 +433,19 @@ MeterStrip::route_color_changed ()
 void
 MeterStrip::fast_update ()
 {
-	float mpeak = level_meter->update_meters();
-	if (mpeak > max_peak) {
-		max_peak = mpeak;
-		if (mpeak >= UIConfiguration::instance().get_meter_peak()) {
-			peak_display.set_active_state ( Gtkmm2ext::ExplicitActive );
-		}
+	if (_clear_meters) {
+		level_meter->clear_meters();
+		peak_display.set_active_state (Gtkmm2ext::Off);
+		_clear_meters = false;
+		_meter_peaked = false;
+	}
+
+	const float mpeak = level_meter->update_meters();
+	const bool peaking = mpeak > UIConfiguration::instance().get_meter_peak();
+
+	if (!_meter_peaked && peaking) {
+		peak_display.set_active_state ( Gtkmm2ext::ExplicitActive );
+		_meter_peaked = true;
 	}
 }
 
@@ -447,31 +475,30 @@ MeterStrip::meter_configuration_changed (ChanCount c)
 		}
 	}
 
-	if (boost::dynamic_pointer_cast<AudioTrack>(_route) == 0
-			&& boost::dynamic_pointer_cast<MidiTrack>(_route) == 0
-			) {
-		meter_ticks1_area.set_name ("MyAudioBusMetricsLeft");
-		meter_ticks2_area.set_name ("MyAudioBusMetricsRight");
-		_has_midi = false;
-	}
-	else if (type == (1 << DataType::AUDIO)) {
-		meter_ticks1_area.set_name ("MyAudioTrackMetricsLeft");
-		meter_ticks2_area.set_name ("MyAudioTrackMetricsRight");
-		_has_midi = false;
-	}
-	else if (type == (1 << DataType::MIDI)) {
+	bool is_audio_track = _route && std::dynamic_pointer_cast<AudioTrack>(_route) != 0;
+	bool is_midi_track = _route && std::dynamic_pointer_cast<MidiTrack>(_route) != 0;
+
+	if (!is_audio_track && (is_midi_track || /* MIDI Bus */ (type == (1 << DataType::MIDI)))) {
 		meter_ticks1_area.set_name ("MidiTrackMetricsLeft");
 		meter_ticks2_area.set_name ("MidiTrackMetricsRight");
-		_has_midi = true;
-	} else {
-		meter_ticks1_area.set_name ("AudioMidiTrackMetricsLeft");
-		meter_ticks2_area.set_name ("AudioMidiTrackMetricsRight");
-		_has_midi = true;
 	}
+	else if (_route && (!is_audio_track && !is_midi_track)) {
+		meter_ticks1_area.set_name ("AudioBusMetricsLeft");
+		meter_ticks2_area.set_name ("AudioBusMetricsRight");
+	}
+	else {
+		meter_ticks1_area.set_name ("AudioTrackMetricsLeft");
+		meter_ticks2_area.set_name ("AudioTrackMetricsRight");
+	}
+
 	set_tick_bar(_tick_bar);
 
+	_has_midi = 0 != (type & (1 << DataType::MIDI));
+
 	on_theme_changed();
-	if (old_has_midi != _has_midi) MetricChanged();
+	if (old_has_midi != _has_midi) {
+		MetricChanged(); /* EMIT SIGNAL */
+	}
 	else ConfigurationChanged();
 }
 
@@ -579,7 +606,8 @@ MeterStrip::on_size_allocate (Gtk::Allocation& a)
 
 	if (need_relayout) {
 		queue_resize();
-		MetricChanged(); // force re-layout, parent on_scroll(), queue_resize()
+		/* force re-layout, parent on_scroll(), queue_resize() */
+		MetricChanged(); /* EMIT SIGNAL */
 	}
 }
 
@@ -689,9 +717,7 @@ void
 MeterStrip::reset_peak_display ()
 {
 	_route->shared_peak_meter()->reset_max();
-	level_meter->clear_meters();
-	max_peak = -INFINITY;
-	peak_display.set_active_state ( Gtkmm2ext::Off );
+	_clear_meters = true;
 }
 
 bool
@@ -749,6 +775,12 @@ MeterStrip::update_button_box ()
 		mon_in_box.hide();
 		mon_disk_box.hide();
 	}
+	if (_session->config.get_show_fader_on_meterbridge ()) {
+		height += PX_SCALE(18, 18) + PX_SCALE(2, 2);
+		gain_box.show ();
+	} else {
+		gain_box.hide ();
+	}
 	btnbox.set_size_request(PX_SCALE(18, 18), height);
 	check_resize();
 }
@@ -768,7 +800,7 @@ void
 MeterStrip::parameter_changed (std::string const & p)
 {
 	if (p == "meter-peak") {
-		max_peak = -INFINITY;
+		_clear_meters = true;
 	}
 	else if (p == "show-rec-on-meterbridge") {
 		update_button_box();
@@ -783,6 +815,9 @@ MeterStrip::parameter_changed (std::string const & p)
 		update_name_box();
 	}
 	else if (p == "show-monitor-on-meterbridge") {
+		update_button_box();
+	}
+	else if (p == "show-fader-on-meterbridge") {
 		update_button_box();
 	}
 	else if (p == "meterbridge-label-height") {
@@ -835,12 +870,12 @@ MeterStrip::popup_level_meter_menu (GdkEventButton* ev)
 {
 	using namespace Gtk::Menu_Helpers;
 
-	Gtk::Menu* m = manage (new Menu);
+	Gtk::Menu* m = ARDOUR_UI_UTILS::shared_popup_menu ();
 	MenuList& items = m->items ();
 
 	RadioMenuItem::Group group;
 
-	_suspend_menu_callbacks = true;
+	PBD::Unwinder<bool> uw (_suspend_menu_callbacks, true);
 	add_level_meter_type_item (items, group, ArdourMeter::meter_type_string(MeterPeak), MeterPeak);
 	add_level_meter_type_item (items, group, ArdourMeter::meter_type_string(MeterPeak0dB), MeterPeak0dB);
 	add_level_meter_type_item (items, group, ArdourMeter::meter_type_string(MeterKrms),  MeterKrms);
@@ -865,7 +900,6 @@ MeterStrip::popup_level_meter_menu (GdkEventButton* ev)
 				sigc::bind (SetMeterTypeMulti, _strip_type, _route->route_group(), cmt)));
 
 	m->popup (ev->button, ev->time);
-	_suspend_menu_callbacks = false;
 }
 
 bool
@@ -887,12 +921,12 @@ MeterStrip::popup_name_label_menu (GdkEventButton* ev)
 {
 	using namespace Gtk::Menu_Helpers;
 
-	Gtk::Menu* m = manage (new Menu);
+	Gtk::Menu* m = ARDOUR_UI_UTILS::shared_popup_menu ();
 	MenuList& items = m->items ();
 
 	RadioMenuItem::Group group;
 
-	_suspend_menu_callbacks = true;
+	PBD::Unwinder<bool> uw (_suspend_menu_callbacks, true);
 	add_label_height_item (items, group, _("Variable height"), 0);
 	add_label_height_item (items, group, _("Short"), 1);
 	add_label_height_item (items, group, _("Tall"), 2);
@@ -900,7 +934,6 @@ MeterStrip::popup_name_label_menu (GdkEventButton* ev)
 	add_label_height_item (items, group, _("Venti"), 4);
 
 	m->popup (ev->button, ev->time);
-	_suspend_menu_callbacks = false;
 }
 
 void
@@ -927,9 +960,7 @@ void
 MeterStrip::set_meter_type (MeterType type)
 {
 	if (_suspend_menu_callbacks) return;
-	if (_route->meter_type() == type) return;
-
-	level_meter->set_meter_type (type);
+	_route->set_meter_type (type);
 }
 
 void
@@ -942,11 +973,8 @@ MeterStrip::set_label_height (uint32_t h)
 void
 MeterStrip::meter_type_changed (MeterType type)
 {
-	if (_route->meter_type() != type) {
-		_route->set_meter_type(type);
-	}
 	update_background (type);
-	MetricChanged();
+	MetricChanged(); /* EMIT SIGNAL */
 }
 
 void
@@ -955,14 +983,15 @@ MeterStrip::set_meter_type_multi (int what, RouteGroup* group, MeterType type)
 	switch (what) {
 		case -1:
 			if (_route && group == _route->route_group()) {
-				level_meter->set_meter_type (type);
+				_route->set_meter_type (type);
 			}
 			break;
 		case 0:
-			level_meter->set_meter_type (type);
+			_route->set_meter_type (type);
+			break;
 		default:
 			if (what == _strip_type) {
-				level_meter->set_meter_type (type);
+				_route->set_meter_type (type);
 			}
 			break;
 	}
@@ -980,3 +1009,14 @@ MeterStrip::color () const
 	return RouteUI::route_color ();
 }
 
+void
+MeterStrip::gain_start_touch (int)
+{
+	_route->gain_control ()->start_touch (timepos_t (_session->transport_sample ()));
+}
+
+void
+MeterStrip::gain_end_touch (int)
+{
+	_route->gain_control ()->stop_touch (timepos_t (_session->transport_sample ()));
+}

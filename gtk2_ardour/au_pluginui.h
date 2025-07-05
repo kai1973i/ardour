@@ -1,20 +1,22 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __gtk2_ardour_auplugin_ui_h__
 #define __gtk2_ardour_auplugin_ui_h__
@@ -42,17 +44,19 @@
 #undef NO
 #endif
 
-#include <gtkmm/box.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/combobox.h>
-#include <gtkmm/button.h>
-#include <gtkmm/label.h>
+#include <ytkmm/box.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/combobox.h>
+#include <ytkmm/button.h>
+#include <ytkmm/label.h>
+
+#include "widgets/eventboxext.h"
 
 #include "plugin_ui.h"
 
 namespace ARDOUR {
 	class AUPlugin;
-	class PluginInsert;
+	class PlugInsertBase;
 	class IOProcessor;
 }
 
@@ -75,7 +79,7 @@ class AUPluginUI;
 class AUPluginUI : public PlugUIBase, public Gtk::VBox
 {
 public:
-	AUPluginUI (boost::shared_ptr<ARDOUR::PluginInsert>);
+	AUPluginUI (std::shared_ptr<ARDOUR::PlugInsertBase>);
 	~AUPluginUI ();
 
 	gint get_preferred_width () { return req_width; }
@@ -111,12 +115,12 @@ public:
 
 private:
 	WindowRef wr;
-	boost::shared_ptr<ARDOUR::AUPlugin> au;
+	std::shared_ptr<ARDOUR::AUPlugin> au;
 	int prefheight;
 	int prefwidth;
 
-	Gtk::HBox     top_box;
-	Gtk::EventBox low_box;
+	Gtk::HBox top_box;
+	ArdourWidgets::EventBoxExt low_box;
 	Gtk::VBox vpacker;
 	Gtk::Label automation_mode_label;
 	Gtk::ComboBoxText automation_mode_selector;
@@ -127,6 +131,8 @@ private:
 	bool resizable;
 	int  req_width;
 	int  req_height;
+	int  alloc_width;
+	int  alloc_height;
 
 	/* Cocoa */
 

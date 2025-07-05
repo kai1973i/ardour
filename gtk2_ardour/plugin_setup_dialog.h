@@ -1,23 +1,22 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2023 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtkardour_plugin_setup_dialog_h__
-#define __gtkardour_plugin_setup_dialog_h__
+#pragma once
 
 #include "ardour/plugin_insert.h"
 #include "ardour/route.h"
@@ -30,9 +29,11 @@
 class PluginSetupDialog : public ArdourDialog
 {
 public:
-	PluginSetupDialog (boost::shared_ptr<ARDOUR::Route>, boost::shared_ptr<ARDOUR::PluginInsert>, ARDOUR::Route::PluginSetupOptions);
+	PluginSetupDialog (std::shared_ptr<ARDOUR::Route>, std::shared_ptr<ARDOUR::PluginInsert>, ARDOUR::Route::PluginSetupOptions);
 
 	bool fan_out () const { return _fan_out.get_active () && _fan_out.get_sensitive (); }
+
+	static std::string preset_label (uint32_t);
 
 private:
 	void setup_output_presets ();
@@ -43,10 +44,8 @@ private:
 	void apply_mapping ();
 	void toggle_fan_out ();
 
-	std::string preset_label (uint32_t) const;
-
-	boost::shared_ptr<ARDOUR::Route> _route;
-	boost::shared_ptr<ARDOUR::PluginInsert> _pi;
+	std::shared_ptr<ARDOUR::Route> _route;
+	std::shared_ptr<ARDOUR::PluginInsert> _pi;
 
 	ArdourWidgets::ArdourDropdown _out_presets;
 	ArdourWidgets::ArdourButton _keep_mapping;
@@ -55,4 +54,3 @@ private:
 	ARDOUR::ChanCount _cur_outputs;
 };
 
-#endif

@@ -1,33 +1,44 @@
 /*
-    Copyright (C) 2007-2014 Tim Mayberry
-    Copyright (C) 1998-2014 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 1998-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2008-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2015 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2014-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
+#include <climits>
+#include <set>
 #include <vector>
 
 #include <glib.h>
 #include "pbd/gstdio_compat.h"
 
-#ifdef COMPILER_MINGW
+#if defined COMPILER_MINGW || defined COMPILER_MSVC
+#if defined COMPILER_MINGW
 #include <io.h> // For W_OK
+#include <windows.h>
+#endif
+#include <sys/utime.h>
+#else
+#include <utime.h>
 #endif
 
+#include <glibmm/convert.h>
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
 #include <glibmm/pattern.h>
@@ -70,17 +81,19 @@ run_functor_for_paths (vector<string>& result,
                        void *arg,
                        bool pass_files_only,
                        bool pass_fullpath, bool return_fullpath,
-                       bool recurse)
+                       bool recurse,
+                       set<string>& scanned_paths)
 {
 	for (vector<string>::const_iterator i = paths.begin(); i != paths.end(); ++i) {
-		string expanded_path = path_expand (*i);
-		DEBUG_TRACE (DEBUG::FileUtils,
-				string_compose("Find files in expanded path: %1\n", expanded_path));
-
-		if (!Glib::file_test (expanded_path, Glib::FILE_TEST_IS_DIR)) continue;
-
 		try
 		{
+			string expanded_path = path_expand (*i);
+
+			DEBUG_TRACE (DEBUG::FileUtils,
+					string_compose("Find files in expanded path: %1\n", expanded_path));
+
+			if (!Glib::file_test (expanded_path, Glib::FILE_TEST_IS_DIR)) continue;
+
 			Glib::Dir dir(expanded_path);
 
 			for (Glib::DirIterator di = dir.begin(); di != dir.end(); di++) {
@@ -91,11 +104,12 @@ run_functor_for_paths (vector<string>& result,
 				bool is_dir = Glib::file_test (fullpath, Glib::FILE_TEST_IS_DIR);
 
 				if (is_dir && recurse) {
-					DEBUG_TRACE (DEBUG::FileUtils,
-							string_compose("Descending into directory:  %1\n",
-								fullpath));
-					run_functor_for_paths (result, fullpath, functor, arg, pass_files_only,
-					                       pass_fullpath, return_fullpath, recurse);
+					if (scanned_paths.find (fullpath) == scanned_paths.end ()) {
+						scanned_paths.insert (fullpath);
+						DEBUG_TRACE (DEBUG::FileUtils, string_compose("Descending into directory:  %1\n", fullpath));
+						run_functor_for_paths (result, fullpath, functor, arg, pass_files_only,
+						                       pass_fullpath, return_fullpath, recurse, scanned_paths);
+					}
 				}
 
 				if (is_dir && pass_files_only) {
@@ -127,9 +141,15 @@ run_functor_for_paths (vector<string>& result,
 				}
 			}
 		}
-		catch (Glib::FileError& err)
-		{
-			warning << err.what() << endmsg;
+		catch (Glib::FileError const& err) {
+			char errstr[PATH_MAX*2];
+			snprintf (errstr, sizeof (errstr), "Cannot access file: %s", err.what().c_str());
+			warning << errstr << endmsg;
+		}
+		catch (Glib::ConvertError const& err) {
+			char errstr[PATH_MAX*2];
+			snprintf (errstr, sizeof (errstr), "Cannot convert filename: %s", err.what().c_str());
+			warning << errstr << endmsg;
 		}
 	}
 }
@@ -146,8 +166,9 @@ get_paths (vector<string>& result,
            bool files_only,
            bool recurse)
 {
+	set<string> scanned_path;
 	run_functor_for_paths (result, paths, accept_all_files, 0,
-	                       files_only, true, true, recurse);
+	                       files_only, true, true, recurse, scanned_path);
 }
 
 void
@@ -169,9 +190,10 @@ find_files_matching_pattern (vector<string>& result,
                              const Searchpath& paths,
                              const Glib::PatternSpec& pattern)
 {
+	set<string> unused;
 	run_functor_for_paths (result, paths, pattern_filter,
 	                       const_cast<Glib::PatternSpec*>(&pattern),
-	                       true, false, true, false);
+	                       true, false, true, false, unused);
 }
 
 void
@@ -264,7 +286,8 @@ find_paths_matching_filter (vector<string>& result,
                             bool pass_fullpath, bool return_fullpath,
                             bool recurse)
 {
-	run_functor_for_paths (result, paths, filter, arg, false, pass_fullpath, return_fullpath, recurse);
+	set<string> scanned_path;
+	run_functor_for_paths (result, paths, filter, arg, false, pass_fullpath, return_fullpath, recurse, scanned_path);
 }
 
 void
@@ -275,7 +298,8 @@ find_files_matching_filter (vector<string>& result,
                             bool pass_fullpath, bool return_fullpath,
                             bool recurse)
 {
-	run_functor_for_paths (result, paths, filter, arg, true, pass_fullpath, return_fullpath, recurse);
+	set<string> scanned_path;
+	run_functor_for_paths (result, paths, filter, arg, true, pass_fullpath, return_fullpath, recurse, scanned_path);
 }
 
 bool
@@ -329,7 +353,7 @@ copy_files(const std::string & from_path, const std::string & to_dir)
 }
 
 void
-copy_recurse(const std::string & from_path, const std::string & to_dir)
+copy_recurse(const std::string & from_path, const std::string & to_dir, bool preseve_timestamps)
 {
 	vector<string> files;
 	find_files_matching_filter (files, from_path, accept_all_files, 0, false, true, true);
@@ -339,7 +363,19 @@ copy_recurse(const std::string & from_path, const std::string & to_dir)
 		std::string from = *i;
 		std::string to = Glib::build_filename (to_dir, (*i).substr(prefix_len));
 		g_mkdir_with_parents (Glib::path_get_dirname (to).c_str(), 0755);
-		copy_file (from, to);
+		if (copy_file (from, to) && preseve_timestamps) {
+			GStatBuf sb;
+			if (g_stat (from.c_str(), &sb) != 0) {
+				error << string_compose (_("Unable to query file timestamp from %1 to %2"), from) << endmsg;
+				continue;
+			}
+			struct utimbuf utb;
+			utb.actime = sb.st_atime;
+			utb.modtime = sb.st_mtime;
+			if (0 != g_utime (to.c_str (), &utb)) {
+				error << string_compose (_("Unable to preseve file timestamp from %1 to %2"), from, to) << endmsg;
+			}
+		}
 	}
 }
 
@@ -352,6 +388,23 @@ touch_file (const std::string& path)
 		return true;
 	}
 	return false;
+}
+
+bool
+hard_link (const std::string& existing_file, const std::string& new_path)
+{
+#ifdef PLATFORM_WINDOWS
+# if defined (COMPILER_MINGW) && defined(__GNUC__) && __GNUC__ == 8
+	/* For some reason mingx 8.3.0 does not support CreateHardLinkA()
+	 * (mingw/gcc-4.9 does) */
+	return false;
+# else
+	/* see also ntfs_link -- msvc only pbd extension */
+	return CreateHardLinkA (new_path.c_str(), existing_file.c_str(), NULL);
+# endif
+#else
+	return 0 == link (existing_file.c_str(), new_path.c_str());
+#endif
 }
 
 std::string
@@ -469,18 +522,24 @@ exists_and_writable (const std::string & p)
 	GStatBuf statbuf;
 
 	if (g_stat (p.c_str(), &statbuf) != 0) {
+		DEBUG_TRACE (DEBUG::FileUtils, string_compose("exists_and_writable stat '%1': failed\n", p));
 		/* doesn't exist - not writable */
 		return false;
 	} else {
+#ifndef PLATFORM_WINDOWS
+		/* Folders on Windows fail this test if they're on OneDrive */
+		DEBUG_TRACE (DEBUG::FileUtils, string_compose("exists_and_writable stat '%1': %2 \n", p, statbuf.st_mode));
 		if (!(statbuf.st_mode & S_IWUSR)) {
 			/* exists and is not writable */
 			return false;
 		}
+#endif
 		/* filesystem may be mounted read-only, so even though file
 		 * permissions permit access, the mount status does not.
 		 * access(2) seems like the best test for this.
 		 */
 		if (g_access (p.c_str(), W_OK) != 0) {
+			DEBUG_TRACE (DEBUG::FileUtils, string_compose("exists_and_writable g_access '%1': !W_OK\n", p));
 			return false;
 		}
 	}
@@ -501,7 +560,7 @@ remove_directory_internal (const string& dir, size_t* size, vector<string>* path
 	for (vector<string>::const_iterator i = tmp_paths.begin();
 			i != tmp_paths.end(); ++i) {
 
-		if (g_stat (i->c_str(), &statbuf)) {
+		if (g_stat (i->c_str(), &statbuf) && g_lstat (i->c_str(), &statbuf)) {
 			continue;
 		}
 

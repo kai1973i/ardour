@@ -1,31 +1,34 @@
 /*
-  Copyright (C) 2010-2012 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2019 Johannes Mueller <github@johannes-mueller.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <vector>
 
-#include <gtkmm/combobox.h>
-#include <gtkmm/box.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/scrolledwindow.h>
+#include <ytkmm/combobox.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/box.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treestore.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/scrolledwindow.h>
 
 namespace Gtk {
 	class CellRendererCombo;
@@ -34,6 +37,10 @@ namespace Gtk {
 #include "button.h"
 
 #include "pbd/i18n.h"
+
+namespace ActionManager {
+        class ActionModel;
+}
 
 namespace ArdourSurface {
 
@@ -66,15 +73,6 @@ class US2400ProtocolGUI : public Gtk::Notebook
 		Gtk::TreeModelColumn<std::string> full_name;
 	};
 
-	struct AvailableActionColumns : public Gtk::TreeModel::ColumnRecord {
-		AvailableActionColumns() {
-			add (name);
-			add (path);
-		}
-		Gtk::TreeModelColumn<std::string> name;
-		Gtk::TreeModelColumn<std::string> path;
-	};
-
 	struct FunctionKeyColumns : public Gtk::TreeModel::ColumnRecord {
 		FunctionKeyColumns() {
 			add (name);
@@ -96,7 +94,6 @@ class US2400ProtocolGUI : public Gtk::Notebook
 		Gtk::TreeModelColumn<std::string> shiftcontrol;
 	};
 
-	AvailableActionColumns available_action_columns;
 	FunctionKeyColumns function_key_columns;
 	MidiPortColumns midi_port_columns;
 
@@ -107,15 +104,14 @@ class US2400ProtocolGUI : public Gtk::Notebook
 
 	Glib::RefPtr<Gtk::ListStore> build_midi_port_list (bool for_input);
 
-	void build_available_action_menu ();
+	const ActionManager::ActionModel& action_model;
+
 	void refresh_function_key_editor ();
 	void build_function_key_editor ();
-	void action_changed (const Glib::ustring &sPath, const Glib::ustring &text, Gtk::TreeModelColumnBase);
+	void action_changed (const Glib::ustring &sPath, const Gtk::TreeModel::iterator &, Gtk::TreeModelColumnBase);
 	Gtk::CellRendererCombo* make_action_renderer (Glib::RefPtr<Gtk::TreeStore> model, Gtk::TreeModelColumnBase);
 
 	void profile_combo_changed ();
-
-	std::map<std::string,std::string> action_map; // map from action names to paths
 
 	Gtk::Widget* device_dependent_widget ();
 	Gtk::Widget* _device_dependent_widget;
@@ -127,16 +123,15 @@ class US2400ProtocolGUI : public Gtk::Notebook
 	void update_port_combos (std::vector<std::string> const&, std::vector<std::string> const&,
 	                         Gtk::ComboBox* input_combo,
 	                         Gtk::ComboBox* output_combo,
-	                         boost::shared_ptr<US2400::Surface> surface);
+	                         std::shared_ptr<US2400::Surface> surface);
 
-	PBD::ScopedConnection connection_change_connection;
+	PBD::ScopedConnectionList _port_connections;
 	void connection_handler ();
 
 	Glib::RefPtr<Gtk::ListStore> build_midi_port_list (std::vector<std::string> const & ports, bool for_input);
 	bool _ignore_profile_changed;
 	bool ignore_active_change;
-	void active_port_changed (Gtk::ComboBox* combo, boost::weak_ptr<US2400::Surface> ws, bool for_input);
+	void active_port_changed (Gtk::ComboBox* combo, std::weak_ptr<US2400::Surface> ws, bool for_input);
 };
 
 }
-

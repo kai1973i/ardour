@@ -1,20 +1,23 @@
 /*
-    Copyright (C) 2011 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2011-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2012-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2014-2016 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -41,15 +44,14 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-AudioPlaylistSource::AudioPlaylistSource (Session& s, const ID& orig, const std::string& name, boost::shared_ptr<AudioPlaylist> p,
-					  uint32_t chn, sampleoffset_t begin, samplecnt_t len, Source::Flag flags)
+AudioPlaylistSource::AudioPlaylistSource (Session& s, const ID& orig, const std::string& name, std::shared_ptr<AudioPlaylist> p,
+                                          uint32_t chn, timepos_t const & begin, timepos_t const & len, Source::Flag flags)
 	: Source (s, DataType::AUDIO, name)
 	, PlaylistSource (s, orig, name, p, DataType::AUDIO, begin, len, flags)
 	, AudioSource (s, name)
 	, _playlist_channel (chn)
 {
-	AudioSource::_length = len;
-	ensure_buffers_for_level (_level, _session.sample_rate());
+	AudioSource::_length = timecnt_t (len);
 }
 
 AudioPlaylistSource::AudioPlaylistSource (Session& s, const XMLNode& node)
@@ -57,8 +59,8 @@ AudioPlaylistSource::AudioPlaylistSource (Session& s, const XMLNode& node)
 	, PlaylistSource (s, node)
 	, AudioSource (s, node)
 {
-	/* PlaylistSources are never writable, renameable, removable or destructive */
-	_flags = Flag (_flags & ~(Writable|CanRename|Removable|RemovableIfEmpty|RemoveAtDestroy|Destructive));
+	/* PlaylistSources are never writable, renameable or removable */
+	_flags = Flag (_flags & ~(Writable|CanRename|Removable|RemovableIfEmpty|RemoveAtDestroy));
 
 	/* ancestors have already called ::set_state() in their XML-based
 	   constructors.
@@ -68,7 +70,7 @@ AudioPlaylistSource::AudioPlaylistSource (Session& s, const XMLNode& node)
 		throw failed_constructor ();
 	}
 
-	AudioSource::_length = _playlist_length;
+	_length = timecnt_t (_playlist_length);
 }
 
 AudioPlaylistSource::~AudioPlaylistSource ()
@@ -76,7 +78,7 @@ AudioPlaylistSource::~AudioPlaylistSource ()
 }
 
 XMLNode&
-AudioPlaylistSource::get_state ()
+AudioPlaylistSource::get_state () const
 {
 	XMLNode& node (AudioSource::get_state ());
 
@@ -106,15 +108,13 @@ AudioPlaylistSource::set_state (const XMLNode& node, int version, bool with_desc
 		}
 	}
 
-	pair<samplepos_t,samplepos_t> extent = _playlist->get_extent();
+	pair<timepos_t,timepos_t> extent = _playlist->get_extent();
 
-	AudioSource::_length = extent.second - extent.first;
+	AudioSource::_length = extent.first.distance (extent.second);
 
 	if (!node.get_property (X_("channel"), _playlist_channel)) {
 		throw failed_constructor ();
 	}
-
-	ensure_buffers_for_level (_level, _session.sample_rate());
 
 	return 0;
 }
@@ -122,8 +122,6 @@ AudioPlaylistSource::set_state (const XMLNode& node, int version, bool with_desc
 samplecnt_t
 AudioPlaylistSource::read_unlocked (Sample* dst, samplepos_t start, samplecnt_t cnt) const
 {
-	boost::shared_array<Sample> sbuf;
-	boost::shared_array<gain_t> gbuf;
 	samplecnt_t to_read;
 	samplecnt_t to_zero;
 
@@ -132,26 +130,18 @@ AudioPlaylistSource::read_unlocked (Sample* dst, samplepos_t start, samplecnt_t 
 	 * is not supposed be part of our data.
 	 */
 
-	if (cnt > _playlist_length - start) {
-		to_read = _playlist_length - start;
+	if (cnt > _playlist_length.samples() - start) {
+		to_read = _playlist_length.samples() - start;
 		to_zero = cnt - to_read;
 	} else {
 		to_read = cnt;
 		to_zero = 0;
 	}
 
-	{
-		/* Don't need to hold the lock for the actual read, and
-		   actually, we cannot, but we do want to interlock
-		   with any changes to the list of buffers caused
-		   by creating new nested playlists/sources
-		*/
-		Glib::Threads::Mutex::Lock lm (_level_buffer_lock);
-		sbuf = _mixdown_buffers[_level-1];
-		gbuf = _gain_buffers[_level-1];
-	}
+	std::unique_ptr<float[]> sbuf(new float[to_read]);
+	std::unique_ptr<gain_t[]> gbuf(new gain_t[to_read]);
 
-	boost::dynamic_pointer_cast<AudioPlaylist>(_playlist)->read (dst, sbuf.get(), gbuf.get(), start+_playlist_offset, to_read, _playlist_channel);
+	std::dynamic_pointer_cast<AudioPlaylist>(_playlist)->read (dst, sbuf.get(), gbuf.get(), timepos_t (start)+_playlist_offset, timecnt_t (to_read), _playlist_channel);
 
 	if (to_zero) {
 		memset (dst+to_read, 0, sizeof (Sample) * to_zero);
@@ -161,7 +151,7 @@ AudioPlaylistSource::read_unlocked (Sample* dst, samplepos_t start, samplecnt_t 
 }
 
 samplecnt_t
-AudioPlaylistSource::write_unlocked (Sample *, samplecnt_t)
+AudioPlaylistSource::write_unlocked (Sample const *, samplecnt_t)
 {
 	fatal << string_compose (_("programming error: %1"), "AudioPlaylistSource::write() called - should be impossible") << endmsg;
 	abort(); /*NOTREACHED*/
@@ -183,8 +173,8 @@ AudioPlaylistSource::n_channels () const
 		return 1;
 	}
 
-	boost::shared_ptr<Region> r = _playlist->region_list_property().front ();
-	boost::shared_ptr<AudioRegion> ar = boost::dynamic_pointer_cast<AudioRegion> (r);
+	std::shared_ptr<Region> r = _playlist->region_list_property().front ();
+	std::shared_ptr<AudioRegion> ar = std::dynamic_pointer_cast<AudioRegion> (r);
 
 	return ar->audio_source()->n_channels ();
 }
@@ -198,8 +188,8 @@ AudioPlaylistSource::sample_rate () const
 		_session.sample_rate ();
 	}
 
-	boost::shared_ptr<Region> r = _playlist->region_list_property().front ();
-	boost::shared_ptr<AudioRegion> ar = boost::dynamic_pointer_cast<AudioRegion> (r);
+	std::shared_ptr<Region> r = _playlist->region_list_property().front ();
+	std::shared_ptr<AudioRegion> ar = std::dynamic_pointer_cast<AudioRegion> (r);
 
 	return ar->audio_source()->sample_rate ();
 }

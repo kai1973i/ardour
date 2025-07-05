@@ -1,31 +1,32 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #ifndef _dsp_filter_h_
 #define _dsp_filter_h_
 
-#include <stdint.h>
-#include <string.h>
+#include <atomic>
+#include <cstdint>
+#include <cstring>
 #include <assert.h>
 #include <glib.h>
 #include <glibmm.h>
 #include <fftw3.h>
 
+#include "pbd/enum_convert.h"
 #include "pbd/malign.h"
 
 #include "ardour/buffer_set.h"
@@ -113,7 +114,11 @@ namespace ARDOUR { namespace DSP {
 			 * @param val value to set
 			 */
 			void atomic_set_int (size_t off, int32_t val) {
-				g_atomic_int_set (&(((int32_t*)_data)[off]), val);
+				/* no read or write that precedes the write we are
+				   about to do can be reordered past this fence.
+				*/
+				std::atomic_thread_fence (std::memory_order_release);
+				((int32_t*)_data)[off] = val;
 			}
 
 			/** atomically read integer at offset
@@ -126,7 +131,11 @@ namespace ARDOUR { namespace DSP {
 			 * @returns value at offset
 			 */
 			int32_t atomic_get_int (size_t off) {
-				return g_atomic_int_get (&(((int32_t*)_data)[off]));
+				/* no read that precedes the read we are
+				   about to do can be reordered past this fence.
+				*/
+				std::atomic_thread_fence (std::memory_order_acquire);
+				return (((int32_t*)_data)[off]);
 			}
 
 		private:
@@ -167,10 +176,10 @@ namespace ARDOUR { namespace DSP {
 	float log_meter_coeff (float coeff);
 
 	void process_map (BufferSet* bufs,
-	                  const ChanMapping& in,
-	                  const ChanMapping& out,
-	                  pframes_t nframes, samplecnt_t offset,
-	                  const DataType&);
+	                  const ChanCount&   n_out,
+	                  const ChanMapping& in_map,
+	                  const ChanMapping& out_map,
+	                  pframes_t nframes, samplecnt_t offset);
 
 	/** 1st order Low Pass filter */
 	class LIBARDOUR_API LowPass {
@@ -193,7 +202,7 @@ namespace ARDOUR { namespace DSP {
 			 *
 			 * @param data pointer to control-data array
 			 * @param val target value
-			 * @param array length
+			 * @param n_samples array length
 			 */
 			void ctrl (float *data, const float val, const uint32_t n_samples);
 			/** update filter cut-off frequency
@@ -221,7 +230,11 @@ namespace ARDOUR { namespace DSP {
 				AllPass,
 				Peaking,
 				LowShelf,
-				HighShelf
+				HighShelf,
+				MatchedLowPass,
+				MatchedHighPass,
+				MatchedBandPass0dB,
+				MatchedPeaking
 			};
 
 			/** Instantiate Biquad Filter
@@ -249,6 +262,9 @@ namespace ARDOUR { namespace DSP {
 			/** setup filter, set coefficients directly */
 			void configure (double a1, double a2, double b0, double b1, double b2);
 
+			/* copy coefficients from other instance, retain state */
+			void configure (Biquad const&);
+
 			/** filter transfer function (filter response for spectrum visualization)
 			 * @param freq frequency
 			 * @return gain at given frequency in dB (clamped to -120..+120)
@@ -257,14 +273,26 @@ namespace ARDOUR { namespace DSP {
 
 			/** reset filter state */
 			void reset () { _z1 = _z2 = 0.0; }
+
+			void coefficients (double& a1, double& a2, double& b0, double& b1, double& b2) const;
 		private:
+			void set_vicanek_poles (const double W0, const double Q, const double A = 1.0);
+			void calc_vicanek (const double W0, double& A0, double& A1, double& A2, double& phi0, double& phi1, double& phi2);
+
 			double _rate;
 			float  _z1, _z2;
 			double _a1, _a2;
 			double _b0, _b1, _b2;
 	};
 
-	class LIBARDOUR_API FFTSpectrum {
+	class LIBARDOUR_API SpectrumAnalyzer {
+	public:
+		virtual ~SpectrumAnalyzer () {}
+		virtual float power_at_bin (const uint32_t bin, const float gain, bool pink) const = 0;
+		virtual float freq_at_bin (const uint32_t bin) const = 0;
+	};
+
+	class LIBARDOUR_API FFTSpectrum : public SpectrumAnalyzer {
 		public:
 			FFTSpectrum (uint32_t window_size, double rate);
 			~FFTSpectrum ();
@@ -283,17 +311,16 @@ namespace ARDOUR { namespace DSP {
 
 			/** query
 			 * @param bin the frequency bin 0 .. window_size / 2
-			 * @param norm gain factor (set equal to @bin for 1/f normalization)
+			 * @param norm gain factor (set equal to \p bin for 1/f normalization)
 			 * @return signal power at given bin (in dBFS)
 			 */
-			float power_at_bin (const uint32_t bin, const float norm = 1.f) const;
+			float power_at_bin (const uint32_t bin, const float gain = 1.f, bool pink = false) const;
 
 			float freq_at_bin (const uint32_t bin) const {
 				return bin * _fft_freq_per_bin;
 			}
 
 		private:
-			static Glib::Threads::Mutex fft_planner_lock;
 			float* hann_window;
 
 			void init (uint32_t window_size, double rate);
@@ -308,6 +335,105 @@ namespace ARDOUR { namespace DSP {
 			float* _fft_power;
 
 			fftwf_plan _fftplan;
+	};
+
+	class LIBARDOUR_API PerceptualAnalyzer : public SpectrumAnalyzer {
+		public:
+			PerceptualAnalyzer (double rate, int ipsize = 4096);
+			~PerceptualAnalyzer ();
+			PerceptualAnalyzer (PerceptualAnalyzer const&) = delete;
+
+			class Trace {
+				public:
+					Trace (int size);
+					~Trace ();
+
+					bool     _valid;
+					int32_t  _count;
+					float   *_data;
+			};
+
+			enum ProcessMode {
+					MM_NONE,
+					MM_PEAK,
+					MM_AVER
+			};
+
+			enum Speed {
+				Rapid,
+				Fast,
+				Moderate,
+				Slow,
+				Noise
+			};
+
+			enum Warp {
+				Bark,
+				Medium,
+				High
+			};
+
+			void set_wfact (float wfact);
+			void set_speed (float speed);
+
+			void set_wfact (enum Warp);
+			void set_speed (enum Speed);
+
+			void reset ();
+
+			int    fftlen () const { return _fftlen; }
+			float* ipdata () const { return _ipdata; }
+			Trace* power ()  const { return _power; }
+			Trace* peakp ()  const { return _peakp; }
+			float  pmax ()   const { return _pmax; }
+
+			/** process current data in buffer */
+			void process (int iplen, ProcessMode mode = MM_NONE);
+
+			static double warp_freq (double w, double f);
+
+			float freq_at_bin (const uint32_t bin) const;
+			float power_at_bin (const uint32_t bin, const float gain = 1.f, bool pink = false) const;
+
+		private:
+			static const int _fftlen = 512;
+
+			void  init ();
+			float conv0 (fftwf_complex*);
+			float conv1 (fftwf_complex*);
+
+			int              _ipsize;
+			int              _icount;
+			fftwf_plan       _fftplan;
+			float           *_ipdata;
+			float           *_warped;
+			fftwf_complex   *_trdata;
+			Trace           *_power;
+			Trace           *_peakp;
+			float            _fsamp;
+			float            _wfact;
+			float            _speed;
+			float            _pmax;
+			float            _fscale[513];
+			float            _bwcorr[513];
+	};
+
+	class LIBARDOUR_API StereoCorrelation {
+		public:
+			StereoCorrelation (float samplerate, float lp_freq = 2e3f, float tc_corr = .3f);
+
+			void process (float const*, float const*, uint32_t n_samples);
+			void reset ();
+			float read () const;
+
+		private:
+			float _zl;
+			float _zr;
+			float _zlr;
+			float _zll;
+			float _zrr;
+			float _w1;  // lowpass filter coefficient
+			float _w2;  // correlation filter coeffient
 	};
 
 	class LIBARDOUR_API Generator {
@@ -339,4 +465,9 @@ namespace ARDOUR { namespace DSP {
 	};
 
 } } /* namespace */
+
+namespace PBD {
+DEFINE_ENUM_CONVERT(ARDOUR::DSP::PerceptualAnalyzer::Speed);
+DEFINE_ENUM_CONVERT(ARDOUR::DSP::PerceptualAnalyzer::Warp);
+}
 #endif

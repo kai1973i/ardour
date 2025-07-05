@@ -1,22 +1,24 @@
 /*
-    Copyright (C) 2006 Paul Davis
-    Written by Taybin Rutkin
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2006-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2006-2009 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 #include <inttypes.h>
@@ -25,11 +27,7 @@
 #include "ardour/coreaudiosource.h"
 #include "ardour/utils.h"
 
-#ifdef COREAUDIO105
-#include "CAAudioFile.h"
-#else
 #include "CAExtAudioFile.h"
-#endif
 #include "CAStreamBasicDescription.h"
 
 #include <glibmm/fileutils.h>
@@ -49,10 +47,9 @@ CoreAudioSource::CoreAudioSource (Session& s, const XMLNode& node)
 	: Source (s, node)
 	, AudioFileSource (s, node)
 {
-	init_cafile ();
-
-        assert (Glib::file_test (_path, Glib::FILE_TEST_EXISTS));
+	assert (Glib::file_test (_path, Glib::FILE_TEST_EXISTS));
 	existence_check ();
+	init_cafile ();
 }
 
 /** Create a new CoreAudioSource from an existing file. Sources created with this
@@ -63,11 +60,11 @@ CoreAudioSource::CoreAudioSource (Session& s, const string& path, int chn, Flag 
 		AudioFileSource (s, path,
 			Source::Flag (flags & ~(Writable|Removable|RemovableIfEmpty|RemoveAtDestroy)))
 {
+	assert (Glib::file_test (_path, Glib::FILE_TEST_EXISTS));
+	existence_check ();
+
 	_channel = chn;
 	init_cafile ();
-
-        assert (Glib::file_test (_path, Glib::FILE_TEST_EXISTS));
-	existence_check ();
 }
 
 void
@@ -85,7 +82,7 @@ CoreAudioSource::init_cafile ()
 			throw failed_constructor();
 		}
 
-		_length = af.GetNumberFrames();
+		_length = timecnt_t (af.GetNumberFrames());
 
 		CAStreamBasicDescription client_format (file_format);
 
@@ -97,9 +94,6 @@ CoreAudioSource::init_cafile ()
 		af.SetClientFormat (client_format);
 
 	} catch (CAXException& cax) {
-
-		error << string_compose(_("CoreAudioSource: cannot open file \"%1\" for %2"),
-					_path, (writable() ? "read+write" : "reading")) << endmsg;
 		throw failed_constructor ();
 	}
 }
@@ -124,7 +118,7 @@ CoreAudioSource::safe_read (Sample* dst, samplepos_t start, samplecnt_t cnt, Aud
 		try {
 			af.Seek (start+nread);
 		} catch (CAXException& cax) {
-			error << string_compose("CoreAudioSource: %1 to %2 (%3)", cax.mOperation, start+nread, _name.val().substr (1)) << endmsg;
+			error << string_compose("CoreAudioSource: %1 to %2 [%3] (%4)", cax.mOperation, start+nread, cax.mError, _name) << endmsg;
 			return -1;
 		}
 
@@ -136,13 +130,13 @@ CoreAudioSource::safe_read (Sample* dst, samplepos_t start, samplecnt_t cnt, Aud
 		try {
 			af.Read (new_cnt, &abl);
 		} catch (CAXException& cax) {
-			error << string_compose("CoreAudioSource: %1 (%2)", cax.mOperation, _name);
+			error << string_compose("CoreAudioSource: %1 [%2] (%3)", cax.mOperation, cax.mError, _name);
 			return -1;
 		}
 
 		if (new_cnt == 0) {
 			/* EOF */
-			if (start+cnt == _length) {
+			if (start+cnt == _length.samples()) {
 				/* we really did hit the end */
 				nread = cnt;
 			}
@@ -169,17 +163,17 @@ CoreAudioSource::read_unlocked (Sample *dst, samplepos_t start, samplecnt_t cnt)
 	abl.mNumberBuffers = 1;
 	abl.mBuffers[0].mNumberChannels = n_channels;
 
-	if (start > _length) {
+	if (start > _length.samples()) {
 
 		/* read starts beyond end of data, just memset to zero */
 
 		file_cnt = 0;
 
-	} else if (start + cnt > _length) {
+	} else if (start + cnt > _length.samples()) {
 
 		/* read ends beyond end of data, read some, memset the rest */
 
-		file_cnt = _length - start;
+		file_cnt = _length.samples() - start;
 
 	} else {
 
@@ -245,23 +239,11 @@ CoreAudioSource::update_header (samplepos_t, struct tm&, time_t)
 int
 CoreAudioSource::get_soundfile_info (string path, SoundFileInfo& _info, string&)
 {
-#ifdef COREAUDIO105
-	FSRef ref;
-#endif
 	ExtAudioFileRef af = 0;
 	UInt32 size;
 	CFStringRef name;
 	int ret = -1;
 
-#ifdef COREAUDIO105
-	if (FSPathMakeRef ((UInt8*)path.c_str(), &ref, 0) != noErr) {
-		goto out;
-	}
-
-	if (ExtAudioFileOpen(&ref, &af) != noErr) {
-		goto out;
-	}
-#else
 	CFURLRef url = CFURLCreateFromFileSystemRepresentation (kCFAllocatorDefault, (const UInt8*)path.c_str (), strlen (path.c_str ()), false);
 	OSStatus res = ExtAudioFileOpenURL(url, &af);
 	if (url) CFRelease (url);
@@ -269,7 +251,6 @@ CoreAudioSource::get_soundfile_info (string path, SoundFileInfo& _info, string&)
 	if (res != noErr) {
 		goto out;
 	}
-#endif
 
 	AudioStreamBasicDescription absd;
 	memset(&absd, 0, sizeof(absd));
@@ -280,6 +261,7 @@ CoreAudioSource::get_soundfile_info (string path, SoundFileInfo& _info, string&)
 
 	_info.samplerate = absd.mSampleRate;
 	_info.channels   = absd.mChannelsPerFrame;
+	_info.seekable   = true;
 
 	size = sizeof(_info.length);
 	if (ExtAudioFileGetProperty(af, kExtAudioFileProperty_FileLengthFrames, &size, &_info.length) != noErr) {

@@ -1,34 +1,35 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Author: Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2014 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2013-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include <cstdio>
 #include <cmath>
 
 #include <sigc++/bind.h>
 
-#include <gtkmm/box.h>
-#include <gtkmm/filechooserdialog.h>
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/box.h>
+#include <ytkmm/filechooserdialog.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "pbd/error.h"
 #include "pbd/file_utils.h"
+#include "ardour/filesystem_paths.h"
 #include "ardour/session_directory.h"
 #include "gtkmm2ext/utils.h"
 #include "ardour/template_utils.h"
@@ -40,11 +41,14 @@
 
 #include "video_server_dialog.h"
 #include "utils_videotl.h"
-#include "video_tool_paths.h"
 #include "pbd/i18n.h"
 
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
+#endif
+
+#ifdef __APPLE__
+extern int query_darwin_version (); // cocoacarbon.mm
 #endif
 
 using namespace Gtk;
@@ -55,15 +59,15 @@ using namespace VideoUtils;
 
 VideoServerDialog::VideoServerDialog (Session* s)
 	: ArdourDialog (_("Launch Video Server"))
-	, path_label (_("Server Executable:"), Gtk::ALIGN_LEFT)
+	, path_label (_("Server Executable:"), Gtk::ALIGN_START)
 	, path_browse_button (_("Browse"))
-	, docroot_label (_("Server Docroot:"), Gtk::ALIGN_LEFT)
+	, docroot_label (_("Server Docroot:"), Gtk::ALIGN_START)
 	, docroot_browse_button (_("Browse"))
 	, listenport_adjustment (1554, 1025, 65536, 1, 10, 0)
 	, listenport_spinner (listenport_adjustment)
 	, cachesize_adjustment (256, 32, 32768, 1, 32, 0)
 	, cachesize_spinner (cachesize_adjustment)
-	, showagain_checkbox (_("Don't show this dialog again. (Reset in Edit->Preferences)."))
+	, showagain_checkbox (_("Do not show this dialog again (reset in Preferences > Video)."))
 {
 	set_session (s);
 
@@ -83,12 +87,20 @@ VideoServerDialog::VideoServerDialog (Session* s)
 	docroot_entry.set_width_chars(38);
 	docroot_entry.set_text(video_get_docroot (Config));
 
-#ifndef __APPLE__
-	/* Note: on OSX icsd is not able to bind to IPv4 localhost */
-	listenaddr_combo.append_text("127.0.0.1");
-#endif
-	listenaddr_combo.append_text("0.0.0.0");
+	listenaddr_combo.append("127.0.0.1");
+	listenaddr_combo.append("0.0.0.0");
+#ifdef __APPLE__
+	/* Note: on OSX icsd is not able to bind to IPv4 localhost,
+	 * except on bigsur where 0.0.0.0 works
+	 */
+	if (query_darwin_version () >= 20) {
+		listenaddr_combo.set_active(1);
+	} else {
+		listenaddr_combo.set_active(0);
+	}
+#else
 	listenaddr_combo.set_active(0);
+#endif
 
 	std::string harvid_exe;
 	if (ArdourVideoToolPaths::harvid_exe(harvid_exe)) {
@@ -125,7 +137,7 @@ VideoServerDialog::VideoServerDialog (Session* s)
 	docroot_hbox->pack_start (docroot_entry, true, true, 3);
 	docroot_hbox->pack_start (docroot_browse_button, false, false, 3);
 
-	l = manage (new Label (_("<b>Options</b>"), Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+	l = manage (new Label (_("<b>Options</b>"), Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	l->set_use_markup ();
 	options_box->pack_start (*l, false, true, 4);
 
@@ -149,8 +161,8 @@ VideoServerDialog::VideoServerDialog (Session* s)
 	t->attach (cachesize_spinner, 1, 2, 2, 3);
 
 	l = manage (new Label (string_compose(
-					_("%1 relies on an external video server for the videotimeline.\nThe server configured in Edit -> Preferences -> Video is not reachable.\nDo you want %1 to launch 'harvid' on this machine?"), PROGRAM_NAME)
-				, Gtk::ALIGN_LEFT, Gtk::ALIGN_CENTER, false));
+					_("%1 relies on an external video server for the videotimeline.\nThe server configured in Preferences -> Video is not reachable.\nDo you want %1 to launch 'harvid' on this machine?"), PROGRAM_NAME)
+				, Gtk::ALIGN_START, Gtk::ALIGN_CENTER, false));
 	l->set_max_width_chars(80);
 	l->set_line_wrap();
 	vbox->pack_start (*l, true, true, 4);

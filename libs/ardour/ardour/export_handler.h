@@ -1,40 +1,41 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2013 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2014 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_export_handler_h__
-#define __ardour_export_handler_h__
+#pragma once
 
 #include <map>
+#include <memory>
 
 #include <boost/operators.hpp>
-#include <boost/shared_ptr.hpp>
 
 #include "pbd/gstdio_compat.h"
+#include "pbd/pthread_utils.h"
 
 #include "ardour/export_pointers.h"
 #include "ardour/session.h"
 #include "ardour/libardour_visibility.h"
 #include "ardour/types.h"
 #include "pbd/signals.h"
-
-#include "pbd/i18n.h"
 
 namespace AudioGrapher {
 	class BroadcastInfo;
@@ -97,7 +98,7 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 	 * This ensures that it doesn't go out of scope before finalize_audio_export is called
 	 */
 
-	friend boost::shared_ptr<ExportHandler> Session::get_export_handler();
+	friend std::shared_ptr<ExportHandler> Session::get_export_handler();
 	ExportHandler (Session & session);
 
 	void command_output(std::string output, size_t size);
@@ -108,14 +109,14 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 	bool add_export_config (ExportTimespanPtr timespan, ExportChannelConfigPtr channel_config,
 	                        ExportFormatSpecPtr format, ExportFilenamePtr filename,
 	                        BroadcastInfoPtr broadcast_info);
-	void do_export ();
+	int do_export ();
 
 	std::string get_cd_marker_filename(std::string filename, CDMarkerFormat format);
 
 	/** signal emitted when soundcloud export reports progress updates during upload.
 	 * The parameters are total and current bytes downloaded, and the current filename
 	 */
-	PBD::Signal3<void, double, double, std::string> SoundcloudProgress;
+	PBD::Signal<void(double, double, std::string)> SoundcloudProgress;
 
 	/* upload credentials & preferences */
 	std::string soundcloud_username;
@@ -124,13 +125,15 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 	bool soundcloud_open_page;
 	bool soundcloud_downloadable;
 
+	void reset ();
+
   private:
 
 	void handle_duplicate_format_extensions();
 	int process (samplecnt_t samples);
 
 	Session &          session;
-	boost::shared_ptr<ExportGraphBuilder> graph_builder;
+	std::shared_ptr<ExportGraphBuilder> graph_builder;
 	ExportStatusPtr    export_status;
 
 	/* The timespan and corresponding file specifications that we are exporting;
@@ -143,7 +146,15 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 
 	/* Timespan management */
 
-	void start_timespan ();
+	void timespan_thread_wakeup ();
+
+	static void*     _timespan_thread_run (void*);
+	PBD::Thread*     _timespan_thread;
+	std::atomic<int> _timespan_thread_active;
+	pthread_mutex_t  _timespan_mutex;
+	pthread_cond_t   _timespan_cond;
+
+	int  start_timespan ();
 	int  process_timespan (samplecnt_t samples);
 	int  post_process ();
 	void finish_timespan ();
@@ -153,7 +164,7 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 	TimespanBounds        timespan_bounds;
 
 	PBD::ScopedConnection process_connection;
-	samplepos_t             process_position;
+	samplepos_t           process_position;
 
 	/* CD Marker stuff */
 
@@ -173,12 +184,7 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 		  , index_position (0)
 		  {}
 
-		~CDMarkerStatus () {
-			if (!g_file_set_contents (path.c_str(), out.str().c_str(), -1, NULL)) {
-				PBD::error << string_compose(_("Editor: cannot open \"%1\" as export file for CD marker file"), path) << endmsg;
-			}
-
-		}
+		~CDMarkerStatus ();
 
 		/* I/O */
 		std::string         path;
@@ -192,13 +198,13 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 
 		/* Track info */
 		uint32_t        track_number;
-		samplepos_t      track_position;
-		samplepos_t      track_duration;
-		samplepos_t      track_start_sample;
+		samplepos_t     track_position;
+		samplepos_t     track_duration;
+		samplepos_t     track_start_sample;
 
 		/* Index info */
-		uint32_t       index_number;
-		samplepos_t      index_position;
+		uint32_t        index_number;
+		samplepos_t     index_position;
 	};
 
 
@@ -217,7 +223,7 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 	void write_index_info_toc (CDMarkerStatus & status);
 	void write_index_info_mp4ch (CDMarkerStatus & status);
 
-	void samples_to_cd_samples_string (char* buf, samplepos_t when);
+	void samples_to_cd_frame_string (char* buf, samplepos_t when);
 	void samples_to_chapter_marks_string (char* buf, samplepos_t when);
 
 	std::string toc_escape_cdtext (const std::string&);
@@ -230,4 +236,3 @@ class LIBARDOUR_API ExportHandler : public ExportElementFactory, public sigc::tr
 
 } // namespace ARDOUR
 
-#endif /* __ardour_export_handler_h__ */

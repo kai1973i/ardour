@@ -1,27 +1,28 @@
 /*
-  Copyright (C) 2012 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2010-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 
 #include "pbd/gstdio_compat.h"
-#include <gtkmm/accelmap.h>
-#include <gtkmm/uimanager.h>
+#include <ytkmm/accelmap.h>
+#include <ytkmm/uimanager.h>
 
 #include "pbd/convert.h"
 #include "pbd/debug.h"
@@ -44,8 +45,8 @@ using namespace Gtkmm2ext;
 using namespace PBD;
 
 list<Bindings*> Bindings::bindings; /* global. Gulp */
-list<ActionMap*> ActionMap::action_maps; /* global. Gulp */
-PBD::Signal1<void,Bindings*> Bindings::BindingsChanged;
+PBD::Signal<void(Bindings*)> Bindings::BindingsChanged;
+int Bindings::_drag_active = 0;
 
 template <typename IteratorValueType>
 struct ActionNameRegistered
@@ -64,7 +65,7 @@ MouseButton::MouseButton (uint32_t state, uint32_t keycode)
 {
 	uint32_t ignore = ~Keyboard::RelevantModifierKeyMask;
 
-	/* this is a slightly wierd test that relies on
+	/* this is a slightly weird test that relies on
 	 * gdk_keyval_is_{upper,lower}() returning true for keys that have no
 	 * case-sensitivity. This covers mostly non-alphanumeric keys.
 	 */
@@ -372,9 +373,20 @@ KeyboardKey::make_key (const string& str, KeyboardKey& k)
 
 /*================================= Bindings =================================*/
 Bindings::Bindings (std::string const& name)
-	: _name (name)
-	, _action_map (0)
+	: _parent (nullptr)
+	, _name (name)
 {
+	bindings.push_back (this);
+}
+
+Bindings::Bindings (std::string const & name, Bindings & other)
+	: _parent (&other)
+	, _name (name)
+{
+	copy_from_parent (false);
+
+	BindingsChanged.connect_same_thread (bc, std::bind (&Bindings::parent_changed, this, _1));
+
 	bindings.push_back (this);
 }
 
@@ -409,8 +421,8 @@ Bindings::get_binding_for_action (RefPtr<Action> action, Operation& op)
 		 * setup the association while we're here, and return the binding.
 		 */
 
-		if (_action_map && k->second.action_name == action_name) {
-			k->second.action = _action_map->find_action (action_name);
+		if (k->second.action_name == action_name) {
+			k->second.action = ActionManager::get_action (action_name, false);
 			return k->first;
 		}
 
@@ -430,8 +442,8 @@ Bindings::get_binding_for_action (RefPtr<Action> action, Operation& op)
 		 * setup the association while we're here, and return the binding.
 		 */
 
-		if (_action_map && k->second.action_name == action_name) {
-			k->second.action = _action_map->find_action (action_name);
+		if (k->second.action_name == action_name) {
+			k->second.action = ActionManager::get_action (action_name, false);
 			return k->first;
 		}
 
@@ -441,15 +453,8 @@ Bindings::get_binding_for_action (RefPtr<Action> action, Operation& op)
 }
 
 void
-Bindings::set_action_map (ActionMap& actions)
+Bindings::reassociate ()
 {
-	if (_action_map) {
-		_action_map->set_bindings (0);
-	}
-
-	_action_map = &actions;
-	_action_map->set_bindings (this);
-
 	dissociate ();
 	associate ();
 }
@@ -488,7 +493,7 @@ Bindings::activate (KeyboardKey kb, Operation op)
 
 	if (k == kbm.end()) {
 		/* no entry for this key in the state map */
-		DEBUG_TRACE (DEBUG::Bindings, string_compose ("no binding for %1\n", unshifted));
+		DEBUG_TRACE (DEBUG::Bindings, string_compose ("no binding for %1 (of %2) within %3\n", unshifted, kbm.size(), _name));
 		return false;
 	}
 
@@ -497,53 +502,79 @@ Bindings::activate (KeyboardKey kb, Operation op)
 	if (k->second.action) {
 		action = k->second.action;
 	} else {
-		if (_action_map) {
-			action = _action_map->find_action (k->second.action_name);
+		action = ActionManager::get_action (k->second.action_name, false);
+	}
+
+	/* bindings cannot be used during drags */
+
+	if (_drag_active) {
+		/* sadly we need to special case one possible action, because
+		   Escape is used to break drags.
+		*/
+		if (!action || action->get_name() != _("Escape")) {
+			return true;
 		}
 	}
 
 	if (action) {
 		/* lets do it ... */
-		DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1: %2\n", unshifted, k->second.action_name));
-		action->activate ();
+		if (action->get_sensitive()) {
+			DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1: %2 within %3\n", unshifted, k->second.action_name, _name));
+			action->activate ();
+		} else {
+			DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1: %2 - insensitive, skipped within %3\n", unshifted, k->second.action_name, _name));
+			return false;
+		}
+	} else {
+		DEBUG_TRACE (DEBUG::Bindings, string_compose ("binding for %1 is known but has no action within %2\n", unshifted, _name));
 	}
-
 	/* return true even if the action could not be found */
 
 	return true;
 }
 
 void
-Bindings::associate ()
+Bindings::relativize ()
+{
+	for (auto & [key,action_info] : press_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+	for (auto & [key,action_info] : release_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+	for (auto & [mb,action_info] : button_press_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+	for (auto & [mb,action_info] : button_release_bindings) {
+		action_info.action_name = _name + action_info.action_name;
+	}
+}
+
+void
+Bindings::associate (bool force)
 {
 	KeybindingMap::iterator k;
 
-	if (!_action_map) {
-		return;
-	}
-
 	for (k = press_bindings.begin(); k != press_bindings.end(); ++k) {
-		k->second.action = _action_map->find_action (k->second.action_name);
+		k->second.action = ActionManager::get_action (k->second.action_name, false);
 		if (k->second.action) {
 			push_to_gtk (k->first, k->second.action);
-		} else {
-			cerr << _name << " didn't find " << k->second.action_name << " in " << _action_map->name() << endl;
 		}
 	}
 
 	for (k = release_bindings.begin(); k != release_bindings.end(); ++k) {
-		k->second.action = _action_map->find_action (k->second.action_name);
+		k->second.action = ActionManager::get_action (k->second.action_name, false);
 		/* no working support in GTK for release bindings */
 	}
 
 	MouseButtonBindingMap::iterator b;
 
 	for (b = button_press_bindings.begin(); b != button_press_bindings.end(); ++b) {
-		b->second.action = _action_map->find_action (b->second.action_name);
+		b->second.action = ActionManager::get_action (b->second.action_name, false);
 	}
 
 	for (b = button_release_bindings.begin(); b != button_release_bindings.end(); ++b) {
-		b->second.action = _action_map->find_action (b->second.action_name);
+		b->second.action = ActionManager::get_action (b->second.action_name, false);
 	}
 }
 
@@ -558,6 +589,55 @@ Bindings::dissociate ()
 	for (k = release_bindings.begin(); k != release_bindings.end(); ++k) {
 		k->second.action.clear ();
 	}
+}
+
+void
+Bindings::copy_from_parent (bool assoc)
+{
+	assert (_parent);
+	press_bindings.clear ();
+	release_bindings.clear ();
+
+	_parent->clone_press (press_bindings);
+	_parent->clone_release (release_bindings);
+
+	dissociate ();
+	relativize ();
+
+	if (assoc) {
+		associate (true);
+	}
+}
+
+void
+Bindings::parent_changed (Bindings* changed)
+{
+	if (_parent != changed) {
+		return;
+	}
+
+	press_bindings.clear();
+	release_bindings.clear();
+
+	copy_from_parent (true);
+}
+
+void
+Bindings::clone_press (KeybindingMap& target) const
+{
+	clone_kbd_bindings (press_bindings, target);
+}
+
+void
+Bindings::clone_release (KeybindingMap& target) const
+{
+	clone_kbd_bindings (release_bindings, target);
+}
+
+void
+Bindings::clone_kbd_bindings (KeybindingMap const & src, KeybindingMap& target) const
+{
+	target = src;
 }
 
 void
@@ -597,12 +677,11 @@ Bindings::push_to_gtk (KeyboardKey kb, RefPtr<Action> what)
 bool
 Bindings::replace (KeyboardKey kb, Operation op, string const & action_name, bool can_save)
 {
-	if (!_action_map) {
-		return false;
-	}
-
 	if (is_registered(op, action_name)) {
-		remove (op, action_name, can_save);
+		/* never save after the remove, because if can_save is true, we
+		   will save after we add the new binding.
+		*/
+		remove (op, action_name, false);
 	}
 
 	/* XXX need a way to get the old group name */
@@ -627,8 +706,8 @@ Bindings::add (KeyboardKey kb, Operation op, string const& action_name, XMLPrope
 		(void) kbm.insert (new_pair).first;
 	}
 
-	DEBUG_TRACE (DEBUG::Bindings, string_compose ("add binding between %1 and %2, group [%3]\n",
-	                                              kb, action_name, (group ? group->value() : string())));
+	DEBUG_TRACE (DEBUG::Bindings, string_compose ("%5: add binding between %1 (%3) and %2, group [%3]\n",
+	                                              kb, action_name, (group ? group->value() : string()), op, _name));
 
 	if (can_save) {
 		Keyboard::keybindings_changed ();
@@ -643,6 +722,7 @@ Bindings::remove (Operation op, std::string const& action_name, bool can_save)
 {
 	bool erased_action = false;
 	KeybindingMap& kbm = get_keymap (op);
+
 	for (KeybindingMap::iterator k = kbm.begin(); k != kbm.end(); ++k) {
 		if (k->second.action_name == action_name) {
 			kbm.erase (k);
@@ -681,9 +761,7 @@ Bindings::activate (MouseButton bb, Operation op)
 	if (b->second.action) {
 		action = b->second.action;
 	} else {
-		if (_action_map) {
-			action = _action_map->find_action (b->second.action_name);
-		}
+		action = ActionManager::get_action (b->second.action_name, false);
 	}
 
 	if (action) {
@@ -818,7 +896,7 @@ Bindings::save_all_bindings_as_html (ostream& ostr)
 		vector<string> keys;
 		vector<Glib::RefPtr<Gtk::Action> > actions;
 
-		Gtkmm2ext::ActionMap::get_all_actions (paths, labels, tooltips, keys, actions);
+		ActionManager::get_all_actions (paths, labels, tooltips, keys, actions);
 
 		vector<string>::iterator k;
 		vector<string>::iterator p;
@@ -826,14 +904,10 @@ Bindings::save_all_bindings_as_html (ostream& ostr)
 
 		for (p = paths.begin(), k = keys.begin(), l = labels.begin(); p != paths.end(); ++k, ++p, ++l) {
 
-			string print_path = *p;
-			/* strip <Actions>/ from the start */
-			print_path = print_path.substr (10);
-
 			if ((*k).empty()) {
-				ostr << print_path  << " ( " << *l << " ) "  << "</br>" << endl;
+				ostr << *p  << " ( " << *l << " ) "  << "</br>" << endl;
 			} else {
-				ostr << print_path << " ( " << *l << " ) " << " => " << *k << "</br>" << endl;
+				ostr << *p << " ( " << *l << " ) " << " => " << *k << "</br>" << endl;
 			}
 		}
 	}
@@ -902,9 +976,7 @@ Bindings::save_as_html (ostream& ostr, bool categorize) const
 				if ((*k)->second.action) {
 					action = (*k)->second.action;
 				} else {
-					if (_action_map) {
-						action = _action_map->find_action ((*k)->second.action_name);
-					}
+					action = ActionManager::get_action ((*k)->second.action_name, false);
 				}
 
 				if (!action) {
@@ -917,21 +989,24 @@ Bindings::save_as_html (ostream& ostr, bool categorize) const
 
 				string::size_type pos;
 
-				char const *targets[] = { X_("Separator"), X_("Add"), X_("Subtract"), X_("Decimal"), X_("Divide"),
-				                          X_("grave"), X_("comma"), X_("period"), X_("asterisk"), X_("backslash"),
-				                          X_("apostrophe"), X_("minus"), X_("plus"), X_("slash"), X_("semicolon"),
-				                          X_("colon"), X_("equal"), X_("bracketleft"), X_("bracketright"),
-				                          X_("ampersand"), X_("numbersign"), X_("parenleft"), X_("parenright"),
-				                          X_("quoteright"), X_("quoteleft"), X_("exclam"), X_("quotedbl"),
+				char const *targets[] = { X_("Separator"),  X_("Add"),        X_("Subtract"),    X_("Decimal"),      X_("Divide"),
+				                          X_("grave"),      X_("comma"),      X_("period"),      X_("asterisk"),     X_("backslash"),
+				                          X_("apostrophe"), X_("minus"),      X_("plus"),        X_("slash"),        X_("semicolon"),
+				                          X_("colon"),      X_("equal"),      X_("bracketleft"), X_("bracketright"),
+				                          X_("ampersand"),  X_("numbersign"), X_("parenleft"),   X_("parenright"),
+				                          X_("quoteright"), X_("quoteleft"),  X_("exclam"),      X_("quotedbl"),
+				                          X_("braceleft"),  X_("braceright"),
 				                          0
 				};
 
 				char const *replacements[] = { X_("-"), X_("+"), X_("-"), X_("."), X_("/"),
 				                               X_("`"), X_(","), X_("."), X_("*"), X_("\\"),
 				                               X_("'"), X_("-"), X_("+"), X_("/"), X_(";"),
-				                               X_(":"), X_("="), X_("{"), X_("{"),
+				                               X_(":"), X_("="), X_("["), X_("]"),
 				                               X_("&"), X_("#"), X_("("), X_(")"),
 				                               X_("`"), X_("'"), X_("!"), X_("\""),
+				                               X_("{"), X_("}"),
+				                               0
 				};
 
 				for (size_t n = 0; targets[n]; ++n) {
@@ -1028,10 +1103,6 @@ Bindings::get_all_actions (std::vector<std::string>& paths,
                            std::vector<std::string>& keys,
                            std::vector<RefPtr<Action> >& actions)
 {
-	if (!_action_map) {
-		return;
-	}
-
 	/* build a reverse map from actions to bindings */
 
 	typedef map<Glib::RefPtr<Gtk::Action>,KeyboardKey> ReverseMap;
@@ -1041,12 +1112,12 @@ Bindings::get_all_actions (std::vector<std::string>& paths,
 		rmap.insert (make_pair (k->second.action, k->first));
 	}
 
-	/* get a list of all actions */
+	/* get a list of all actions XXX relevant for these bindings */
 
-	ActionMap::Actions all_actions;
-	_action_map->get_actions (all_actions);
+	std::vector<Glib::RefPtr<Action> > relevant_actions;
+	ActionManager::get_actions (this, relevant_actions);
 
-	for (ActionMap::Actions::const_iterator act = all_actions.begin(); act != all_actions.end(); ++act) {
+	for (vector<Glib::RefPtr<Action> >::const_iterator act = relevant_actions.begin(); act != relevant_actions.end(); ++act) {
 
 		paths.push_back ((*act)->get_accel_path());
 		labels.push_back ((*act)->get_label());
@@ -1065,11 +1136,10 @@ Bindings::get_all_actions (std::vector<std::string>& paths,
 }
 
 Bindings*
-Bindings::get_bindings (string const& name, ActionMap& map)
+Bindings::get_bindings (string const& name)
 {
 	for (list<Bindings*>::iterator b = bindings.begin(); b != bindings.end(); b++) {
 		if ((*b)->name() == name) {
-			(*b)->set_action_map (map);
 			return *b;
 		}
 	}
@@ -1086,10 +1156,17 @@ Bindings::associate_all ()
 }
 
 bool
-Bindings::is_bound (KeyboardKey const& kb, Operation op) const
+Bindings::is_bound (KeyboardKey const& kb, Operation op, std::string* path) const
 {
 	const KeybindingMap& km = get_keymap(op);
-	return km.find(kb) != km.end();
+	KeybindingMap::const_iterator i = km.find (kb);
+	if (i != km.end()) {
+		if (path) {
+			*path = i->second.action_name;
+		}
+		return true;
+	}
+	return false;
 }
 
 std::string
@@ -1097,10 +1174,17 @@ Bindings::bound_name (KeyboardKey const& kb, Operation op) const
 {
 	const KeybindingMap& km = get_keymap(op);
 	KeybindingMap::const_iterator b = km.find(kb);
+
 	if (b == km.end()) {
-		return "";
+		return string();
 	}
-	return b->second.action_name;
+
+	if (!b->second.action) {
+		/* action is looked up lazily, so it may not have been set yet */
+		b->second.action = ActionManager::get_action (b->second.action_name, false);
+	}
+
+	return b->second.action->get_label ();
 }
 
 bool
@@ -1146,229 +1230,30 @@ Bindings::get_mousemap (Operation op)
 	}
 }
 
-/*==========================================ACTION MAP =========================================*/
-
-ActionMap::ActionMap (string const & name)
-	: _name (name)
-	, _bindings (0)
-{
-	action_maps.push_back (this);
-}
-
-ActionMap::~ActionMap ()
-{
-	action_maps.remove (this);
-}
-
-void
-ActionMap::set_bindings (Bindings* b)
-{
-	_bindings = b;
-}
-
-void
-ActionMap::get_actions (ActionMap::Actions& acts)
-{
-	for (_ActionMap::iterator a = _actions.begin(); a != _actions.end(); ++a) {
-		acts.push_back (a->second);
-	}
-}
-
-RefPtr<Action>
-ActionMap::find_action (const string& name)
-{
-	_ActionMap::iterator a = _actions.find (name);
-
-	if (a != _actions.end()) {
-		return a->second;
-	}
-
-	return RefPtr<Action>();
-}
-
-RefPtr<ActionGroup>
-ActionMap::create_action_group (const string& name)
-{
-	Glib::ListHandle<Glib::RefPtr<ActionGroup> > agl =  ActionManager::ui_manager->get_action_groups ();
-	for (Glib::ListHandle<Glib::RefPtr<ActionGroup> >::iterator i = agl.begin (); i != agl.end (); ++i) {
-		if ((*i)->get_name () == name) {
-			return *i;
-		}
-	}
-
-	RefPtr<ActionGroup> g = ActionGroup::create (name);
-
-	/* this is one of the places where our own Action management code
-	   has to touch the GTK one, because we want the GtkUIManager to
-	   be able to create widgets (particularly Menus) from our actions.
-
-	   This is a a necessary step for that to happen.
-	*/
-
-	if (g) {
-		ActionManager::ui_manager->insert_action_group (g);
-	}
-
-	return g;
-}
-
-RefPtr<Action>
-ActionMap::register_action (RefPtr<ActionGroup> group, const char* name, const char* label)
-{
-	string fullpath;
-
-	RefPtr<Action> act = Action::create (name, label);
-
-	fullpath = group->get_name();
-	fullpath += '/';
-	fullpath += name;
-
-	if (_actions.insert (_ActionMap::value_type (fullpath, act)).second) {
-		group->add (act);
-		return act;
-	}
-
-	/* already registered */
-	return RefPtr<Action> ();
-}
-
-RefPtr<Action>
-ActionMap::register_action (RefPtr<ActionGroup> group,
-                            const char* name, const char* label, sigc::slot<void> sl)
-{
-	string fullpath;
-
-	RefPtr<Action> act = Action::create (name, label);
-
-	fullpath = group->get_name();
-	fullpath += '/';
-	fullpath += name;
-
-	if (_actions.insert (_ActionMap::value_type (fullpath, act)).second) {
-		group->add (act, sl);
-		return act;
-	}
-
-	/* already registered */
-	return RefPtr<Action>();
-}
-
-RefPtr<Action>
-ActionMap::register_radio_action (RefPtr<ActionGroup> group,
-                                  Gtk::RadioAction::Group& rgroup,
-                                  const char* name, const char* label,
-                                  sigc::slot<void> sl)
-{
-	string fullpath;
-
-	RefPtr<Action> act = RadioAction::create (rgroup, name, label);
-	RefPtr<RadioAction> ract = RefPtr<RadioAction>::cast_dynamic(act);
-
-	fullpath = group->get_name();
-	fullpath += '/';
-	fullpath += name;
-
-	if (_actions.insert (_ActionMap::value_type (fullpath, act)).second) {
-		group->add (act, sl);
-		return act;
-	}
-
-	/* already registered */
-	return RefPtr<Action>();
-}
-
-RefPtr<Action>
-ActionMap::register_radio_action (RefPtr<ActionGroup> group,
-                                  Gtk::RadioAction::Group& rgroup,
-                                  const char* name, const char* label,
-                                  sigc::slot<void,GtkAction*> sl,
-                                  int value)
-{
-	string fullpath;
-
-	RefPtr<Action> act = RadioAction::create (rgroup, name, label);
-	RefPtr<RadioAction> ract = RefPtr<RadioAction>::cast_dynamic(act);
-	ract->property_value() = value;
-
-	fullpath = group->get_name();
-	fullpath += '/';
-	fullpath += name;
-
-	if (_actions.insert (_ActionMap::value_type (fullpath, act)).second) {
-		group->add (act, sigc::bind (sl, act->gobj()));
-		return act;
-	}
-
-	/* already registered */
-
-	return RefPtr<Action>();
-}
-
-RefPtr<Action>
-ActionMap::register_toggle_action (RefPtr<ActionGroup> group,
-                                   const char* name, const char* label, sigc::slot<void> sl)
-{
-	string fullpath;
-
-	fullpath = group->get_name();
-	fullpath += '/';
-	fullpath += name;
-
-	RefPtr<Action> act = ToggleAction::create (name, label);
-
-	if (_actions.insert (_ActionMap::value_type (fullpath, act)).second) {
-		group->add (act, sl);
-		return act;
-	}
-
-	/* already registered */
-	return RefPtr<Action>();
-}
-
-void
-ActionMap::get_all_actions (std::vector<std::string>& paths,
-                            std::vector<std::string>& labels,
-                            std::vector<std::string>& tooltips,
-                            std::vector<std::string>& keys,
-                            std::vector<RefPtr<Action> >& actions)
-{
-	for (list<ActionMap*>::const_iterator map = action_maps.begin(); map != action_maps.end(); ++map) {
-
-		ActionMap::Actions these_actions;
-		(*map)->get_actions (these_actions);
-
-		for (ActionMap::Actions::const_iterator act = these_actions.begin(); act != these_actions.end(); ++act) {
-
-			paths.push_back ((*act)->get_accel_path());
-			labels.push_back ((*act)->get_label());
-			tooltips.push_back ((*act)->get_tooltip());
-			actions.push_back (*act);
-
-			Bindings* bindings = (*map)->bindings();
-
-			if (bindings) {
-
-				KeyboardKey key;
-				Bindings::Operation op;
-
-				key = bindings->get_binding_for_action (*act, op);
-
-				if (key == KeyboardKey::null_key()) {
-					keys.push_back (string());
-				} else {
-					keys.push_back (key.display_label());
-				}
-			} else {
-				keys.push_back (string());
-			}
-		}
-
-		these_actions.clear ();
-	}
-}
-
 std::ostream& operator<<(std::ostream& out, Gtkmm2ext::KeyboardKey const & k) {
 	char const *gdk_name = gdk_keyval_name (k.key());
 	return out << "Key " << k.key() << " (" << (gdk_name ? gdk_name : "no-key") << ") state "
 	           << hex << k.state() << dec << ' ' << show_gdk_event_state (k.state());
 }
+
+static void
+delete_binding_set (void* p)
+{
+	delete (BindingSet*) p;
+}
+
+void
+Gtkmm2ext::set_widget_bindings (Gtk::Widget& w, Bindings& b, char const * const name)
+{
+	BindingSet* bs = new BindingSet;
+	bs->push_back (&b);
+	g_object_set_data_full (G_OBJECT(w.gobj()), name, bs, (GDestroyNotify) delete_binding_set);
+}
+
+void
+Gtkmm2ext::set_widget_bindings (Gtk::Widget& w, BindingSet& bs, char const * const name)
+{
+	w.set_data (name, &bs);
+}
+
+

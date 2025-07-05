@@ -1,21 +1,27 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005-2006 Jesse Chappell <jesse@essej.net>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -52,16 +58,19 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
+
 Source::Source (Session& s, DataType type, const string& name, Flag flags)
 	: SessionObject(s, name)
 	, _type(type)
 	, _flags(flags)
-	, _timeline_position(0)
-        , _use_count (0)
+	, _natural_position(0)
+	, _have_natural_position (false)
 	, _level (0)
 {
+	_use_count.store (0);
 	_analysed = false;
 	_timestamp = 0;
+
 	fix_writable_flags ();
 }
 
@@ -69,12 +78,13 @@ Source::Source (Session& s, const XMLNode& node)
 	: SessionObject(s, "unnamed source")
 	, _type(DataType::AUDIO)
 	, _flags (Flag (Writable|CanRename))
-	, _timeline_position(0)
-        , _use_count (0)
+	, _natural_position(0)
+	, _have_natural_position (false)
 	, _level (0)
 {
-	_timestamp = 0;
+	_use_count.store (0);
 	_analysed = false;
+	_timestamp = 0;
 
 	if (set_state (node, Stateful::loading_state_version) || _type == DataType::NIL) {
 		throw failed_constructor();
@@ -86,6 +96,7 @@ Source::Source (Session& s, const XMLNode& node)
 Source::~Source ()
 {
 	DEBUG_TRACE (DEBUG::Destruction, string_compose ("Source %1 destructor %2\n", _name, this));
+	assert (!used ());
 }
 
 void
@@ -97,18 +108,49 @@ Source::fix_writable_flags ()
 }
 
 XMLNode&
-Source::get_state ()
+Source::get_state () const
 {
-	XMLNode *node = new XMLNode ("Source");
+	XMLNode *node = new XMLNode (X_("Source"));
 
-	node->set_property ("name", name());
-	node->set_property ("type", _type);
+	node->set_property (X_("name"), name());
+	node->set_property (X_("take-id"), take_id());
+	node->set_property (X_("type"), _type);
 	node->set_property (X_("flags"), _flags);
-	node->set_property ("id", id());
+	node->set_property (X_("id"), id());
 
 	if (_timestamp != 0) {
-		node->set_property ("timestamp", (int64_t)_timestamp);
+		int64_t t = _timestamp;
+		node->set_property (X_("timestamp"), t);
 	}
+
+	if (_have_natural_position) {
+		node->set_property (X_("natural-position"), _natural_position);
+	}
+
+	if (!_xruns.empty ()) {
+		stringstream str;
+		for (XrunPositions::const_iterator xx = _xruns.begin(); xx != _xruns.end(); ++xx) {
+			str << PBD::to_string (*xx) << '\n';
+		}
+		XMLNode* xnode = new XMLNode (X_("xruns"));
+		XMLNode* content_node = new XMLNode (X_("foo")); /* it gets renamed by libxml when we set content */
+		content_node->set_content (str.str());
+		xnode->add_child_nocopy (*content_node);
+		node->add_child_nocopy (*xnode);
+	}
+
+	if (!_cue_markers.empty()) {
+		node->add_child_nocopy (get_cue_state());
+	}
+
+	if (!segment_descriptors.empty()) {
+		XMLNode* sd_node = new XMLNode (X_("SegmentDescriptors"));
+		for (auto const & sd : segment_descriptors) {
+			sd_node->add_child_nocopy (sd.get_state());
+		}
+		node->add_child_nocopy (*sd_node);
+	}
+
 
 	return *node;
 }
@@ -117,6 +159,20 @@ int
 Source::set_state (const XMLNode& node, int version)
 {
 	std::string str;
+	const CueMarkers old_cues = _cue_markers;
+	XMLNodeList nlist = node.children();
+	int64_t t;
+	XMLNode* sd_node;
+
+	if (node.name() == X_("Cues")) {
+		/* partial state */
+		int ret = set_cue_state (node, version);
+		if (ret) {
+			return ret;
+		}
+		goto out;
+	}
+
 	if (node.get_property ("name", str)) {
 		_name = str;
 	} else {
@@ -129,23 +185,63 @@ Source::set_state (const XMLNode& node, int version)
 
 	node.get_property ("type", _type);
 
-	int64_t t;
 	if (node.get_property ("timestamp", t)) {
-		_timestamp = t;
+		_timestamp = (time_t) t;
+	}
+
+	if (node.get_property ("natural-position", _natural_position)) {
+		_have_natural_position = true;
+	} else if (node.get_property ("timeline-position", _natural_position)) {
+		/* some older versions of ardour might have stored this with
+		   this property name.
+		*/
+		_have_natural_position = true;
 	}
 
 	if (!node.get_property (X_("flags"), _flags)) {
 		_flags = Flag (0);
 	}
 
-	/* old style, from the period when we had DestructiveFileSource */
-	if (node.get_property (X_("destructive"), str)) {
-		_flags = Flag (_flags | Destructive);
+	_xruns.clear ();
+	for (XMLNodeIterator niter = nlist.begin(); niter != nlist.end(); ++niter) {
+
+		if ((*niter)->name() == X_("xruns")) {
+
+			const XMLNode& xruns (*(*niter));
+			if (xruns.children().empty()) {
+				break;
+			}
+			XMLNode* content_node = xruns.children().front();
+			stringstream str (content_node->content());
+			while (str) {
+				samplepos_t x;
+				std::string x_str;
+				str >> x_str;
+				if (!str || !PBD::string_to<samplepos_t> (x_str, x)) {
+					break;
+				}
+				_xruns.push_back (x);
+			}
+
+		} else if ((*niter)->name() == X_("Cues")) {
+			set_cue_state (**niter, version);
+		}
 	}
 
-	if (Profile->get_trx() && (_flags & Destructive)) {
-		error << string_compose (_("%1: this session uses destructive tracks, which are not supported"), PROGRAM_NAME) << endmsg;
-		return -1;
+	/* Destructive is no longer valid */
+
+	if (_flags & Destructive) {
+		_session.set_had_destructive_tracks (true);
+	}
+	_flags = Flag (_flags & ~Destructive);
+
+	if (!node.get_property (X_("take-id"), _take_id)) {
+		_take_id = "";
+	}
+
+	/* old style, from the period when we had DestructiveFileSource */
+	if (node.get_property (X_("destructive"), str)) {
+		_session.set_had_destructive_tracks (true);
 	}
 
 	if (version < 3000) {
@@ -153,9 +249,68 @@ Source::set_state (const XMLNode& node, int version)
 		   and therefore cannot be removable/writable etc. etc.; 2.X
 		   sometimes marks sources as removable which shouldn't be.
 		*/
-		if (!(_flags & Destructive)) {
-			_flags = Flag (_flags & ~(Writable|Removable|RemovableIfEmpty|RemoveAtDestroy|CanRename));
+		_flags = Flag (_flags & ~(Writable|Removable|RemovableIfEmpty|RemoveAtDestroy|CanRename));
+	}
+
+	sd_node = node.child (X_("SegmentDescriptors"));
+
+	if (sd_node) {
+		segment_descriptors.clear ();
+		try {
+			XMLNodeList nlist = sd_node->children();
+			for (XMLNodeIterator niter = nlist.begin(); niter != nlist.end(); ++niter) {
+				segment_descriptors.push_back (SegmentDescriptor (**niter, version));
+			}
+		} catch (...) {
+			error << string_compose (_("Segment descriptors not loaded for source %1"), name()) << endmsg;
 		}
+	}
+
+	/* support to make undo/redo actually function. Very few things about
+	 * Sources are ever part of undo/redo history, but this can
+	 * be. Undo/Redo uses a MementoCommand<> pattern, which will not in
+	 * itself notify anyone when the operation changes the cue markers.
+	 */
+
+  out:
+	if (old_cues != _cue_markers) {
+		CueMarkersChanged (); /* EMIT SIGNAL */
+	}
+
+	return 0;
+}
+
+XMLNode&
+Source::get_cue_state () const
+{
+	XMLNode* cue_parent = new XMLNode (X_("Cues"));
+
+	for (CueMarkers::const_iterator c = _cue_markers.begin(); c != _cue_markers.end(); ++c) {
+		XMLNode* cue_child = new XMLNode (X_("Cue"));
+		cue_child->set_property ("text", c->text());
+		cue_child->set_property ("position", c->position());
+		cue_parent->add_child_nocopy (*cue_child);
+	}
+
+	return *cue_parent;
+}
+
+int
+Source::set_cue_state (XMLNode const & cues, int /* version */)
+{
+	_cue_markers.clear ();
+
+	const XMLNodeList cuelist = cues.children();
+
+	for (XMLNodeConstIterator citer = cuelist.begin(); citer != cuelist.end(); ++citer) {
+		string text;
+		timepos_t position;
+
+		if (!(*citer)->get_property (X_("text"), text) || !(*citer)->get_property (X_("position"), position)) {
+			continue;
+		}
+
+		_cue_markers.insert (CueMarker (text, position));
 	}
 
 	return 0;
@@ -214,10 +369,6 @@ Source::get_transients_path () const
 	vector<string> parts;
 	string s;
 
-	/* old sessions may not have the analysis directory */
-
-	_session.ensure_subdirs ();
-
 	s = _session.analysis_dir ();
 	parts.push_back (s);
 
@@ -252,22 +403,25 @@ Source::check_for_analysis_data_on_disk ()
 void
 Source::mark_for_remove ()
 {
-	// This operation is not allowed for sources for destructive tracks or out-of-session files.
+	// This operation is not allowed for sources for out-of-session files.
 
 	/* XXX need a way to detect _within_session() condition here - move it from FileSource?
 	 */
-
-	if ((_flags & Destructive)) {
-		return;
-	}
 
 	_flags = Flag (_flags | Removable | RemoveAtDestroy);
 }
 
 void
-Source::set_timeline_position (samplepos_t pos)
+Source::set_natural_position (timepos_t const & pos)
 {
-	_timeline_position = pos;
+	_natural_position = pos;
+	_have_natural_position = true;
+}
+
+timecnt_t
+Source::time_since_capture_start (timepos_t const & pos)
+{
+	return _natural_position.distance (pos);
 }
 
 void
@@ -287,21 +441,20 @@ Source::set_allow_remove_if_empty (bool yn)
 void
 Source::inc_use_count ()
 {
-        g_atomic_int_inc (&_use_count);
+	_use_count.fetch_add (1);
 }
 
 void
 Source::dec_use_count ()
 {
 #ifndef NDEBUG
-        gint oldval = g_atomic_int_add (&_use_count, -1);
-        if (oldval <= 0) {
-                cerr << "Bad use dec for " << name() << endl;
-                abort ();
-        }
-        assert (oldval > 0);
+	int oldval = _use_count.fetch_sub (1);
+	if (oldval <= 0) {
+		cerr << "Bad use dec for " << name() << endl;
+	}
+	assert (oldval > 0);
 #else
-        g_atomic_int_add (&_use_count, -1);
+	_use_count.fetch_sub (1);
 #endif
 }
 
@@ -311,3 +464,113 @@ Source::writable () const
         return (_flags & Writable) && _session.writable();
 }
 
+void
+Source::set_captured_marks (CueMarkers const &marks)
+{
+	for (auto mark : marks) {
+		std::cerr << "adding " << mark.text() << " at " << mark.position() << "\n";
+		add_cue_marker(mark);
+	}
+}
+
+bool
+Source::add_cue_marker (CueMarker const & cm)
+{
+	if (_cue_markers.insert (cm).second) {
+		CueMarkersChanged(); /* EMIT SIGNAL */
+		return true;
+	}
+
+	return false;
+}
+
+bool
+Source::move_cue_marker (CueMarker const & cm, timepos_t const & source_relative_position)
+{
+	if (source_relative_position > length ()) {
+		return false;
+	}
+
+	if (remove_cue_marker (cm)) {
+		return add_cue_marker (CueMarker (cm.text(), source_relative_position));
+	}
+
+	return false;
+}
+
+bool
+Source::rename_cue_marker (CueMarker& cm, std::string const & str)
+{
+	CueMarkers::iterator m = _cue_markers.find (cm);
+
+	if (m != _cue_markers.end()) {
+		_cue_markers.erase (m);
+		return add_cue_marker (CueMarker (str, cm.position()));
+	}
+
+	return false;
+}
+
+bool
+Source::remove_cue_marker (CueMarker const & cm)
+{
+	if (_cue_markers.erase (cm)) {
+		CueMarkersChanged(); /* EMIT SIGNAL */
+		return true;
+	}
+
+	return false;
+}
+
+bool
+Source::clear_cue_markers ()
+{
+	if (_cue_markers.empty()) {
+		return false;
+	}
+
+	_cue_markers.clear();
+	CueMarkersChanged(); /* EMIT SIGNAL */
+	return true;
+}
+
+bool
+Source::empty () const
+{
+	return _length == timepos_t ();
+}
+
+bool
+Source::get_segment_descriptor (TimelineRange const & range, SegmentDescriptor& segment)
+{
+	/* Note: since we disallow overlapping segments, any overlap between
+	   the @p range and an existing segment counts as a match.
+	*/
+
+	for (auto const & sd : segment_descriptors) {
+		if (coverage_exclusive_ends (sd.position(), sd.position() + sd.extent(),
+		                             segment.position(), segment.position() + segment.extent()) != Temporal::OverlapNone) {
+			segment = sd;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+int
+Source::set_segment_descriptor (SegmentDescriptor const & sr)
+{
+	/* We disallow any overlap between segments. They must describe non-overlapping ranges */
+
+	for (auto const & sd : segment_descriptors) {
+		if (coverage_exclusive_ends (sd.position(), sd.position() + sd.extent(),
+		                             sr.position(), sr.position() + sr.extent()) != Temporal::OverlapNone) {
+			return -1;
+		}
+	}
+
+	segment_descriptors.push_back (sr);
+
+	return 0;
+}

@@ -1,38 +1,36 @@
 /*
-    Copyright (C) 2011-2013 Paul Davis
-    Copyright (C) 2017 Tim Mayberry
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2013 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
-
-#include <boost/scoped_array.hpp>
 
 #include <cairomm/cairomm.h>
 
 #include <glibmm/threads.h>
-#include <gdkmm/general.h>
+#include <ydkmm/general.h>
 
 #include "pbd/base_ui.h"
 #include "pbd/compose.h"
 #include "pbd/convert.h"
 #include "pbd/signals.h"
-#include "pbd/stacktrace.h"
+
+#include "temporal/tempo.h"
 
 #include "ardour/types.h"
 #include "ardour/dB.h"
@@ -68,8 +66,8 @@ WaveView::Shape WaveView::_global_shape = WaveView::Normal;
 bool WaveView::_global_show_waveform_clipping = true;
 double WaveView::_global_clip_level = 0.98853;
 
-PBD::Signal0<void> WaveView::VisualPropertiesChanged;
-PBD::Signal0<void> WaveView::ClipLevelChanged;
+PBD::Signal<void()> WaveView::VisualPropertiesChanged;
+PBD::Signal<void()> WaveView::ClipLevelChanged;
 
 /* NO_THREAD_WAVEVIEWS is defined by the top level wscript
  * if --no-threaded-waveviws is provided at the configure step.
@@ -79,7 +77,7 @@ PBD::Signal0<void> WaveView::ClipLevelChanged;
 #define ENABLE_THREADED_WAVEFORM_RENDERING
 #endif
 
-WaveView::WaveView (Canvas* c, boost::shared_ptr<ARDOUR::AudioRegion> region)
+WaveView::WaveView (Canvas* c, std::shared_ptr<ARDOUR::AudioRegion> region)
 	: Item (c)
 	, _region (region)
 	, _props (new WaveViewProperties (region))
@@ -92,7 +90,7 @@ WaveView::WaveView (Canvas* c, boost::shared_ptr<ARDOUR::AudioRegion> region)
 	init ();
 }
 
-WaveView::WaveView (Item* parent, boost::shared_ptr<ARDOUR::AudioRegion> region)
+WaveView::WaveView (Item* parent, std::shared_ptr<ARDOUR::AudioRegion> region)
 	: Item (parent)
 	, _region (region)
 	, _props (new WaveViewProperties (region))
@@ -116,9 +114,9 @@ WaveView::init ()
 	_props->outline_color = _outline_color;
 
 	VisualPropertiesChanged.connect_same_thread (
-	    invalidation_connection, boost::bind (&WaveView::handle_visual_property_change, this));
+	    invalidation_connection, std::bind (&WaveView::handle_visual_property_change, this));
 	ClipLevelChanged.connect_same_thread (invalidation_connection,
-	                                      boost::bind (&WaveView::handle_clip_level_change, this));
+	                                      std::bind (&WaveView::handle_clip_level_change, this));
 }
 
 WaveView::~WaveView ()
@@ -204,7 +202,7 @@ WaveView::set_samples_per_pixel (double samples_per_pixel)
 		begin_change ();
 
 		_props->samples_per_pixel = samples_per_pixel;
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 
 		end_change ();
 	}
@@ -232,14 +230,14 @@ WaveView::set_clip_level (double dB)
 	}
 }
 
-boost::shared_ptr<WaveViewDrawRequest>
+std::shared_ptr<WaveViewDrawRequest>
 WaveView::create_draw_request (WaveViewProperties const& props) const
 {
 	assert (props.is_valid());
 
-	boost::shared_ptr<WaveViewDrawRequest> request (new WaveViewDrawRequest);
+	std::shared_ptr<WaveViewDrawRequest> request (new WaveViewDrawRequest);
 
-	request->image = boost::shared_ptr<WaveViewImage> (new WaveViewImage (_region, props));
+	request->image = std::shared_ptr<WaveViewImage> (new WaveViewImage (_region, props));
 	return request;
 }
 
@@ -279,7 +277,7 @@ WaveView::prepare_for_render (Rect const& area) const
 		}
 	}
 
-	boost::shared_ptr<WaveViewDrawRequest> request = create_draw_request (required_props);
+	std::shared_ptr<WaveViewDrawRequest> request = create_draw_request (required_props);
 
 	queue_draw_request (request);
 }
@@ -304,10 +302,28 @@ WaveView::get_item_and_draw_rect_in_window_coords (Rect const& canvas_rect, Rect
 	 * So let's start by determining the area covered by the region, in
 	 * window coordinates. It begins at zero (in item coordinates for this
 	 * waveview, and extends to region_length() / _samples_per_pixel.
+	 *
+	 * Use same rounding as UI's TimeAxisViewItem::set_samples_per_pixel,
+	 * TimeAxisViewItem::reset_width_dependent_items
 	 */
+	double spp         = _props->samples_per_pixel;
+	double end_pixel   = round ((_region->position () + _region->length ()).samples () / spp);
+	double start_pixel = round (_region->position ().samples () / spp);
+	double const width = end_pixel - start_pixel;
 
-	double const width = region_length() / _props->samples_per_pixel;
-	item_rect = item_to_window (Rect (0.0, 0.0, width, _props->height));
+	item_rect = item_to_window (Rect (0.0, 0.0, width, _props->height), false);
+
+	/* do round actual start/end clip-mask, to match TimeAxisViewItem frame */
+	double rx0 = round (item_rect.x0);
+	double rx1 = round (item_rect.x1);
+
+	/* don't round item, this way sample-positions from pixels remain consistent
+	 * (waveform does not jitter when region is split)
+	 */
+	item_rect.x0 = floor (item_rect.x0);
+	item_rect.x1 = ceil  (item_rect.x1);
+	item_rect.y0 = round (item_rect.y0);
+	item_rect.y1 = round (item_rect.y1);
 
 	/* Now lets get the intersection with the area we've been asked to draw */
 
@@ -317,21 +333,20 @@ WaveView::get_item_and_draw_rect_in_window_coords (Rect const& canvas_rect, Rect
 		// No intersection with drawing area
 		return false;
 	}
-
 	/* draw_rect now defines the rectangle we need to update/render the waveview
 	 * into, in window coordinate space.
 	 *
 	 * We round down in case we were asked to draw "between" pixels at the start
 	 * and/or end.
 	 */
-	draw_rect.x0 = floor (draw_rect.x0);
-	draw_rect.x1 = floor (draw_rect.x1);
+	draw_rect.x0 = max (floor (draw_rect.x0), rx0);
+	draw_rect.x1 = min (ceil (draw_rect.x1), rx1);
 
 	return true;
 }
 
 void
-WaveView::queue_draw_request (boost::shared_ptr<WaveViewDrawRequest> const& request) const
+WaveView::queue_draw_request (std::shared_ptr<WaveViewDrawRequest> const& request) const
 {
 	// Don't enqueue any requests without a thread to dequeue them.
 	assert (WaveViewThreads::enabled());
@@ -344,7 +359,7 @@ WaveView::queue_draw_request (boost::shared_ptr<WaveViewDrawRequest> const& requ
 		current_request->cancel ();
 	}
 
-	boost::shared_ptr<WaveViewImage> cached_image =
+	std::shared_ptr<WaveViewImage> cached_image =
 	    get_cache_group ()->lookup_image (request->image->props);
 
 	if (cached_image) {
@@ -371,54 +386,32 @@ WaveView::compute_tips (ARDOUR::PeakData const& peak, WaveView::LineTips& tips,
                         double const effective_height)
 {
 	/* remember: canvas (and cairo) coordinate space puts the origin at the upper left.
+	 *
+	 * So, a sample value of 1.0 (0dbFS) will be computed as:
+	 *     (1.0 - 1.0) * 0.5 * effective_height
+	 * which evaluates to 0, or the top of the image.
+	 *
+	 * A sample value of -1.0 will be computed as
+	 *     (1.0 + 1.0) * 0.5 * effective height
+	 * which evaluates to effective height, or the bottom of the image.
+	 */
 
-	   So, a sample value of 1.0 (0dbFS) will be computed as:
+	const double pmax = (1.0 - peak.max) * floor (0.5 * effective_height);
+	const double pmin = (1.0 - peak.min) * floor (0.5 * effective_height);
 
-	         (1.0 - 1.0) * 0.5 * effective_height
-
-	   which evaluates to 0, or the top of the image.
-
-	   A sample value of -1.0 will be computed as
-
-	        (1.0 + 1.0) * 0.5 * effective height
-
-           which evaluates to effective height, or the bottom of the image.
-	*/
-
-	const double pmax = (1.0 - peak.max) * 0.5 * effective_height;
-	const double pmin = (1.0 - peak.min) * 0.5 * effective_height;
-
-	/* remember that the bottom of the image (pmin) has larger y-coordinates
-	   than the top (pmax).
-	*/
-
-	double spread = (pmin - pmax) * 0.5;
-
-	/* find the nearest pixel to the nominal center. */
-	const double center = round (pmin - spread);
-
-	if (spread < 1.0) {
-		/* minimum distance between line ends is 1 pixel, and we want it "centered" on a pixel,
-		   as per cairo single-pixel line issues.
-
-		   NOTE: the caller will not draw a line between these two points if the spread is
-		   less than 2 pixels. So only the tips.top value matters, which is where we will
-		   draw a single pixel as part of the outline.
-		 */
-		tips.top = center;
-		tips.bot = center + 1.0;
+	if (pmax * pmin < 0) {
+		/* signal crosses zero, round away from 0 */
+		tips.top = ceil (pmax);
+		tips.bot = floor (pmin);
 	} else {
-		/* round spread above and below center to an integer number of pixels */
-		spread = round (spread);
-		/* top and bottom are located equally either side of the center */
-		tips.top = center - spread;
-		tips.bot = center + spread;
+		tips.top = rint (pmax);
+		tips.bot = rint (pmin);
 	}
 
-	tips.top = min (effective_height, max (0.0, tips.top));
-	tips.bot = min (effective_height, max (0.0, tips.bot));
+	if (tips.top > tips.bot) {
+		tips.top = tips.bot = rint (0.5 * (tips.top + tips.bot));
+	}
 }
-
 
 Coord
 WaveView::y_extent (double s, Shape const shape, double const height)
@@ -473,7 +466,7 @@ struct ImageSet {
 
 void
 WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks, int n_peaks,
-                      boost::shared_ptr<WaveViewDrawRequest> req)
+                      std::shared_ptr<WaveViewDrawRequest> req)
 {
 	const double height = image->get_height();
 
@@ -488,12 +481,12 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 	Cairo::RefPtr<Cairo::Context> outline_context = Cairo::Context::create (images.outline);
 	Cairo::RefPtr<Cairo::Context> clip_context = Cairo::Context::create (images.clip);
 	Cairo::RefPtr<Cairo::Context> zero_context = Cairo::Context::create (images.zero);
-	wave_context->set_antialias (Cairo::ANTIALIAS_NONE);
+
 	outline_context->set_antialias (Cairo::ANTIALIAS_NONE);
 	clip_context->set_antialias (Cairo::ANTIALIAS_NONE);
 	zero_context->set_antialias (Cairo::ANTIALIAS_NONE);
 
-	boost::scoped_array<LineTips> tips (new LineTips[n_peaks]);
+	std::unique_ptr<LineTips[]> tips (new LineTips[n_peaks]);
 
 	/* Clip level nominally set to -0.9dBFS to account for inter-sample
 	   interpolation possibly clipping (value may be too low).
@@ -505,7 +498,7 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 	   has been scaled by scale_amplitude() already.
 	*/
 
-	const double clip_level = _global_clip_level * req->image->props.amplitude;
+	const double clip_level = _global_clip_level * fabs (req->image->props.amplitude);
 
 	const Shape shape = req->image->props.shape;
 	const bool logscaled = req->image->props.logscaled;
@@ -549,6 +542,7 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 		}
 
 	} else {
+		const int y_span = 2 * floor ((height - 1) * .5);
 
 		if (logscaled) {
 			for (int i = 0; i < n_peaks; ++i) {
@@ -579,7 +573,7 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 					p.min = 0.0;
 				}
 
-				compute_tips (p, tips[i], height);
+				compute_tips (p, tips[i], y_span);
 				tips[i].spread = tips[i].bot - tips[i].top;
 			}
 
@@ -592,7 +586,7 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 					tips[i].clip_min = true;
 				}
 
-				compute_tips (peaks[i], tips[i], height);
+				compute_tips (peaks[i], tips[i], y_span);
 				tips[i].spread = tips[i].bot - tips[i].top;
 			}
 
@@ -613,9 +607,12 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 	/* ensure single-pixel lines */
 
 	wave_context->set_line_width (1.0);
+	wave_context->set_line_cap (Cairo::LINE_CAP_BUTT);
+	wave_context->set_line_join (Cairo::LINE_JOIN_ROUND);
 	wave_context->translate (0.5, 0.5);
 
 	outline_context->set_line_width (1.0);
+	outline_context->set_line_cap (Cairo::LINE_CAP_ROUND);
 	outline_context->translate (0.5, 0.5);
 
 	clip_context->set_line_width (1.0);
@@ -674,8 +671,7 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 				clip_context->rel_line_to (0, min (clip_height, ceil(tips[i].spread + .5)));
 			} else {
 				outline_context->move_to (i, tips[i].top);
-				/* normal upper terminal dot */
-				outline_context->rel_line_to (0, -1.0);
+				outline_context->line_to (i, tips[i].top);
 			}
 		}
 
@@ -684,30 +680,26 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 		outline_context->stroke ();
 
 	} else {
-		const int height_zero = floor(height * .5);
+		const int height_zero = floor ((height - 1) * .5);
 
 		for (int i = 0; i < n_peaks; ++i) {
 
-			/* waveform line */
-
-			if (tips[i].spread >= 2.0) {
+			bool connected_segment = false;
+			/* https://lac.linuxaudio.org/2013/papers/36.pdf Fig3 */
+			if (i + 1 == n_peaks) {
 				wave_context->move_to (i, tips[i].top);
 				wave_context->line_to (i, tips[i].bot);
-			}
-
-			/* draw square waves and other discontiguous points clearly */
-			if (i > 0) {
-				if (tips[i-1].top + 2 < tips[i].top) {
-					wave_context->move_to (i-1, tips[i-1].top);
-					wave_context->line_to (i-1, (tips[i].bot + tips[i-1].top)/2);
-					wave_context->move_to (i, (tips[i].bot + tips[i-1].top)/2);
-					wave_context->line_to (i, tips[i].top);
-				} else if (tips[i-1].bot > tips[i].bot + 2) {
-					wave_context->move_to (i-1, tips[i-1].bot);
-					wave_context->line_to (i-1, (tips[i].top + tips[i-1].bot)/2);
-					wave_context->move_to (i, (tips[i].top + tips[i-1].bot)/2);
-					wave_context->line_to (i, tips[i].bot);
-				}
+			} else if (tips[i].top >= tips[i + 1].bot) {
+				connected_segment = true;
+				wave_context->move_to (i - .5, tips[i].bot);
+				wave_context->line_to (i + .5, tips[i + 1].bot);
+			} else if (tips[i].bot <= tips[i + 1].top) {
+				connected_segment = true;
+				wave_context->move_to (i - .5, tips[i].top);
+				wave_context->line_to (i + .5, tips[i + 1].top);
+			} else {
+				wave_context->move_to (i, tips[i].top);
+				wave_context->line_to (i, tips[i].bot);
 			}
 
 			/* zero line, show only if there is enough spread
@@ -719,58 +711,32 @@ WaveView::draw_image (Cairo::RefPtr<Cairo::ImageSurface>& image, PeakData* peaks
 				zero_context->rel_line_to (1.0, 0);
 			}
 
-			if (tips[i].spread > 1.0) {
-				bool clipped = false;
-				/* outline/clip indicators */
-				if (_global_show_waveform_clipping && tips[i].clip_max) {
-					clip_context->move_to (i, tips[i].top);
-					/* clip-indicating upper terminal line */
-					clip_context->rel_line_to (0, min (clip_height, ceil(tips[i].spread + 0.5)));
-					clipped = true;
-				}
+			bool clipped = false;
+			/* outline/clip indicators */
+			if (_global_show_waveform_clipping && tips[i].clip_max) {
+				clip_context->move_to (i, tips[i].top);
+				/* clip-indicating upper terminal line */
+				clip_context->rel_line_to (0, min (clip_height, ceil(tips[i].spread + 0.5)));
+				clipped = true;
+			}
 
-				if (_global_show_waveform_clipping && tips[i].clip_min) {
-					clip_context->move_to (i, tips[i].bot);
-					/* clip-indicating lower terminal line */
-					clip_context->rel_line_to (0, - min (clip_height, ceil(tips[i].spread + 0.5)));
-					clipped = true;
-				}
+			if (_global_show_waveform_clipping && tips[i].clip_min) {
+				clip_context->move_to (i, tips[i].bot + 1);
+				/* clip-indicating lower terminal line */
+				clip_context->rel_line_to (0, - min (clip_height, ceil(tips[i].spread + 0.5)));
+				clipped = true;
+			}
 
-				if (!clipped && tips[i].spread > 2.0) {
-					/* only draw the outline if the spread
-					   implies 3 or more pixels (so that we see 1
-					   white pixel in the middle).
-					*/
-					outline_context->move_to (i, tips[i].bot);
-					/* normal lower terminal dot; line moves up */
-					outline_context->rel_line_to (0, -1.0);
+			if (!connected_segment && !clipped && tips[i].spread > 2.0) {
+				/* only draw the outline if the spread
+				 * implies 3 or more pixels (so that we see 1
+				 * white pixel in the middle).
+				 */
+				outline_context->move_to (i, tips[i].bot);
+				outline_context->line_to (i, tips[i].bot);
 
-					outline_context->move_to (i, tips[i].top);
-					/* normal upper terminal dot, line moves down */
-					outline_context->rel_line_to (0, 1.0);
-				}
-			} else {
-				bool clipped = false;
-				/* outline/clip indicator */
-				if (_global_show_waveform_clipping && (tips[i].clip_max || tips[i].clip_min)) {
-					clip_context->move_to (i, tips[i].top);
-					/* clip-indicating upper / lower terminal line */
-					clip_context->rel_line_to (0, 1.0);
-					clipped = true;
-				}
-
-				if (!clipped) {
-					/* special case where only 1 pixel of
-					 * the waveform line is drawn (and
-					 * nothing else).
-					 *
-					 * we draw a 1px "line", pretending
-					 * that the span is 1.0 (whether it is
-					 * zero or 1.0)
-					 */
-					wave_context->move_to (i, tips[i].top);
-					wave_context->rel_line_to (0, 1.0);
-				}
+				outline_context->move_to (i, tips[i].top);
+				outline_context->line_to (i, tips[i].top);
 			}
 		}
 
@@ -916,16 +882,16 @@ WaveView::optimal_image_width_samples () const
 }
 
 void
-WaveView::set_image (boost::shared_ptr<WaveViewImage> img) const
+WaveView::set_image (std::shared_ptr<WaveViewImage> img) const
 {
 	get_cache_group ()->add_image (img);
 	_image = img;
 }
 
 void
-WaveView::process_draw_request (boost::shared_ptr<WaveViewDrawRequest> req)
+WaveView::process_draw_request (std::shared_ptr<WaveViewDrawRequest> req)
 {
-	boost::shared_ptr<const ARDOUR::AudioRegion> region = req->image->region.lock();
+	std::shared_ptr<const ARDOUR::AudioRegion> region = req->image->region.lock();
 
 	if (!region) {
 		return;
@@ -935,13 +901,15 @@ WaveView::process_draw_request (boost::shared_ptr<WaveViewDrawRequest> req)
 		return;
 	}
 
+	(void) Temporal::TempoMap::fetch();
+
 	WaveViewProperties const& props = req->image->props;
 
 	const int n_peaks = props.get_width_pixels ();
 
 	assert (n_peaks > 0 && n_peaks < 32767);
 
-	boost::scoped_array<ARDOUR::PeakData> peaks (new PeakData[n_peaks]);
+	std::unique_ptr<ARDOUR::PeakData[]> peaks (new PeakData[n_peaks]);
 
 	/* Note that Region::read_peaks() takes a start position based on an
 	   offset into the Region's **SOURCE**, rather than an offset into
@@ -959,10 +927,10 @@ WaveView::process_draw_request (boost::shared_ptr<WaveViewDrawRequest> req)
 	Cairo::RefPtr<Cairo::ImageSurface> cairo_image =
 	    Cairo::ImageSurface::create (Cairo::FORMAT_ARGB32, n_peaks, req->image->props.height);
 
-	// http://cairographics.org/manual/cairo-Image-Surfaces.html#cairo-image-surface-create
+	// https://cairographics.org/manual/cairo-Image-Surfaces.html#cairo-image-surface-create
 	// This function always returns a valid pointer, but it will return a pointer to a "nil" surface..
 	// but there's some evidence that req->image can be NULL.
-	// http://tracker.ardour.org/view.php?id=6478
+	// https://tracker.ardour.org/view.php?id=6478
 	assert (cairo_image);
 
 	if (peaks_read > 0) {
@@ -1017,7 +985,21 @@ WaveView::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) cons
 	Rect self;
 
 	if (!get_item_and_draw_rect_in_window_coords (area, self, draw)) {
-		assert(true);
+		assert(false);
+		return;
+	}
+
+	if (_props->height < 1) {
+			if (_props->channel % 2) {
+				return;
+			}
+			context->rectangle (draw.x0, draw.y0, draw.width (), draw.height ());
+			if (1 == (_props->channel % 3)) {
+				set_source_rgba (context, _props->zero_color);
+			} else {
+				set_source_rgba (context, _props->fill_color);
+			}
+			context->fill ();
 		return;
 	}
 
@@ -1036,7 +1018,7 @@ WaveView::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) cons
 
 	assert (required_props.is_valid());
 
-	boost::shared_ptr<WaveViewImage> image_to_draw;
+	std::shared_ptr<WaveViewImage> image_to_draw;
 
 	if (current_request) {
 		if (!current_request->image->props.is_equivalent (required_props)) {
@@ -1073,7 +1055,7 @@ WaveView::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) cons
 	if (!image_to_draw) {
 		// No existing image to draw
 
-		boost::shared_ptr<WaveViewDrawRequest> const request = create_draw_request (required_props);
+		std::shared_ptr<WaveViewDrawRequest> const request = create_draw_request (required_props);
 
 		if (draw_image_in_gui_thread ()) {
 			// now that we have to draw something, draw more than required.
@@ -1119,12 +1101,19 @@ WaveView::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) cons
 
 	assert (image_to_draw);
 
+	/* Calculate the sample that corresponds to the region-rectangle's left edge
+	 * in the editor at current zoom (see TimeAxisViewItem::set_position).
+	 */
+	double const           samples_per_pixel = _props->samples_per_pixel;
+	samplepos_t const      region_position   = _region->position().samples();
+	samplepos_t const      region_view_x     = round (round (region_position / samples_per_pixel) * samples_per_pixel);
+	ARDOUR::sampleoffset_t region_view_dx    = region_position - region_view_x;
+
 	/* compute the first pixel of the image that should be used when we
 	 * render the specified range.
 	 */
 
-	double image_origin_in_self_coordinates =
-	    (image_to_draw->props.get_sample_start () - _props->region_start) / _props->samples_per_pixel;
+	double image_origin_in_self_coordinates = (image_to_draw->props.get_sample_start () - _props->region_start + region_view_dx) / samples_per_pixel;
 
 	/* the image may only be a best-effort ... it may not span the entire
 	 * range requested, though it is guaranteed to cover the start. So
@@ -1159,8 +1148,8 @@ WaveView::render (Rect const & area, Cairo::RefPtr<Cairo::Context> context) cons
 	double x  = self.x0 + image_origin_in_self_coordinates;
 	double y  = self.y0;
 	context->user_to_device (x, y);
-	x = round (x);
-	y = round (y);
+	x = floor (x);
+	y = floor (y);
 	context->device_to_user (x, y);
 
 	/* the coordinates specify where in "user coordinates" (i.e. what we
@@ -1177,12 +1166,15 @@ void
 WaveView::compute_bounding_box () const
 {
 	if (_region) {
-		_bounding_box = Rect (0.0, 0.0, region_length() / _props->samples_per_pixel, _props->height);
+		double spp         = _props->samples_per_pixel;
+		double end_pixel   = round ((_region->position () + _region->length ()).samples () / spp);
+		double start_start = round (_region->position ().samples () / spp);
+		_bounding_box = Rect (0.0, 0.0, end_pixel - start_start, _props->height);
 	} else {
 		_bounding_box = Rect ();
 	}
 
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }
 
 void
@@ -1194,7 +1186,7 @@ WaveView::set_height (Distance height)
 		_props->height = height;
 		_draw_image_in_gui_thread = true;
 
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -1206,7 +1198,7 @@ WaveView::set_channel (int channel)
 		begin_change ();
 		_props->channel = channel;
 		reset_cache_group ();
-		_bounding_box_dirty = true;
+		set_bbox_dirty ();
 		end_change ();
 	}
 }
@@ -1325,10 +1317,16 @@ WaveView::set_global_logscaled (bool yn)
 	}
 }
 
+void
+WaveView::clear_cache ()
+{
+	WaveViewCache::get_instance()->clear_cache ();
+}
+
 samplecnt_t
 WaveView::region_length() const
 {
-	return _region->length() - (_props->region_start - _region->start());
+	return _region->length_samples() - (_props->region_start - _region->start_sample());
 }
 
 samplepos_t
@@ -1350,7 +1348,7 @@ WaveView::set_region_start (sampleoffset_t start)
 
 	begin_change ();
 	_props->region_start = start;
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -1365,9 +1363,9 @@ WaveView::region_resized ()
 	}
 
 	begin_change ();
-	_props->region_start = _region->start();
-	_props->region_end = _region->start() + _region->length();
-	_bounding_box_dirty = true;
+	_props->region_start = _region->start_sample();
+	_props->region_end = _region->start_sample() + _region->length_samples();
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -1407,14 +1405,14 @@ WaveView::set_image_cache_size (uint64_t sz)
 	WaveViewCache::get_instance()->set_image_cache_threshold (sz);
 }
 
-boost::shared_ptr<WaveViewCacheGroup>
+std::shared_ptr<WaveViewCacheGroup>
 WaveView::get_cache_group () const
 {
 	if (_cache_group) {
 		return _cache_group;
 	}
 
-	boost::shared_ptr<AudioSource> source = _region->audio_source (_props->channel);
+	std::shared_ptr<AudioSource> source = _region->audio_source (_props->channel);
 	assert (source);
 
 	_cache_group = WaveViewCache::get_instance ()->get_cache_group (source);

@@ -1,26 +1,31 @@
 /*
-    Copyright (C) 2009 Paul Davis
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2012-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017-2019 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __gtk_ardour_editor_summary_h__
-#define __gtk_ardour_editor_summary_h__
-
+#include "ardour/session_handle.h"
+#include "ardour/types.h"
 #include "gtkmm2ext/cairo_widget.h"
+#include "pbd/property_basics.h"
+
 #include "editor_component.h"
 
 namespace ARDOUR {
@@ -28,6 +33,8 @@ namespace ARDOUR {
 }
 
 class Editor;
+class RegionView;
+class RouteTimeAxisView;
 
 /** Class to provide a visual summary of the contents of an editor window; represents
  *  the whole session as a set of lines, one per region view.
@@ -35,7 +42,7 @@ class Editor;
 class EditorSummary : public CairoWidget, public EditorComponent, public ARDOUR::SessionHandlePtr, public PBD::ScopedConnectionList
 {
 public:
-	EditorSummary (Editor *);
+	EditorSummary (Editor&);
 	~EditorSummary ();
 
 	void set_session (ARDOUR::Session *);
@@ -47,7 +54,7 @@ private:
 	void parameter_changed (std::string);
 	void on_size_allocate (Gtk::Allocation& alloc);
 
-	enum Position {
+	enum SummaryPosition {
 		LEFT,
 		RIGHT,
 		BOTTOM,
@@ -77,8 +84,8 @@ private:
 	void set_editor_x (std::pair<double, double>);
 	void playhead_position_changed (samplepos_t);
 	double editor_y_to_summary (double) const;
-	Position get_position (double, double) const;
-	void set_cursor (Position);
+	SummaryPosition get_position (double, double) const;
+	void set_cursor (SummaryPosition);
 	void route_gui_changed (PBD::PropertyChange const&);
 	bool suspending_editor_updates () const;
 	double playhead_sample_to_position (samplepos_t) const;
@@ -101,9 +108,12 @@ private:
 	double _start_mouse_x;
 	double _start_mouse_y;
 
-	Position _start_position;
+	SummaryPosition _start_position;
 
 	bool _move_dragging;
+
+	void set_colors ();
+	uint32_t _phead_color;
 
 	//used for zooming
 	int _last_mx;
@@ -120,7 +130,7 @@ private:
 	bool _pending_editor_changed;
 
 	bool _zoom_trim_dragging;
-	Position _zoom_trim_position;
+	SummaryPosition _zoom_trim_position;
 
 	bool _old_follow_playhead;
 	cairo_surface_t* _image;
@@ -132,4 +142,3 @@ private:
 	PBD::ScopedConnectionList region_property_connection;
 };
 
-#endif

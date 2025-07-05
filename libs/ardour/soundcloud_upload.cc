@@ -1,25 +1,22 @@
-/* soundcloud_export.cpp **********************************************************************
-
-	Adapted for Ardour by Ben Loftis, March 2012
-
-	Licence GPL:
-
-	This program is free software; you can redistribute it and/or
-	modify it under the terms of the GNU General Public License
-	as published by the Free Software Foundation; either version 2
-	of the License, or (at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-
-
-*************************************************************************************/
+/*
+ * Copyright (C) 2013-2014 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2015-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include "ardour/debug.h"
 #include "ardour/soundcloud_upload.h"
 
@@ -29,6 +26,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <iostream>
+
+#include "pbd/ccurl.h"
 #include "pbd/gstdio_compat.h"
 
 #include "pbd/i18n.h"
@@ -38,7 +37,7 @@ using namespace PBD;
 static size_t
 WriteMemoryCallback(void *ptr, size_t size, size_t nmemb, void *data)
 {
-	register int realsize = (int)(size * nmemb);
+	size_t realsize = (size * nmemb);
 	struct MemoryStruct *mem = (struct MemoryStruct *)data;
 
 	mem->memory = (char *)realloc(mem->memory, mem->size + realsize + 1);
@@ -57,6 +56,7 @@ SoundcloudUploader::SoundcloudUploader()
 {
 	curl_handle = curl_easy_init();
 	multi_handle = curl_multi_init();
+	PBD::CCurl::ca_setopt (curl_handle);
 }
 
 std::string

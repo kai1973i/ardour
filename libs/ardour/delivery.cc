@@ -1,20 +1,24 @@
 /*
-    Copyright (C) 2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2018 Len Ovens <len@ovenwerks.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <algorithm>
@@ -46,55 +50,63 @@ using namespace std;
 using namespace PBD;
 using namespace ARDOUR;
 
-PBD::Signal0<void>            Delivery::PannersLegal;
+PBD::Signal<void()>            Delivery::PannersLegal;
 bool                          Delivery::panners_legal = false;
 
 /* deliver to an existing IO object */
 
-Delivery::Delivery (Session& s, boost::shared_ptr<IO> io, boost::shared_ptr<Pannable> pannable,
-                    boost::shared_ptr<MuteMaster> mm, const string& name, Role r)
-	: IOProcessor(s, boost::shared_ptr<IO>(), (role_requires_output_ports (r) ? io : boost::shared_ptr<IO>()), name)
+Delivery::Delivery (Session& s, std::shared_ptr<IO> io, std::shared_ptr<Pannable> pannable,
+                    std::shared_ptr<MuteMaster> mm, const string& name, Role r)
+	: IOProcessor(s, std::shared_ptr<IO>(), (role_requires_output_ports (r) ? io : std::shared_ptr<IO>()), name, Temporal::TimeDomainProvider (Temporal::AudioTime), (r == Send || r == Aux || r == Foldback))
 	, _role (r)
 	, _output_buffers (new BufferSet())
-	, _current_gain (GAIN_COEFF_UNITY)
+	, _current_gain (GAIN_COEFF_ZERO)
 	, _no_outs_cuz_we_no_monitor (false)
 	, _mute_master (mm)
+	, _rta_active (false)
 	, _no_panner_reset (false)
+	, _midi_mute_mask (0)
+	, _midi_mute_buffer (0)
 {
 	if (pannable) {
 		bool is_send = false;
-		if (r & (Delivery::Send|Delivery::Aux)) is_send = true;
-		_panshell = boost::shared_ptr<PannerShell>(new PannerShell (_name, _session, pannable, is_send));
+		if (r & (Delivery::Send|Delivery::Aux|Delivery::Foldback)) is_send = true;
+		_panshell = std::shared_ptr<PannerShell>(new PannerShell (_name, _session, pannable, *this, is_send));
 	}
 
 	_display_to_user = false;
+	resize_midi_mute_buffer ();
 
 	if (_output) {
-		_output->changed.connect_same_thread (*this, boost::bind (&Delivery::output_changed, this, _1, _2));
+		_output->changed.connect_same_thread (*this, std::bind (&Delivery::output_changed, this, _1, _2));
 	}
 }
 
 /* deliver to a new IO object */
 
-Delivery::Delivery (Session& s, boost::shared_ptr<Pannable> pannable, boost::shared_ptr<MuteMaster> mm, const string& name, Role r)
-	: IOProcessor(s, false, (role_requires_output_ports (r) ? true : false), name, "", DataType::AUDIO, (r == Send))
+Delivery::Delivery (Session& s, std::shared_ptr<Pannable> pannable, std::shared_ptr<MuteMaster> mm, const string& name, Role r)
+	: IOProcessor(s, false, (role_requires_output_ports (r) ? true : false), name, "", DataType::AUDIO, (r == Send || r == Aux || r == Foldback))
 	, _role (r)
 	, _output_buffers (new BufferSet())
-	, _current_gain (GAIN_COEFF_UNITY)
+	, _current_gain (GAIN_COEFF_ZERO)
 	, _no_outs_cuz_we_no_monitor (false)
 	, _mute_master (mm)
+	, _rta_active (false)
 	, _no_panner_reset (false)
+	, _midi_mute_mask (0)
+	, _midi_mute_buffer (0)
 {
 	if (pannable) {
 		bool is_send = false;
-		if (r & (Delivery::Send|Delivery::Aux)) is_send = true;
-		_panshell = boost::shared_ptr<PannerShell>(new PannerShell (_name, _session, pannable, is_send));
+		if (r & (Delivery::Send|Delivery::Aux|Delivery::Foldback)) is_send = true;
+		_panshell = std::shared_ptr<PannerShell>(new PannerShell (_name, _session, pannable, *this, is_send));
 	}
 
 	_display_to_user = false;
+	resize_midi_mute_buffer ();
 
 	if (_output) {
-		_output->changed.connect_same_thread (*this, boost::bind (&Delivery::output_changed, this, _1, _2));
+		_output->changed.connect_same_thread (*this, std::bind (&Delivery::output_changed, this, _1, _2));
 	}
 }
 
@@ -112,6 +124,17 @@ Delivery::~Delivery()
 	ScopedConnectionList::drop_connections ();
 
 	delete _output_buffers;
+}
+
+void
+Delivery::resize_midi_mute_buffer ()
+{
+	const size_t stamp_size = sizeof (samplepos_t);
+	const size_t etype_size = sizeof (Evoral::EventType);
+
+	/* space for two 3-byte messages per channel */
+	const size_t mmb_size = 16 * (stamp_size + etype_size + 6);
+	_midi_mute_buffer.resize (mmb_size);
 }
 
 std::string
@@ -183,6 +206,31 @@ Delivery::can_support_io_configuration (const ChanCount& in, ChanCount& out)
 	return false;
 }
 
+void
+Delivery::set_gain_control (std::shared_ptr<GainControl> gc) {
+	if (gc) {
+		_gain_control = gc;
+		_amp.reset (new Amp (_session, _("Fader"), _gain_control, true));
+		_amp->configure_io (_configured_output, _configured_output);
+	} else {
+		_amp.reset ();
+		_gain_control = gc;
+	}
+}
+
+bool
+Delivery::analysis_active () const
+{
+	return _rta_active.load ();
+}
+
+void
+Delivery::set_analysis_active (bool en)
+{
+	// TODO latch with session wide enable, sync'ed at process start
+	_rta_active.store (en);
+}
+
 /** Caller must hold process lock */
 bool
 Delivery::configure_io (ChanCount in, ChanCount out)
@@ -229,24 +277,61 @@ Delivery::configure_io (ChanCount in, ChanCount out)
 
 	reset_panner ();
 
+	if (_amp) {
+		return _amp->configure_io (out, out);
+	}
+
 	return true;
 }
 
 void
-Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, double /*speed*/, pframes_t nframes, bool result_required)
+Delivery::maybe_merge_midi_mute (BufferSet& bufs, bool always)
+{
+	if (bufs.available().n_midi()) {
+
+		int mask = _midi_mute_mask.load(); /* atomic */
+		MidiBuffer& pmbuf (bufs.get_midi (0));
+
+		if ((always || mask) && (_current_gain < GAIN_COEFF_SMALL)) {
+
+			/* mask set, and we have just been muted */
+
+			_midi_mute_buffer.clear ();
+
+			for (uint8_t channel = 0; channel <= 0xF; channel++) {
+
+				if (always || ((1<<channel) & mask)) {
+
+					uint8_t buf[3] = { ((uint8_t) (MIDI_CMD_CONTROL | channel)), MIDI_CTL_SUSTAIN, 0 };
+					_midi_mute_buffer.push_back (0, Evoral::MIDI_EVENT, 3, buf);
+					buf[1] = MIDI_CTL_ALL_NOTES_OFF;
+					_midi_mute_buffer.push_back (0, Evoral::MIDI_EVENT, 3, buf);
+
+					/* Note we do not send MIDI_CTL_ALL_NOTES_OFF here, since this may
+					   silence notes that came from another non-muted track. */
+				}
+			}
+			pmbuf.merge_from (_midi_mute_buffer, 0, 0, 0); /* last 3 args do not matter for MIDI */
+			_midi_mute_mask = 0;
+		}
+	}
+}
+
+void
+Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample, double speed, pframes_t nframes, bool result_required)
 {
 	assert (_output);
 
-	PortSet& ports (_output->ports());
-	gain_t tgain;
-
-	if (ports.num_ports () == 0) {
-		goto out;
+	if (!check_active()) {
+		_output->silence (nframes);
+		return;
 	}
 
-	if (!_active && !_pending_active) {
-		_output->silence (nframes);
-		goto out;
+	std::shared_ptr<PortSet> ports (_output->ports());
+	gain_t tgain;
+
+	if (ports->num_ports () == 0) {
+		return;
 	}
 
 	/* this setup is not just for our purposes, but for anything that comes after us in the
@@ -254,7 +339,7 @@ Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample
 	 */
 
 	// TODO delayline -- latency-compensation
-	output_buffers().get_backend_port_addresses (ports, nframes);
+	output_buffers().get_backend_port_addresses (*ports, nframes);
 
 	// this Delivery processor is not a derived type, and thus we assume
 	// we really can modify the buffers passed in (it is almost certainly
@@ -268,18 +353,26 @@ Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample
 
 		_current_gain = Amp::apply_gain (bufs, _session.nominal_sample_rate(), nframes, _current_gain, tgain);
 
-	} else if (tgain < GAIN_COEFF_SMALL) {
+	} else if (fabsf (tgain) < GAIN_COEFF_SMALL) {
 
 		/* we were quiet last time, and we're still supposed to be quiet.
-			 Silence the outputs, and make sure the buffers are quiet too,
-			 */
+		 * Silence the outputs, and make sure the buffers are quiet too,
+		 */
 
 		_output->silence (nframes);
 		if (result_required) {
 			bufs.set_count (output_buffers().count ());
 			Amp::apply_simple_gain (bufs, nframes, GAIN_COEFF_ZERO);
 		}
-		goto out;
+
+		RTABufferListPtr rtabuffers = _rtabuffers;
+		if (_rta_active.load () && rtabuffers && !rtabuffers->empty ()) {
+			BufferSet& silent_bufs = _session.get_silent_buffers(ChanCount(DataType::AUDIO, 1));
+			for (auto const& rb : *rtabuffers) {
+				rb->write (silent_bufs.get_audio(0).data(), nframes);
+			}
+		}
+		return;
 
 	} else if (tgain != GAIN_COEFF_UNITY) {
 
@@ -291,6 +384,29 @@ Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample
 
 	if (fabs (_session.transport_speed()) > 1.5 && Config->get_quieten_at_speed ()) {
 		Amp::apply_simple_gain (bufs, nframes, speed_quietning, false);
+	}
+
+	/* gain control/automation */
+	if (_amp) {
+		_amp->set_gain_automation_buffer (_session.send_gain_automation_buffer ());
+		_amp->setup_gain_automation (start_sample, end_sample, nframes);
+		_amp->run (bufs, start_sample, end_sample, speed, nframes, true);
+	}
+
+	maybe_merge_midi_mute (bufs, false);
+
+	RTABufferListPtr rtabuffers = _rtabuffers;
+	if (_rta_active.load () && rtabuffers && !rtabuffers->empty ()) {
+		uint32_t n_audio = bufs.count().n_audio();
+		uint32_t n = 0;
+		for (auto const& rb: *rtabuffers) {
+			if (n < n_audio) {
+				rb->write (bufs.get_audio (n++).data(), nframes);
+			} else {
+				BufferSet& silent_bufs = _session.get_silent_buffers(ChanCount(DataType::AUDIO, 1));
+				rb->write (silent_bufs.get_audio(0).data(), nframes);
+			}
+		}
 	}
 
 	// Panning
@@ -305,7 +421,7 @@ Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample
 
 		for (DataType::iterator t = DataType::begin(); t != DataType::end(); ++t) {
 			if (*t != DataType::AUDIO && bufs.count().get(*t) > 0) {
-				_output->copy_to_outputs (bufs, *t, nframes, Port::port_offset());
+				_output->copy_to_outputs (bufs, *t, nframes, 0);
 			}
 		}
 
@@ -324,7 +440,7 @@ Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample
 
 		for (DataType::iterator t = DataType::begin(); t != DataType::end(); ++t) {
 			if (*t != DataType::AUDIO && bufs.count().get(*t) > 0) {
-				_output->copy_to_outputs (bufs, *t, nframes, Port::port_offset());
+				_output->copy_to_outputs (bufs, *t, nframes, 0);
 			}
 		}
 	}
@@ -345,17 +461,14 @@ Delivery::run (BufferSet& bufs, samplepos_t start_sample, samplepos_t end_sample
 				if (outs.count ().get (*t) <= n) {
 					continue;
 				}
-				b->read_from (outs.get (*t, n++), nframes, (*t == DataType::AUDIO ? 0 : -Port::port_offset()));
+				b->read_from (outs.get_available (*t, n++), nframes, 0);
 			}
 		}
 	}
-
-out:
-	_active = _pending_active;
 }
 
 XMLNode&
-Delivery::state ()
+Delivery::state () const
 {
 	XMLNode& node (IOProcessor::state ());
 
@@ -371,12 +484,26 @@ Delivery::state ()
 
 	if (_panshell) {
 		node.add_child_nocopy (_panshell->get_state ());
-		if (_panshell->pannable()) {
-			node.add_child_nocopy (_panshell->pannable()->get_state ());
+		if (_panshell->unlinked_pannable () && _role != Listen) {
+			node.add_child_nocopy (_panshell->unlinked_pannable()->get_state ());
 		}
+	}
+	/* Note: _gain_control state is saved by the owner,
+	 * mainly for backwards compatibility reasons, but also because
+	 * the gain-control may be owned by Route e.g. LAN _volume_control
+	 */
+
+	if (_polarity_control) {
+		node.add_child_nocopy (_polarity_control->get_state());
 	}
 
 	return node;
+}
+
+bool
+Delivery::role_from_xml (const XMLNode& node, Role& role)
+{
+	return node.get_property ("role", role);
 }
 
 int
@@ -401,8 +528,25 @@ Delivery::set_state (const XMLNode& node, int version)
 	reset_panner ();
 
 	XMLNode* pannnode = node.child (X_("Pannable"));
-	if (_panshell && _panshell->panner() && pannnode) {
-		_panshell->pannable()->set_state (*pannnode, version);
+
+	if (_panshell && _panshell->unlinked_pannable() && pannnode) {
+		_panshell->unlinked_pannable()->set_state (*pannnode, version);
+	}
+
+	if (_polarity_control) {
+		for (auto const& i : node.children()) {
+			if (i->name() != Controllable::xml_node_name) {
+				continue;
+			}
+			std::string control_name;
+			if (!i->get_property (X_("name"), control_name)) {
+				continue;
+			}
+			if (control_name == "polarity-invert") {
+				_polarity_control->set_state (*i, version);
+				break;
+			}
+		}
 	}
 
 	return 0;
@@ -439,7 +583,7 @@ Delivery::reset_panner ()
 
 	} else {
 		panner_legal_c.disconnect ();
-		PannersLegal.connect_same_thread (panner_legal_c, boost::bind (&Delivery::panners_became_legal, this));
+		PannersLegal.connect_same_thread (panner_legal_c, std::bind (&Delivery::panners_became_legal, this));
 	}
 }
 
@@ -485,15 +629,8 @@ void
 Delivery::flush_buffers (samplecnt_t nframes)
 {
 	/* io_lock, not taken: function must be called from Session::process() calltree */
-
-	if (!_output) {
-		return;
-	}
-
-	PortSet& ports (_output->ports());
-
-	for (PortSet::iterator i = ports.begin(); i != ports.end(); ++i) {
-		i->flush_buffers (nframes);
+	if (_output) {
+		_output->flush_buffers (nframes);
 	}
 }
 
@@ -507,22 +644,18 @@ Delivery::non_realtime_transport_stop (samplepos_t now, bool flush)
 	}
 
 	if (_output) {
-		PortSet& ports (_output->ports());
-
-		for (PortSet::iterator i = ports.begin(); i != ports.end(); ++i) {
-			i->transport_stopped ();
+		for (auto const& p : *_output->ports()) {
+			p->transport_stopped ();
 		}
 	}
 }
 
 void
-Delivery::realtime_locate ()
+Delivery::realtime_locate (bool for_loop_end)
 {
 	if (_output) {
-		PortSet& ports (_output->ports());
-
-		for (PortSet::iterator i = ports.begin(); i != ports.end(); ++i) {
-			i->realtime_locate ();
+		for (auto const& p : *_output->ports()) {
+			p->realtime_locate (for_loop_end);
 		}
 	}
 }
@@ -553,9 +686,11 @@ Delivery::target_gain ()
 		case Listen:
 			mp = MuteMaster::Listen;
 			break;
+		case DirectOuts:
 		case Send:
 		case Insert:
 		case Aux:
+		case Foldback:
 			if (_pre_fader) {
 				mp = MuteMaster::PreFader;
 			} else {
@@ -576,7 +711,29 @@ Delivery::target_gain ()
 		desired_gain = GAIN_COEFF_ZERO;
 	}
 
+	if (_polarity_control && _polarity_control->get_value () > 0) {
+		desired_gain *= -1;
+	}
+
 	return desired_gain;
+}
+
+void
+Delivery::activate ()
+{
+	if (_amp) {
+		_amp->activate ();
+	}
+	Processor::activate ();
+}
+
+void
+Delivery::deactivate ()
+{
+	if (_amp) {
+		_amp->deactivate ();
+	}
+	Processor::deactivate ();
 }
 
 void
@@ -597,24 +754,27 @@ Delivery::set_name (const std::string& name)
 	return ret;
 }
 
-bool ignore_output_change = false;
-
 void
 Delivery::output_changed (IOChange change, void* /*src*/)
 {
 	if (change.type & IOChange::ConfigurationChanged) {
 		reset_panner ();
-		_output_buffers->attach_buffers (_output->ports ());
+		_output_buffers->attach_buffers (*_output->ports ());
 	}
 }
 
-boost::shared_ptr<Panner>
+std::shared_ptr<Panner>
 Delivery::panner () const
 {
 	if (_panshell) {
 		return _panshell->panner();
 	} else {
-		return boost::shared_ptr<Panner>();
+		return std::shared_ptr<Panner>();
 	}
 }
 
+void
+Delivery::set_midi_mute_mask (int mask)
+{
+	_midi_mute_mask = mask; /* atomic */
+}

@@ -1,21 +1,26 @@
 /*
-    Copyright (C) 2000-2003 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2000-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006-2013 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013-2014 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2013-2015 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -49,7 +54,6 @@
 #include "pbd/cpus.h"
 #include "pbd/control_math.h"
 #include "pbd/error.h"
-#include "pbd/stacktrace.h"
 #include "pbd/xml++.h"
 #include "pbd/basename.h"
 #include "pbd/scoped_file_descriptor.h"
@@ -113,7 +117,10 @@ ARDOUR::legalize_for_path (const string& str)
 string
 ARDOUR::legalize_for_universal_path (const string& str)
 {
-	return replace_chars (str, "<>:\"/\\|?*");
+	string rv = replace_chars (str, "<>:\"/\\|?*");
+	/* windows filenames can't end with ' ' or '.' */
+	rv.erase (rv.find_last_not_of(" .") + 1);
+	return rv;
 }
 
 /** Legalize for a URI path component.  This is like
@@ -225,6 +232,44 @@ ARDOUR::bump_name_number (const std::string& name)
 	return newname;
 }
 
+string
+ARDOUR::bump_name_abc (const std::string& name)
+{
+	/* A, B, C, .. Z,  A1, B1, .. Z1, A2 .. Z2, A3 .. */
+	static char const* abc = _("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+	if (name.empty ()) {
+		return {abc[0]};
+	}
+
+	/* check first char */
+	char first = toupper (name[0]);
+
+	char const* end = abc + strlen (abc);
+	char const* pos = std::find (abc, end, first);
+
+	/* first char is not in the given set. Start over */
+	if (pos == end) {
+		return {abc[0]};
+	}
+
+	++pos;
+	if (pos != end) {
+		string rv = name;
+		rv[0] = *pos;
+		return rv;
+	}
+
+	/* find number */
+	size_t num = 0;
+	if (name.length () > 1) {
+		num = strtol (name.c_str() + 1, (char **)NULL, 10);
+	}
+	++num;
+
+	return string_compose ("%1%2", abc[0], num);
+}
+
+
 XMLNode *
 ARDOUR::find_named_node (const XMLNode& node, string name)
 {
@@ -319,9 +364,12 @@ ARDOUR::region_name_from_path (string path, bool strip_channels, bool add_channe
 
 	if (add_channel_suffix) {
 
+		/* compare to Session::format_audio_source_name */
 		path += '%';
 
-		if (total > 2) {
+		if (total > 25) {
+			path += string_compose ("%1", this_one + 1);
+		} else if (total > 2) {
 			path += (char) ('a' + this_one);
 		} else {
 			path += (char) (this_one == 0 ? 'L' : 'R');
@@ -411,9 +459,7 @@ ARDOUR::compute_equal_power_fades (samplecnt_t nframes, float* in, float* out)
 EditMode
 ARDOUR::string_to_edit_mode (string str)
 {
-	if (str == _("Splice")) {
-		return Splice;
-	} else if (str == _("Slide")) {
+	if (str == _("Slide")) {
 		return Slide;
 	} else if (str == _("Ripple")) {
 		return Ripple;
@@ -429,9 +475,6 @@ const char*
 ARDOUR::edit_mode_to_string (EditMode mode)
 {
 	switch (mode) {
-	case Slide:
-		return _("Slide");
-
 	case Lock:
 		return _("Lock");
 
@@ -439,65 +482,40 @@ ARDOUR::edit_mode_to_string (EditMode mode)
 		return _("Ripple");
 
 	default:
-	case Splice:
-		return _("Splice");
+	case Slide:
+		return _("Slide");
 	}
 }
 
-SyncSource
-ARDOUR::string_to_sync_source (string str)
+RippleMode
+ARDOUR::string_to_ripple_mode (string str)
 {
-	if (str == _("MIDI Timecode") || str == _("MTC")) {
-		return MTC;
+	if (str == _("RippleSelected")) {
+		return RippleSelected;
+	} else if (str == _("RippleAll")) {
+		return RippleAll;
+	} else if (str == _("RippleInterview")) {
+		return RippleInterview;
 	}
-
-	if (str == _("MIDI Clock")) {
-		return MIDIClock;
-	}
-
-	if (str == _("JACK")) {
-		return Engine;
-	}
-
-	if (str == _("LTC")) {
-		return LTC;
-	}
-
-	fatal << string_compose (_("programming error: unknown sync source string \"%1\""), str) << endmsg;
+	fatal << string_compose (_("programming error: unknown ripple mode string \"%1\""), str) << endmsg;
 	abort(); /*NOTREACHED*/
-	return Engine;
+	return RippleSelected;
 }
 
-/** @param sh Return a short version of the string */
 const char*
-ARDOUR::sync_source_to_string (SyncSource src, bool sh)
+ARDOUR::ripple_mode_to_string (RippleMode mode)
 {
-	switch (src) {
-	case Engine:
-		/* no other backends offer sync for now ... deal with this if we
-		 * ever have to.
-		 */
-		return S_("SyncSource|JACK");
+	switch (mode) {
+	case RippleInterview:
+		return _("RippleInterview");
 
-	case MTC:
-		if (sh) {
-			return S_("SyncSource|MTC");
-		} else {
-			return _("MIDI Timecode");
-		}
+	case RippleAll:
+		return _("RippleAll");
 
-	case MIDIClock:
-		if (sh) {
-			return S_("SyncSource|M-Clk");
-		} else {
-			return _("MIDI Clock");
-		}
-
-	case LTC:
-		return S_("SyncSource|LTC");
+	default:
+	case RippleSelected:
+		return _("RippleSelected");
 	}
-	/* GRRRR .... stupid, stupid gcc - you can't get here from there, all enum values are handled */
-	return S_("SyncSource|JACK");
 }
 
 float
@@ -624,10 +642,18 @@ ARDOUR::native_header_format_extension (HeaderFormat hf, const DataType& type)
                 return ".aif";
         case iXML:
                 return ".ixml";
+        case FLAC:
+                return ".flac";
         case RF64:
         case RF64_WAV:
         case MBWF:
-                return ".rf64";
+	        /* our goal when using RF64 is to be able to fall back to a
+	           regular RIFF/WAV if the data size is small enough. Rather than
+	           confuse people in the common case where this happens by having
+	           files named "foo.rf64", deal with the common case as ".wav" and
+	           leave potential confusion for the actual RF64 files.
+	        */
+	        return ".wav";
         }
 
         fatal << string_compose (_("programming error: unknown native header format: %1"), hf);
@@ -714,6 +740,25 @@ ARDOUR::how_many_dsp_threads ()
         return num_threads;
 }
 
+uint32_t
+ARDOUR::how_many_io_threads ()
+{
+	int num_cpu = hardware_concurrency();
+	int pu = Config->get_io_thread_count ();
+	uint32_t num_threads = max (num_cpu - 2, 2);
+	if (pu < 0) {
+		if (-pu < num_cpu) {
+			num_threads = num_cpu + pu;
+		}
+	} else if (pu == 0) {
+		num_threads = num_cpu;
+
+	} else {
+		num_threads = min (num_cpu, pu);
+	}
+	return num_threads;
+}
+
 double
 ARDOUR::gain_to_slider_position_with_max (double g, double max_gain)
 {
@@ -748,8 +793,3 @@ ARDOUR::compute_sha1_of_file (std::string path)
 	sha1_result_hash (&s, hash);
 	return std::string (hash);
 }
-
-extern "C" {
-	void c_stacktrace() { stacktrace (cerr); }
-}
-

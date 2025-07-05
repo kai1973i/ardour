@@ -1,20 +1,21 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/debug.h"
 #include "ardour/mute_master.h"
@@ -27,9 +28,9 @@ using namespace ARDOUR;
 using namespace std;
 using namespace PBD;
 
-SoloSafeControl::SoloSafeControl (Session& session, std::string const & name)
+SoloSafeControl::SoloSafeControl (Session& session, std::string const & name, Temporal::TimeDomainProvider const & tdp)
 	: SlavableAutomationControl (session, SoloSafeAutomation, ParameterDescriptor (SoloSafeAutomation),
-	                             boost::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(SoloSafeAutomation))),
+	                             std::shared_ptr<AutomationList>(new AutomationList(Evoral::Parameter(SoloSafeAutomation), tdp)),
 	                             name)
 	, _solo_safe (false)
 {
@@ -56,7 +57,7 @@ SoloSafeControl::get_value () const
 		return get_masters_value_locked () ? 1.0 : 0.0;
 	}
 
-	if (_list && boost::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
+	if (_list && std::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
 		// Playing back automation, get the value from the list
 		return AutomationControl::get_value();
 	}
@@ -76,7 +77,7 @@ SoloSafeControl::set_state (XMLNode const & node, int version)
 }
 
 XMLNode&
-SoloSafeControl::get_state ()
+SoloSafeControl::get_state () const
 {
 	XMLNode& node (SlavableAutomationControl::get_state());
 	node.set_property (X_("solo-safe"), _solo_safe);

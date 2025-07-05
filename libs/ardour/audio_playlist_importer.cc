@@ -1,22 +1,24 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/audio_playlist_importer.h"
 
@@ -55,7 +57,7 @@ AudioPlaylistImportHandler::AudioPlaylistImportHandler (XMLTree const & source, 
 		if ( !type || type->value() == "audio" ) {
 			try {
 				elements.push_back (ElementPtr ( new AudioPlaylistImporter (source, session, *this, **it)));
-			} catch (failed_constructor err) {
+			} catch (failed_constructor const&) {
 				set_dirty();
 			}
 		}
@@ -86,7 +88,7 @@ void
 AudioPlaylistImportHandler::playlists_by_diskstream (PBD::ID const & id, PlaylistList & list) const
 {
 	for (ElementList::const_iterator it = elements.begin(); it != elements.end(); ++it) {
-		boost::shared_ptr<AudioPlaylistImporter> pl = boost::dynamic_pointer_cast<AudioPlaylistImporter> (*it);
+		std::shared_ptr<AudioPlaylistImporter> pl = std::dynamic_pointer_cast<AudioPlaylistImporter> (*it);
 		if (pl && pl->orig_diskstream() == id) {
 			list.push_back (PlaylistPtr (new AudioPlaylistImporter (*pl)));
 		}
@@ -170,7 +172,7 @@ bool
 AudioPlaylistImporter::_prepare_move ()
 {
 	// Rename
-	while (session.playlists->by_name (name) || !handler.check_name (name)) {
+	while (session.playlists()->by_name (name) || !handler.check_name (name)) {
 		std::pair<bool, string> rename_pair = *Rename (_("A playlist with this name already exists, please rename it."), name);
 		if (!rename_pair.first) {
 			return false;
@@ -199,7 +201,7 @@ AudioPlaylistImporter::_cancel_move ()
 void
 AudioPlaylistImporter::_move ()
 {
-	boost::shared_ptr<Playlist> playlist;
+	std::shared_ptr<Playlist> playlist;
 
 	// Update diskstream id
 	xml_playlist.property ("orig-diskstream-id")->set_value (diskstream_id.to_s());
@@ -242,7 +244,7 @@ AudioPlaylistImporter::_move ()
 	}
 
 	// Create playlist
-	playlist = PlaylistFactory::create (session, xml_playlist, false, true);
+	playlist = PlaylistFactory::create (session, xml_playlist, false);
 }
 
 void
@@ -257,7 +259,7 @@ AudioPlaylistImporter::populate_region_list ()
 	ElementImportHandler::ElementList elements;
 	handler.get_regions (orig_node, elements);
 	for (ElementImportHandler::ElementList::iterator it = elements.begin(); it != elements.end(); ++it) {
-		regions.push_back (boost::dynamic_pointer_cast<AudioRegionImporter> (*it));
+		regions.push_back (std::dynamic_pointer_cast<AudioRegionImporter> (*it));
 	}
 }
 

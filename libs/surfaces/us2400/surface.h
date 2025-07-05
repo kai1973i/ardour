@@ -1,5 +1,23 @@
-#ifndef mackie_surface_h
-#define mackie_surface_h
+/*
+ * Copyright (C) 2017 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+#ifndef us2400_surface_h
+#define us2400_surface_h
 
 #include <stdint.h>
 
@@ -79,8 +97,8 @@ public:
 	uint32_t n_strips (bool with_locked_strips = true) const;
 	Strip* nth_strip (uint32_t n) const;
 
-	bool stripable_is_locked_to_strip (boost::shared_ptr<ARDOUR::Stripable>) const;
-	bool stripable_is_mapped (boost::shared_ptr<ARDOUR::Stripable>) const;
+	bool stripable_is_locked_to_strip (std::shared_ptr<ARDOUR::Stripable>) const;
+	bool stripable_is_mapped (std::shared_ptr<ARDOUR::Stripable>) const;
 
 	/// This collection owns the groups
 	typedef std::map<std::string,Group*> Groups;
@@ -88,14 +106,14 @@ public:
 
 	SurfacePort& port() const { return *_port; }
 
-	void map_stripables (const std::vector<boost::shared_ptr<ARDOUR::Stripable> >&);
+	void map_stripables (const std::vector<std::shared_ptr<ARDOUR::Stripable> >&);
 
 	void update_strip_selection ();
 
 	const MidiByteArray& sysex_hdr() const;
 
-	void periodic (ARDOUR::microseconds_t now_usecs);
-	void redisplay (ARDOUR::microseconds_t now_usecs, bool force);
+	void periodic (PBD::microseconds_t now_usecs);
+	void redisplay (PBD::microseconds_t now_usecs, bool force);
 	void hui_heartbeat ();
 
 	void handle_midi_pitchbend_message (MIDI::Parser&, MIDI::pitchbend_t, uint32_t channel_id);
@@ -156,11 +174,11 @@ public:
         void notify_metering_state_changed();
 	void turn_it_on ();
 
-	bool connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, boost::weak_ptr<ARDOUR::Port>, std::string name2, bool);
+	bool connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool);
 
 	void master_monitor_may_have_changed ();
 
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 	int set_state (const XMLNode&, int version);
 
   private:

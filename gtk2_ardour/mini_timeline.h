@@ -1,23 +1,23 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016-2018 Ben Loftis <ben@harrisonconsoles.com>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#ifndef __gtkardour_mini_timeline_h__
-#define __gtkardour_mini_timeline_h__
+#pragma once
 
 #include <list>
 #include <pangomm.h>
@@ -56,8 +56,7 @@ private:
 
 	void on_size_request (Gtk::Requisition*);
 	void on_size_allocate (Gtk::Allocation&);
-	void on_style_changed (const Glib::RefPtr<Gtk::Style>&);
-	void on_name_changed ();
+	void dpi_changed ();
 	void set_colors ();
 	void parameter_changed (std::string const &);
 
@@ -66,6 +65,7 @@ private:
 	void update_minitimeline ();
 	void draw_dots (cairo_t*, int left, int right, int y, Gtkmm2ext::Color);
 	int  draw_mark (cairo_t*, int x0, int x1, const std::string&, bool& prelight);
+	int  draw_cue (cairo_t*, int x0, int next_cue_left_edge, int tl_width, int cue_index, bool& prelight);
 	int  draw_edge (cairo_t*, int x0, int x1, bool left, const std::string&, bool& prelight);
 
 	void render (Cairo::RefPtr<Cairo::Context> const&, cairo_rectangle_t*);
@@ -83,6 +83,7 @@ private:
 	Glib::RefPtr<Pango::Layout> _layout;
 	sigc::connection super_rapid_connection;
 	PBD::ScopedConnectionList marker_connection;
+	PBD::ScopedConnectionList tempo_map_connection;
 	PBD::ScopedConnectionList session_connection;
 
 	samplepos_t _last_update_sample;
@@ -116,4 +117,3 @@ private:
 	JumpList _jumplist;
 };
 
-#endif

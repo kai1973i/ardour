@@ -3,17 +3,17 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef _ardour_surfaces_m2button_h_
@@ -32,9 +32,9 @@ class M2ButtonInterface
 		virtual ~M2ButtonInterface () {}
 
 		/* user API */
-		PBD::Signal1<void, bool> changed;
-		PBD::Signal0<void> pressed;
-		PBD::Signal0<void> released;
+		PBD::Signal<void(bool)> changed;
+		PBD::Signal<void()> pressed;
+		PBD::Signal<void()> released;
 
 		virtual void set_blinking (bool) {}
 		virtual void set_color (uint32_t rgba) {}
@@ -156,10 +156,10 @@ class M2ToggleButton : public M2Button
 		: M2Button ()
 		, _active (false)
 		{
-			changed.connect_same_thread (changed_connection, boost::bind (&M2ToggleButton::change_event, this, _1));
+			changed.connect_same_thread (changed_connection, std::bind (&M2ToggleButton::change_event, this, _1));
 		}
 
-		PBD::Signal1<void, bool> toggled;
+		PBD::Signal<void(bool)> toggled;
 		bool active () const { return _active; }
 
 	protected:
@@ -182,10 +182,10 @@ class M2ToggleHoldButton : public M2Button
 		, _active (false)
 		, _active_on_release (false)
 		{
-			changed.connect_same_thread (changed_connection, boost::bind (&M2ToggleHoldButton::change_event, this, _1));
+			changed.connect_same_thread (changed_connection, std::bind (&M2ToggleHoldButton::change_event, this, _1));
 		}
 
-		PBD::Signal1<void, bool> toggled;
+		PBD::Signal<void(bool)> toggled;
 		bool active () const { return _active; }
 		void unset_active_on_release () { if (is_pressed ()) { _active_on_release = false; } }
 

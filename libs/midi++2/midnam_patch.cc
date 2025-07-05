@@ -1,20 +1,25 @@
 /*
-    Copyright (C) 2008 Hans Baier
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2008-2012 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2008-2016 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <stdlib.h>
 
@@ -87,7 +92,7 @@ initialize_primary_key_from_commands (
 }
 
 XMLNode&
-Patch::get_state (void)
+Patch::get_state () const
 {
 	XMLNode* node = new XMLNode("Patch");
 
@@ -97,7 +102,7 @@ Patch::get_state (void)
 	node->set_property("Name",   _name);
 
 	/*
-	typedef std::list< boost::shared_ptr< Evoral::Event<Temporal::Beats> > > PatchMidiCommands;
+	typedef std::list< std::shared_ptr< Evoral::Event<Temporal::Beats> > > PatchMidiCommands;
 	XMLNode* commands = node->add_child("PatchMIDICommands");
 	for (PatchMidiCommands::const_iterator event = _patch_midi_commands.begin();
 	    event != _patch_midi_commands.end();
@@ -113,7 +118,7 @@ int
 Patch::set_state (const XMLTree& tree, const XMLNode& node)
 {
 	if (node.name() != "Patch") {
-		cerr << "Incorrect node " << node.name() << " handed to Patch" << endl;
+		cerr << "Incorrect node type '" << node.name() << "' handed to Patch" << " contents " << node.content() << endl;
 		return -1;
 	}
 
@@ -148,7 +153,7 @@ Patch::set_state (const XMLTree& tree, const XMLNode& node)
 }
 
 XMLNode&
-Note::get_state (void)
+Note::get_state () const
 {
 	XMLNode* node = new XMLNode("Note");
 	node->set_property("Number", _number);
@@ -177,7 +182,7 @@ Note::set_state (const XMLTree& tree, const XMLNode& node)
 }
 
 XMLNode&
-NoteNameList::get_state (void)
+NoteNameList::get_state () const
 {
 	XMLNode* node = new XMLNode("NoteNameList");
 	node->set_property("Name", _name);
@@ -188,7 +193,7 @@ NoteNameList::get_state (void)
 static void
 add_note_from_xml (NoteNameList::Notes& notes, const XMLTree& tree, const XMLNode& node)
 {
-	boost::shared_ptr<Note> note(new Note());
+	std::shared_ptr<Note> note(new Note());
 	if (!note->set_state (tree, node)) {
 		if (!notes[note->number()]) {
 			notes[note->number()] = note;
@@ -231,7 +236,7 @@ NoteNameList::set_state (const XMLTree& tree, const XMLNode& node)
 }
 
 XMLNode&
-Control::get_state (void)
+Control::get_state () const
 {
 	XMLNode* node = new XMLNode("Control");
 	node->set_property("Type",   _type);
@@ -250,6 +255,9 @@ Control::set_state (const XMLTree& tree, const XMLNode& node)
 	} else {
 		_type = "7bit";
 	}
+	if (_type == "NRPN") {
+		return -1;
+	}
 	_number = string_to_int(tree, node.property("Number")->value());
 	_name   = node.property("Name")->value();
 
@@ -260,7 +268,7 @@ Control::set_state (const XMLTree& tree, const XMLNode& node)
 			for (XMLNodeList::const_iterator j = (*i)->children().begin();
 			     j != (*i)->children().end(); ++j) {
 				if ((*j)->name() == "ValueNameList") {
-					_value_name_list = boost::shared_ptr<ValueNameList>(new ValueNameList());
+					_value_name_list = std::shared_ptr<ValueNameList>(new ValueNameList());
 					_value_name_list->set_state(tree, **j);
 				} else if ((*j)->name() == "UsesValueNameList") {
 					_value_name_list_name = (*j)->property("Name")->value();
@@ -273,7 +281,7 @@ Control::set_state (const XMLTree& tree, const XMLNode& node)
 }
 
 XMLNode&
-ControlNameList::get_state (void)
+ControlNameList::get_state () const
 {
 	XMLNode* node = new XMLNode("ControlNameList");
 	node->set_property("Name", _name);
@@ -291,8 +299,10 @@ ControlNameList::set_state (const XMLTree& tree, const XMLNode& node)
 	for (XMLNodeList::const_iterator i = node.children().begin();
 	     i != node.children().end(); ++i) {
 		if ((*i)->name() == "Control") {
-			boost::shared_ptr<Control> control(new Control());
-			control->set_state (tree, *(*i));
+			std::shared_ptr<Control> control(new Control());
+			if (control->set_state (tree, *(*i))) {
+				continue;
+			}
 			if (_controls.find(control->number()) == _controls.end()) {
 				_controls.insert(make_pair(control->number(), control));
 			} else {
@@ -306,18 +316,18 @@ ControlNameList::set_state (const XMLTree& tree, const XMLNode& node)
 	return 0;
 }
 
-boost::shared_ptr<const Control>
+std::shared_ptr<const Control>
 ControlNameList::control(uint16_t num) const
 {
 	Controls::const_iterator i = _controls.find(num);
 	if (i != _controls.end()) {
 		return i->second;
 	}
-	return boost::shared_ptr<const Control>();
+	return std::shared_ptr<const Control>();
 }
 
 XMLNode&
-Value::get_state (void)
+Value::get_state () const
 {
 	XMLNode* node = new XMLNode("Value");
 	node->set_property("Number", _number);
@@ -337,7 +347,7 @@ Value::set_state (const XMLTree& tree, const XMLNode& node)
 }
 
 XMLNode&
-ValueNameList::get_state (void)
+ValueNameList::get_state () const
 {
 	XMLNode* node = new XMLNode("ValueNameList");
 	node->set_property("Name", _name);
@@ -359,7 +369,7 @@ ValueNameList::set_state (const XMLTree& tree, const XMLNode& node)
 	for (XMLNodeList::const_iterator i = node.children().begin();
 	     i != node.children().end(); ++i) {
 		if ((*i)->name() == "Value") {
-			boost::shared_ptr<Value> value(new Value());
+			std::shared_ptr<Value> value(new Value());
 			value->set_state (tree, *(*i));
 			if (_values.find(value->number()) == _values.end()) {
 				_values.insert(make_pair(value->number(), value));
@@ -374,17 +384,17 @@ ValueNameList::set_state (const XMLTree& tree, const XMLNode& node)
 	return 0;
 }
 
-boost::shared_ptr<const Value>
+std::shared_ptr<const Value>
 ValueNameList::value(uint16_t num) const
 {
 	Values::const_iterator i = _values.find(num);
 	if (i != _values.end()) {
 		return i->second;
 	}
-	return boost::shared_ptr<const Value>();
+	return std::shared_ptr<const Value>();
 }
 
-boost::shared_ptr<const Value>
+std::shared_ptr<const Value>
 ValueNameList::max_value_below(uint16_t num) const
 {
 	Values::const_iterator i = _values.lower_bound(num);
@@ -393,7 +403,7 @@ ValueNameList::max_value_below(uint16_t num) const
 		return i->second;
 	} else if (i == _values.begin()) {
 		// No value is < num
-		return boost::shared_ptr<const Value>();
+		return std::shared_ptr<const Value>();
 	} else {
 		// Found the smallest element >= num, so the previous one is our result
 		--i;
@@ -402,12 +412,12 @@ ValueNameList::max_value_below(uint16_t num) const
 }
 
 XMLNode&
-PatchBank::get_state (void)
+PatchBank::get_state () const
 {
 	XMLNode* node = new XMLNode("PatchBank");
 	node->set_property("Name",   _name);
 	XMLNode* patch_name_list = node->add_child("PatchNameList");
-	for (PatchNameList::iterator patch = _patch_name_list.begin();
+	for (PatchNameList::const_iterator patch = _patch_name_list.begin();
 	    patch != _patch_name_list.end();
 	    ++patch) {
 		patch_name_list->add_child_nocopy((*patch)->get_state());
@@ -436,9 +446,10 @@ PatchBank::set_state (const XMLTree& tree, const XMLNode& node)
 	if (patch_name_list) {
 		const XMLNodeList patches = patch_name_list->children();
 		for (XMLNodeList::const_iterator i = patches.begin(); i != patches.end(); ++i) {
-			boost::shared_ptr<Patch> patch (new Patch (string(), 0, _number));
-			patch->set_state(tree, *(*i));
-			_patch_name_list.push_back(patch);
+			std::shared_ptr<Patch> patch (new Patch (string(), 0, _number));
+			if (0 == patch->set_state(tree, *(*i))) {
+				_patch_name_list.push_back(patch);
+			}
 		}
 	} else {
 		XMLNode* use_patch_name_list = node.child ("UsesPatchNameList");
@@ -521,7 +532,7 @@ ChannelNameSet::use_patch_name_list (const PatchNameList& pnl)
 }
 
 XMLNode&
-ChannelNameSet::get_state (void)
+ChannelNameSet::get_state () const
 {
 	XMLNode* node = new XMLNode("ChannelNameSet");
 	node->set_property("Name",   _name);
@@ -542,7 +553,7 @@ ChannelNameSet::get_state (void)
 		}
 	}
 
-	for (PatchBanks::iterator patch_bank = _patch_banks.begin();
+	for (PatchBanks::const_iterator patch_bank = _patch_banks.begin();
 	    patch_bank != _patch_banks.end();
 	    ++patch_bank) {
 		node->add_child_nocopy((*patch_bank)->get_state());
@@ -562,7 +573,7 @@ ChannelNameSet::set_state (const XMLTree& tree, const XMLNode& node)
 		XMLNode* node = *i;
 		assert(node);
 		if (node->name() == "AvailableForChannels") {
-			boost::shared_ptr<XMLSharedNodeList> channels =
+			std::shared_ptr<XMLSharedNodeList> channels =
 				tree.find("//AvailableChannel[@Available = 'true']/@Channel", node);
 			for (XMLSharedNodeList::const_iterator i = channels->begin();
 			    i != channels->end();
@@ -575,7 +586,7 @@ ChannelNameSet::set_state (const XMLTree& tree, const XMLNode& node)
 				}
 			}
 		} else if (node->name() == "PatchBank") {
-			boost::shared_ptr<PatchBank> bank (new PatchBank ());
+			std::shared_ptr<PatchBank> bank (new PatchBank ());
 			bank->set_state(tree, *node);
 			_patch_banks.push_back(bank);
 			const PatchNameList& patches = bank->patch_name_list();
@@ -602,7 +613,7 @@ CustomDeviceMode::set_state(const XMLTree& tree, const XMLNode& a_node)
 
 	_name = a_node.property("Name")->value();
 
-	boost::shared_ptr<XMLSharedNodeList> channel_name_set_assignments =
+	std::shared_ptr<XMLSharedNodeList> channel_name_set_assignments =
 		tree.find("//ChannelNameSetAssign", const_cast<XMLNode *>(&a_node));
 	for (XMLSharedNodeList::const_iterator i = channel_name_set_assignments->begin();
 	    i != channel_name_set_assignments->end();
@@ -616,7 +627,7 @@ CustomDeviceMode::set_state(const XMLTree& tree, const XMLNode& a_node)
 }
 
 XMLNode&
-CustomDeviceMode::get_state(void)
+CustomDeviceMode::get_state () const
 {
 	XMLNode* custom_device_mode = new XMLNode("CustomDeviceMode");
 	custom_device_mode->set_property("Name",   _name);
@@ -632,22 +643,22 @@ CustomDeviceMode::get_state(void)
 	return *custom_device_mode;
 }
 
-boost::shared_ptr<const ValueNameList>
+std::shared_ptr<const ValueNameList>
 MasterDeviceNames::value_name_list_by_control(const std::string& mode, uint8_t channel, uint8_t number)
 {
-	boost::shared_ptr<ChannelNameSet> chan_names = channel_name_set_by_channel(mode, channel);
+	std::shared_ptr<ChannelNameSet> chan_names = channel_name_set_by_channel(mode, channel);
 	if (!chan_names) {
-		return boost::shared_ptr<const ValueNameList>();
+		return std::shared_ptr<const ValueNameList>();
 	}
 
-	boost::shared_ptr<ControlNameList> control_names = control_name_list(chan_names->control_list_name());
+	std::shared_ptr<ControlNameList> control_names = control_name_list(chan_names->control_list_name());
 	if (!control_names) {
-		return boost::shared_ptr<const ValueNameList>();
+		return std::shared_ptr<const ValueNameList>();
 	}
 
-	boost::shared_ptr<const Control> control = control_names->control(number);
+	std::shared_ptr<const Control> control = control_names->control(number);
 	if (!control) {
-		return boost::shared_ptr<const ValueNameList>();
+		return std::shared_ptr<const ValueNameList>();
 	}
 
 	if (!control->value_name_list_name().empty()) {
@@ -657,66 +668,66 @@ MasterDeviceNames::value_name_list_by_control(const std::string& mode, uint8_t c
 	}
 }
 
-boost::shared_ptr<CustomDeviceMode>
+std::shared_ptr<CustomDeviceMode>
 MasterDeviceNames::custom_device_mode_by_name(const std::string& mode_name)
 {
 	return _custom_device_modes[mode_name];
 }
 
-boost::shared_ptr<ChannelNameSet>
+std::shared_ptr<ChannelNameSet>
 MasterDeviceNames::channel_name_set_by_channel(const std::string& mode, uint8_t channel)
 {
-	boost::shared_ptr<CustomDeviceMode> cdm = custom_device_mode_by_name(mode);
-	boost::shared_ptr<ChannelNameSet> cns =  _channel_name_sets[cdm->channel_name_set_name_by_channel(channel)];
+	std::shared_ptr<CustomDeviceMode> cdm = custom_device_mode_by_name(mode);
+	std::shared_ptr<ChannelNameSet> cns =  _channel_name_sets[cdm->channel_name_set_name_by_channel(channel)];
 	return cns;
 }
 
-boost::shared_ptr<Patch>
+std::shared_ptr<Patch>
 MasterDeviceNames::find_patch(const std::string& mode, uint8_t channel, const PatchPrimaryKey& key)
 {
-	boost::shared_ptr<ChannelNameSet> cns = channel_name_set_by_channel(mode, channel);
-	if (!cns) return boost::shared_ptr<Patch>();
+	std::shared_ptr<ChannelNameSet> cns = channel_name_set_by_channel(mode, channel);
+	if (!cns) return std::shared_ptr<Patch>();
 	return cns->find_patch(key);
 }
 
-boost::shared_ptr<ChannelNameSet>
+std::shared_ptr<ChannelNameSet>
 MasterDeviceNames::channel_name_set(const std::string& name)
 {
 	ChannelNameSets::const_iterator i = _channel_name_sets.find(name);
 	if (i != _channel_name_sets.end()) {
 		return i->second;
 	}
-	return boost::shared_ptr<ChannelNameSet>();
+	return std::shared_ptr<ChannelNameSet>();
 }
 
-boost::shared_ptr<ControlNameList>
+std::shared_ptr<ControlNameList>
 MasterDeviceNames::control_name_list(const std::string& name)
 {
 	ControlNameLists::const_iterator i = _control_name_lists.find(name);
 	if (i != _control_name_lists.end()) {
 		return i->second;
 	}
-	return boost::shared_ptr<ControlNameList>();
+	return std::shared_ptr<ControlNameList>();
 }
 
-boost::shared_ptr<ValueNameList>
+std::shared_ptr<ValueNameList>
 MasterDeviceNames::value_name_list(const std::string& name)
 {
 	ValueNameLists::const_iterator i = _value_name_lists.find(name);
 	if (i != _value_name_lists.end()) {
 		return i->second;
 	}
-	return boost::shared_ptr<ValueNameList>();
+	return std::shared_ptr<ValueNameList>();
 }
 
-boost::shared_ptr<NoteNameList>
+std::shared_ptr<NoteNameList>
 MasterDeviceNames::note_name_list(const std::string& name)
 {
 	NoteNameLists::const_iterator i = _note_name_lists.find(name);
 	if (i != _note_name_lists.end()) {
 		return i->second;
 	}
-	return boost::shared_ptr<NoteNameList>();
+	return std::shared_ptr<NoteNameList>();
 }
 
 std::string
@@ -730,8 +741,8 @@ MasterDeviceNames::note_name(const std::string& mode_name,
 		return "";
 	}
 
-	boost::shared_ptr<const NoteNameList> note_names;
-	boost::shared_ptr<const Patch> patch(
+	std::shared_ptr<const NoteNameList> note_names;
+	std::shared_ptr<const Patch> patch(
 		find_patch(mode_name, channel, PatchPrimaryKey(program, bank)));
 	if (patch) {
 		note_names = note_name_list(patch->note_list_name());
@@ -739,7 +750,7 @@ MasterDeviceNames::note_name(const std::string& mode_name,
 
 	if (!note_names) {
 		/* No note names specific to this patch, check the ChannelNameSet */
-		boost::shared_ptr<ChannelNameSet> chan_names = channel_name_set_by_channel(
+		std::shared_ptr<ChannelNameSet> chan_names = channel_name_set_by_channel(
 			mode_name, channel);
 		if (chan_names) {
 			note_names = note_name_list(chan_names->note_list_name());
@@ -749,7 +760,7 @@ MasterDeviceNames::note_name(const std::string& mode_name,
 		return "";
 	}
 
-	boost::shared_ptr<const Note> note(note_names->notes()[number]);
+	std::shared_ptr<const Note> note(note_names->notes()[number]);
 	return note ? note->name() : "";
 }
 
@@ -757,12 +768,12 @@ int
 MasterDeviceNames::set_state(const XMLTree& tree, const XMLNode&)
 {
 	// Manufacturer
-	boost::shared_ptr<XMLSharedNodeList> manufacturer = tree.find("//Manufacturer");
+	std::shared_ptr<XMLSharedNodeList> manufacturer = tree.find("//Manufacturer");
 	assert(manufacturer->size() == 1);
 	_manufacturer = manufacturer->front()->children().front()->content();
 
 	// Models
-	boost::shared_ptr<XMLSharedNodeList> models = tree.find("//Model");
+	std::shared_ptr<XMLSharedNodeList> models = tree.find("//Model");
 	assert(models->size() >= 1);
 	for (XMLSharedNodeList::iterator i = models->begin();
 	     i != models->end();
@@ -775,11 +786,11 @@ MasterDeviceNames::set_state(const XMLTree& tree, const XMLNode&)
 	}
 
 	// CustomDeviceModes
-	boost::shared_ptr<XMLSharedNodeList> custom_device_modes = tree.find("//CustomDeviceMode");
+	std::shared_ptr<XMLSharedNodeList> custom_device_modes = tree.find("//CustomDeviceMode");
 	for (XMLSharedNodeList::iterator i = custom_device_modes->begin();
 	     i != custom_device_modes->end();
 	     ++i) {
-		boost::shared_ptr<CustomDeviceMode> custom_device_mode(new CustomDeviceMode());
+		std::shared_ptr<CustomDeviceMode> custom_device_mode(new CustomDeviceMode());
 		custom_device_mode->set_state(tree, *(*i));
 
 		_custom_device_modes[custom_device_mode->name()] = custom_device_mode;
@@ -787,58 +798,62 @@ MasterDeviceNames::set_state(const XMLTree& tree, const XMLNode&)
 	}
 
 	// ChannelNameSets
-	boost::shared_ptr<XMLSharedNodeList> channel_name_sets = tree.find("//ChannelNameSet");
+	std::shared_ptr<XMLSharedNodeList> channel_name_sets = tree.find("//ChannelNameSet");
 	for (XMLSharedNodeList::iterator i = channel_name_sets->begin();
 	     i != channel_name_sets->end();
 	     ++i) {
-		boost::shared_ptr<ChannelNameSet> channel_name_set(new ChannelNameSet());
+		std::shared_ptr<ChannelNameSet> channel_name_set(new ChannelNameSet());
 		channel_name_set->set_state(tree, *(*i));
 		_channel_name_sets[channel_name_set->name()] = channel_name_set;
 	}
 
 	// NoteNameLists
-	boost::shared_ptr<XMLSharedNodeList> note_name_lists = tree.find("//NoteNameList");
+	std::shared_ptr<XMLSharedNodeList> note_name_lists = tree.find("//NoteNameList");
 	for (XMLSharedNodeList::iterator i = note_name_lists->begin();
 	     i != note_name_lists->end();
 	     ++i) {
-		boost::shared_ptr<NoteNameList> note_name_list(new NoteNameList());
+		std::shared_ptr<NoteNameList> note_name_list(new NoteNameList());
 		note_name_list->set_state (tree, *(*i));
 		_note_name_lists[note_name_list->name()] = note_name_list;
 	}
 
 	// ControlNameLists
-	boost::shared_ptr<XMLSharedNodeList> control_name_lists = tree.find("//ControlNameList");
+	std::shared_ptr<XMLSharedNodeList> control_name_lists = tree.find("//ControlNameList");
 	for (XMLSharedNodeList::iterator i = control_name_lists->begin();
 	     i != control_name_lists->end();
 	     ++i) {
-		boost::shared_ptr<ControlNameList> control_name_list(new ControlNameList());
+		std::shared_ptr<ControlNameList> control_name_list(new ControlNameList());
 		control_name_list->set_state (tree, *(*i));
 		_control_name_lists[control_name_list->name()] = control_name_list;
 	}
 
 	// ValueNameLists
-	boost::shared_ptr<XMLSharedNodeList> value_name_lists = tree.find("/child::MIDINameDocument/child::MasterDeviceNames/child::ValueNameList");
+	std::shared_ptr<XMLSharedNodeList> value_name_lists = tree.find("/child::MIDINameDocument/child::MasterDeviceNames/child::ValueNameList");
 	for (XMLSharedNodeList::iterator i = value_name_lists->begin();
 	     i != value_name_lists->end();
 	     ++i) {
-		boost::shared_ptr<ValueNameList> value_name_list(new ValueNameList());
+		std::shared_ptr<ValueNameList> value_name_list(new ValueNameList());
 		value_name_list->set_state (tree, *(*i));
 		_value_name_lists[value_name_list->name()] = value_name_list;
 	}
 
 	// global/post-facto PatchNameLists
-	boost::shared_ptr<XMLSharedNodeList> patch_name_lists = tree.find("/child::MIDINameDocument/child::MasterDeviceNames/child::PatchNameList");
+	std::shared_ptr<XMLSharedNodeList> patch_name_lists = tree.find("/child::MIDINameDocument/child::MasterDeviceNames/child::PatchNameList");
 	for (XMLSharedNodeList::iterator i = patch_name_lists->begin();
 	     i != patch_name_lists->end();
 	     ++i) {
+
+		string n; (*i)->get_property ("Name", n);
 
 		PatchNameList patch_name_list;
 		const XMLNodeList patches = (*i)->children();
 
 		for (XMLNodeList::const_iterator p = patches.begin(); p != patches.end(); ++p) {
-			boost::shared_ptr<Patch> patch (new Patch ());
-			patch->set_state(tree, *(*p));
-			patch_name_list.push_back(patch);
+			std::shared_ptr<Patch> patch (new Patch ());
+			// cerr << "Let's try: "; (*(*p)).dump (cerr); cerr << endl;
+			if (0 == patch->set_state(tree, *(*p))) {
+				patch_name_list.push_back(patch);
+			}
 		}
 
 		if (!patch_name_list.empty()) {
@@ -875,7 +890,7 @@ MasterDeviceNames::set_state(const XMLTree& tree, const XMLNode&)
 }
 
 XMLNode&
-MasterDeviceNames::get_state(void)
+MasterDeviceNames::get_state () const
 {
 	static XMLNode nothing("<nothing>");
 	return nothing;
@@ -898,7 +913,7 @@ MIDINameDocument::set_state (const XMLTree& tree, const XMLNode&)
 {
 	// Author
 
-	boost::shared_ptr<XMLSharedNodeList> author = tree.find("//Author");
+	std::shared_ptr<XMLSharedNodeList> author = tree.find("//Author");
 	if (author->size() < 1) {
 		error << "No author information in MIDNAM file" << endmsg;
 		return -1;
@@ -910,12 +925,12 @@ MIDINameDocument::set_state (const XMLTree& tree, const XMLNode&)
 
 	// MasterDeviceNames
 
-	boost::shared_ptr<XMLSharedNodeList> master_device_names_list = tree.find ("//MasterDeviceNames");
+	std::shared_ptr<XMLSharedNodeList> master_device_names_list = tree.find ("//MasterDeviceNames");
 
 	for (XMLSharedNodeList::iterator i = master_device_names_list->begin();
 	     i != master_device_names_list->end();
 	     ++i) {
-		boost::shared_ptr<MasterDeviceNames> master_device_names(new MasterDeviceNames());
+		std::shared_ptr<MasterDeviceNames> master_device_names(new MasterDeviceNames());
 
 		if (master_device_names->set_state(tree, *(*i))) {
 			return -1;
@@ -925,7 +940,7 @@ MIDINameDocument::set_state (const XMLTree& tree, const XMLNode&)
 		     model != master_device_names->models().end();
 		     ++model) {
 			_master_device_names_list.insert(
-				std::pair<std::string, boost::shared_ptr<MasterDeviceNames> >
+				std::pair<std::string, std::shared_ptr<MasterDeviceNames> >
 				(*model,      master_device_names));
 
 			_all_models.insert(*model);
@@ -936,154 +951,22 @@ MIDINameDocument::set_state (const XMLTree& tree, const XMLNode&)
 }
 
 XMLNode&
-MIDINameDocument::get_state(void)
+MIDINameDocument::get_state () const
 {
 	static XMLNode nothing("<nothing>");
 	return nothing;
 }
 
-boost::shared_ptr<MasterDeviceNames>
+std::shared_ptr<MasterDeviceNames>
 MIDINameDocument::master_device_names(const std::string& model)
 {
 	MasterDeviceNamesList::const_iterator m = _master_device_names_list.find(model);
 	if (m != _master_device_names_list.end()) {
-		return boost::shared_ptr<MasterDeviceNames>(m->second);
+		return std::shared_ptr<MasterDeviceNames>(m->second);
 	}
-	return boost::shared_ptr<MasterDeviceNames>();
+	return std::shared_ptr<MasterDeviceNames>();
 }
-
-const char* general_midi_program_names[128] = {
-	"Acoustic Grand Piano",
-	"Bright Acoustic Piano",
-	"Electric Grand Piano",
-	"Honky-tonk Piano",
-	"Rhodes Piano",
-	"Chorused Piano",
-	"Harpsichord",
-	"Clavinet",
-	"Celesta",
-	"Glockenspiel",
-	"Music Box",
-	"Vibraphone",
-	"Marimba",
-	"Xylophone",
-	"Tubular Bells",
-	"Dulcimer",
-	"Hammond Organ",
-	"Percussive Organ",
-	"Rock Organ",
-	"Church Organ",
-	"Reed Organ",
-	"Accordion",
-	"Harmonica",
-	"Tango Accordion",
-	"Acoustic Guitar (nylon)",
-	"Acoustic Guitar (steel)",
-	"Electric Guitar (jazz)",
-	"Electric Guitar (clean)",
-	"Electric Guitar (muted)",
-	"Overdriven Guitar",
-	"Distortion Guitar",
-	"Guitar Harmonics",
-	"Acoustic Bass",
-	"Electric Bass (finger)",
-	"Electric Bass (pick)",
-	"Fretless Bass",
-	"Slap Bass 1",
-	"Slap Bass 2",
-	"Synth Bass 1",
-	"Synth Bass 2",
-	"Violin",
-	"Viola",
-	"Cello",
-	"Contrabass",
-	"Tremolo Strings",
-	"Pizzicato Strings",
-	"Orchestral Harp",
-	"Timpani",
-	"String Ensemble 1",
-	"String Ensemble 2",
-	"SynthStrings 1",
-	"SynthStrings 2",
-	"Choir Aahs",
-	"Voice Oohs",
-	"Synth Voice",
-	"Orchestra Hit",
-	"Trumpet",
-	"Trombone",
-	"Tuba",
-	"Muted Trumpet",
-	"French Horn",
-	"Brass Section",
-	"Synth Brass 1",
-	"Synth Brass 2",
-	"Soprano Sax",
-	"Alto Sax",
-	"Tenor Sax",
-	"Baritone Sax",
-	"Oboe",
-	"English Horn",
-	"Bassoon",
-	"Clarinet",
-	"Piccolo",
-	"Flute",
-	"Recorder",
-	"Pan Flute",
-	"Bottle Blow",
-	"Shakuhachi",
-	"Whistle",
-	"Ocarina",
-	"Lead 1 (square)",
-	"Lead 2 (sawtooth)",
-	"Lead 3 (calliope lead)",
-	"Lead 4 (chiff lead)",
-	"Lead 5 (charang)",
-	"Lead 6 (voice)",
-	"Lead 7 (fifths)",
-	"Lead 8 (bass + lead)",
-	"Pad 1 (new age)",
-	"Pad 2 (warm)",
-	"Pad 3 (polysynth)",
-	"Pad 4 (choir)",
-	"Pad 5 (bowed)",
-	"Pad 6 (metallic)",
-	"Pad 7 (halo)",
-	"Pad 8 (sweep)",
-	"FX 1 (rain)",
-	"FX 2 (soundtrack)",
-	"FX 3 (crystal)",
-	"FX 4 (atmosphere)",
-	"FX 5 (brightness)",
-	"FX 6 (goblins)",
-	"FX 7 (echoes)",
-	"FX 8 (sci-fi)",
-	"Sitar",
-	"Banjo",
-	"Shamisen",
-	"Koto",
-	"Kalimba",
-	"Bagpipe",
-	"Fiddle",
-	"Shanai",
-	"Tinkle Bell",
-	"Agogo",
-	"Steel Drums",
-	"Woodblock",
-	"Taiko Drum",
-	"Melodic Tom",
-	"Synth Drum",
-	"Reverse Cymbal",
-	"Guitar Fret Noise",
-	"Breath Noise",
-	"Seashore",
-	"Bird Tweet",
-	"Telephone Ring",
-	"Helicopter",
-	"Applause",
-	"Gunshot",
-};
 
 } //namespace Name
 
 } //namespace MIDI
-

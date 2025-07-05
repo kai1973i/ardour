@@ -1,21 +1,28 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006 Hans Fugal <hans@fugal.net>
+ * Copyright (C) 2008-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2014-2016 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2015-2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cmath>
 #include <cstdlib>
@@ -58,23 +65,25 @@ LocationEditRow::LocationEditRow(Session * sess, Location * loc, int32_t num)
 	, locate_to_end_button (_("Goto"))
 	, length_clock (X_("locationlength"), true, "", true, false, true)
 	, cd_check_button (_("CD"))
+	, section_check_button (S_("Arrangement|Arr."))
 	, hide_check_button (_("Hide"))
 	, lock_check_button (_("Lock"))
-	, glue_check_button (_("Glue"))
 	, _clock_group (0)
 {
+
 	i_am_the_modifier = 0;
 
 	remove_button.set_icon (ArdourIcon::CloseCross);
 	remove_button.set_events (remove_button.get_events() & ~(Gdk::ENTER_NOTIFY_MASK|Gdk::LEAVE_NOTIFY_MASK));
 
 	number_label.set_name ("LocationEditNumberLabel");
+	date_label.set_name ("LocationDateLabel");
 	name_label.set_name ("LocationEditNameLabel");
 	name_entry.set_name ("LocationEditNameEntry");
 	cd_check_button.set_name ("LocationEditCdButton");
+	section_check_button.set_name ("LocationEditSectionButton");
 	hide_check_button.set_name ("LocationEditHideButton");
 	lock_check_button.set_name ("LocationEditLockButton");
-	glue_check_button.set_name ("LocationEditGlueButton");
 	isrc_label.set_name ("LocationEditNumberLabel");
 	isrc_entry.set_name ("LocationEditNameEntry");
 	scms_check_button.set_name ("LocationEditCdButton");
@@ -157,9 +166,9 @@ LocationEditRow::LocationEditRow(Session * sess, Location * loc, int32_t num)
 	length_clock.ValueChanged.connect (sigc::bind ( sigc::mem_fun(*this, &LocationEditRow::clock_changed), LocLength));
 
 	cd_check_button.signal_toggled().connect(sigc::mem_fun(*this, &LocationEditRow::cd_toggled));
+	section_check_button.signal_toggled().connect(sigc::mem_fun(*this, &LocationEditRow::section_toggled));
 	hide_check_button.signal_toggled().connect(sigc::mem_fun(*this, &LocationEditRow::hide_toggled));
 	lock_check_button.signal_toggled().connect(sigc::mem_fun(*this, &LocationEditRow::lock_toggled));
-	glue_check_button.signal_toggled().connect(sigc::mem_fun(*this, &LocationEditRow::glue_toggled));
 
 	remove_button.signal_clicked.connect(sigc::mem_fun(*this, &LocationEditRow::remove_button_pressed));
 
@@ -205,6 +214,7 @@ LocationEditRow::set_session (Session *sess)
 	SessionHandlePtr::set_session (sess);
 
 	if (!_session) {
+		set_location (0);
 		return;
 	}
 
@@ -241,11 +251,14 @@ LocationEditRow::set_location (Location *loc)
 	if (!hide_check_button.get_parent()) {
 		item_table.attach (hide_check_button, 5, 6, 0, 1, FILL, Gtk::FILL, 4, 0);
 		item_table.attach (lock_check_button, 6, 7, 0, 1, FILL, Gtk::FILL, 4, 0);
-		item_table.attach (glue_check_button, 7, 8, 0, 1, FILL, Gtk::FILL, 4, 0);
+
+		Glib::DateTime gdt(Glib::DateTime::create_now_local (location->timestamp()));
+		string date = gdt.format ("%F %H:%M");
+		date_label.set_text(date);
+		item_table.attach (date_label, 9, 10, 0, 1, FILL, Gtk::FILL, 4, 0);
 	}
 	hide_check_button.set_active (location->is_hidden());
 	lock_check_button.set_active (location->locked());
-	glue_check_button.set_active (location->position_lock_style() == MusicTime);
 
 	if (location->is_auto_loop() || location-> is_auto_punch()) {
 		// use label instead of entry
@@ -274,25 +287,23 @@ LocationEditRow::set_location (Location *loc)
 		name_entry.show();
 
 		if (!cd_check_button.get_parent()) {
-			item_table.attach (cd_check_button, 4, 5, 0, 1, FILL, Gtk::AttachOptions (0), 4, 0);
+			item_table.attach (cd_check_button, 3, 4, 0, 1, FILL, Gtk::AttachOptions (0), 4, 0);
+		}
+
+		if (!section_check_button.get_parent()) {
+			item_table.attach (section_check_button, 4, 5, 0, 1, FILL, Gtk::AttachOptions (0), 4, 0);
 		}
 
 		if (location->is_session_range()) {
 			remove_button.set_sensitive (false);
 		}
 
-		cd_check_button.set_active (location->is_cd_marker());
+		flags_changed ();
+
 		cd_check_button.show();
-
-		if (location->start() == _session->current_start_sample()) {
-			cd_check_button.set_sensitive (false);
-		} else {
-			cd_check_button.set_sensitive (true);
-		}
-
+		section_check_button.show();
 		hide_check_button.show();
 		lock_check_button.show();
-		glue_check_button.show();
 	}
 
 	start_clock.set (location->start(), true);
@@ -307,7 +318,7 @@ LocationEditRow::set_location (Location *loc)
 		}
 
 		end_clock.set (location->end(), true);
-		length_clock.set (location->length(), true);
+		length_clock.set_duration (location->length(), true);
 
 		end_clock.show();
 		length_clock.show();
@@ -341,13 +352,12 @@ LocationEditRow::set_location (Location *loc)
 
 	/* connect to per-location signals, since this row only cares about this location */
 
-	location->NameChanged.connect (connections, invalidator (*this), boost::bind (&LocationEditRow::name_changed, this), gui_context());
-	location->StartChanged.connect (connections, invalidator (*this), boost::bind (&LocationEditRow::start_changed, this), gui_context());
-	location->EndChanged.connect (connections, invalidator (*this), boost::bind (&LocationEditRow::end_changed, this), gui_context());
-	location->Changed.connect (connections, invalidator (*this), boost::bind (&LocationEditRow::location_changed, this), gui_context());
-	location->FlagsChanged.connect (connections, invalidator (*this), boost::bind (&LocationEditRow::flags_changed, this), gui_context());
-	location->LockChanged.connect (connections, invalidator (*this), boost::bind (&LocationEditRow::lock_changed, this), gui_context());
-	location->PositionLockStyleChanged.connect (connections, invalidator (*this), boost::bind (&LocationEditRow::position_lock_style_changed, this), gui_context());
+	location->NameChanged.connect (connections, invalidator (*this), std::bind (&LocationEditRow::name_changed, this), gui_context());
+	location->StartChanged.connect (connections, invalidator (*this), std::bind (&LocationEditRow::start_changed, this), gui_context());
+	location->EndChanged.connect (connections, invalidator (*this), std::bind (&LocationEditRow::end_changed, this), gui_context());
+	location->Changed.connect (connections, invalidator (*this), std::bind (&LocationEditRow::location_changed, this), gui_context());
+	location->FlagsChanged.connect (connections, invalidator (*this), std::bind (&LocationEditRow::flags_changed, this), gui_context());
+	location->LockChanged.connect (connections, invalidator (*this), std::bind (&LocationEditRow::lock_changed, this), gui_context());
 }
 
 void
@@ -414,16 +424,14 @@ LocationEditRow::to_playhead_button_pressed (LocationPart part)
 		return;
 	}
 
-	const int32_t divisions = PublicEditor::instance().get_grid_music_divisions (0);
-
 	switch (part) {
 		case LocStart:
-			location->set_start (_session->transport_sample (), false, true, divisions);
+			location->set_start (timepos_t (_session->transport_sample ()), false);
 			break;
 		case LocEnd:
-			location->set_end (_session->transport_sample (), false, true,divisions);
+			location->set_end (timepos_t (_session->transport_sample ()), false);
 			if (location->is_session_range()) {
-				_session->set_end_is_free (false);
+				_session->set_session_range_is_free (false);
 			}
 			break;
 		default:
@@ -436,10 +444,10 @@ LocationEditRow::locate_button_pressed (LocationPart part)
 {
 	switch (part) {
 		case LocStart:
-			_session->request_locate (start_clock.current_time());
+			_session->request_locate (start_clock.last_when().samples());
 			break;
 		case LocEnd:
-			_session->request_locate (end_clock.current_time());
+			_session->request_locate (end_clock.last_when().samples());
 			break;
 		default:
 			break;
@@ -450,7 +458,7 @@ bool
 LocationEditRow::locate_to_clock (GdkEventButton* ev, AudioClock* clock)
 {
 	if (Keyboard::is_button2_event (ev)) {
-		_session->request_locate (clock->current_time());
+		_session->request_locate (clock->last_when().samples());
 		return true;
 	}
 	return false;
@@ -463,22 +471,20 @@ LocationEditRow::clock_changed (LocationPart part)
 		return;
 	}
 
-	const int32_t divisions = PublicEditor::instance().get_grid_music_divisions (0);
-
 	switch (part) {
 		case LocStart:
-			location->set_start (start_clock.current_time(), false, true, divisions);
+			location->set_start (start_clock.last_when(), false);
 			break;
 		case LocEnd:
-			location->set_end (end_clock.current_time(), false, true, divisions);
+			location->set_end (end_clock.last_when(), false);
 			if (location->is_session_range()) {
-				_session->set_end_is_free (false);
+				_session->set_session_range_is_free (false);
 			}
 			break;
 		case LocLength:
-			location->set_end (location->start() + length_clock.current_duration(), false, true, divisions);
+			location->set_end (location->start() + length_clock.current_duration(), false);
 			if (location->is_session_range()) {
-				_session->set_end_is_free (false);
+				_session->set_session_range_is_free (false);
 			}
 		default:
 			break;
@@ -519,18 +525,6 @@ LocationEditRow::cd_toggled ()
 		return;
 	}
 
-	//if (cd_check_button.get_active() == location->is_cd_marker()) {
-	//	return;
-	//}
-
-	if (cd_check_button.get_active()) {
-		if (location->start() <= _session->current_start_sample()) {
-			error << _("You cannot put a CD marker at the start of the session") << endmsg;
-			cd_check_button.set_active (false);
-			return;
-		}
-	}
-
 	location->set_cd (cd_check_button.get_active(), this);
 
 	if (location->is_cd_marker()) {
@@ -541,8 +535,17 @@ LocationEditRow::cd_toggled ()
 
 		item_table.remove (cd_track_details_hbox);
 		//	  item_table.resize(1, 7);
-		redraw_ranges(); /* 	EMIT_SIGNAL */
+		redraw_ranges(); /* EMIT_SIGNAL */
 	}
+}
+
+void
+LocationEditRow::section_toggled ()
+{
+	if (i_am_the_modifier || !location) {
+		return;
+	}
+	location->set_section (section_check_button.get_active());
 }
 
 void
@@ -570,27 +573,13 @@ LocationEditRow::lock_toggled ()
 }
 
 void
-LocationEditRow::glue_toggled ()
-{
-	if (i_am_the_modifier || !location) {
-		return;
-	}
-
-	if (location->position_lock_style() == AudioTime) {
-		location->set_position_lock_style (MusicTime);
-	} else {
-		location->set_position_lock_style (AudioTime);
-	}
-}
-
-void
 LocationEditRow::remove_button_pressed ()
 {
 	if (!location) {
 		return;
 	}
 
-	remove_requested (location); /*	EMIT_SIGNAL */
+	remove_requested (location); /* EMIT_SIGNAL */
 }
 
 
@@ -631,7 +620,7 @@ LocationEditRow::end_changed ()
 	i_am_the_modifier++;
 
 	end_clock.set (location->end());
-	length_clock.set (location->length());
+	length_clock.set_duration (location->length());
 
 	i_am_the_modifier--;
 }
@@ -645,12 +634,6 @@ LocationEditRow::start_changed ()
 	i_am_the_modifier++;
 
 	start_clock.set (location->start());
-
-	if (location->start() == _session->current_start_sample()) {
-		cd_check_button.set_sensitive (false);
-	} else {
-		cd_check_button.set_sensitive (true);
-	}
 
 	i_am_the_modifier--;
 }
@@ -680,7 +663,7 @@ LocationEditRow::location_changed ()
 
 	start_clock.set (location->start());
 	end_clock.set (location->end());
-	length_clock.set (location->length());
+	length_clock.set_duration (location->length());
 
 	set_clock_editable_status ();
 
@@ -698,8 +681,22 @@ LocationEditRow::flags_changed ()
 	i_am_the_modifier++;
 
 	cd_check_button.set_active (location->is_cd_marker());
+	section_check_button.set_active (location->is_section());
 	hide_check_button.set_active (location->is_hidden());
-	glue_check_button.set_active (location->position_lock_style() == MusicTime);
+
+	if (location->is_cue_marker()) {
+		cd_check_button.set_sensitive (false);
+		section_check_button.set_sensitive (false);
+	} else if (location->is_section()) {
+		cd_check_button.set_sensitive (false);
+		section_check_button.set_sensitive (true);
+	} else if (location->is_cd_marker()) {
+		cd_check_button.set_sensitive (true);
+		section_check_button.set_sensitive (false);
+	} else {
+		cd_check_button.set_sensitive (true);
+		section_check_button.set_sensitive (true);
+	}
 
 	i_am_the_modifier--;
 }
@@ -716,20 +713,6 @@ LocationEditRow::lock_changed ()
 	lock_check_button.set_active (location->locked());
 
 	set_clock_editable_status ();
-
-	i_am_the_modifier--;
-}
-
-void
-LocationEditRow::position_lock_style_changed ()
-{
-	if (!location) {
-		return;
-	}
-
-	i_am_the_modifier++;
-
-	glue_check_button.set_active (location->position_lock_style() == MusicTime);
 
 	i_am_the_modifier--;
 }
@@ -803,20 +786,20 @@ LocationUI::LocationUI (std::string state_node_name)
 	location_rows.set_name("LocationLocRows");
 	location_rows_scroller.add (location_rows);
 	location_rows_scroller.set_name ("LocationLocRowsScroller");
-	location_rows_scroller.set_policy (Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+	location_rows_scroller.set_policy (Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
 	location_rows_scroller.set_size_request (-1, 130);
 
 	newest_location = 0;
 
-	loc_sample_box.set_spacing (5);
-	loc_sample_box.set_border_width (5);
-	loc_sample_box.set_name("LocationFrameBox");
+	loc_frame_box.set_spacing (5);
+	loc_frame_box.set_border_width (5);
+	loc_frame_box.set_name("LocationFrameBox");
 
-	loc_sample_box.pack_start (location_rows_scroller, true, true);
+	loc_frame_box.pack_start (location_rows_scroller, true, true);
 
 	add_location_button.set_name ("LocationAddLocationButton");
 
-	table->attach (loc_sample_box, 0, 2, table_row, table_row + 1);
+	table->attach (loc_frame_box, 0, 2, table_row, table_row + 1);
 	++table_row;
 
 	loc_range_panes.add (*table);
@@ -838,17 +821,17 @@ LocationUI::LocationUI (std::string state_node_name)
 	range_rows.set_name("LocationRangeRows");
 	range_rows_scroller.add (range_rows);
 	range_rows_scroller.set_name ("LocationRangeRowsScroller");
-	range_rows_scroller.set_policy (Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+	range_rows_scroller.set_policy (Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
 	range_rows_scroller.set_size_request (-1, 130);
 
-	range_sample_box.set_spacing (5);
-	range_sample_box.set_name("LocationFrameBox");
-	range_sample_box.set_border_width (5);
-	range_sample_box.pack_start (range_rows_scroller, true, true);
+	range_frame_box.set_spacing (5);
+	range_frame_box.set_name("LocationFrameBox");
+	range_frame_box.set_border_width (5);
+	range_frame_box.pack_start (range_rows_scroller, true, true);
 
 	add_range_button.set_name ("LocationAddRangeButton");
 
-	table->attach (range_sample_box, 0, 2, table_row, table_row + 1);
+	table->attach (range_frame_box, 0, 2, table_row, table_row + 1);
 	++table_row;
 
 	loc_range_panes.add (*table);
@@ -908,7 +891,6 @@ LocationUI::location_remove_requested (ARDOUR::Location *loc)
 	Glib::signal_idle().connect (sigc::bind (sigc::mem_fun(*this, &LocationUI::do_location_remove), loc));
 }
 
-
 void
 LocationUI::location_redraw_ranges ()
 {
@@ -929,6 +911,9 @@ LocationUI::location_added (Location* location)
 		punch_edit_row.set_location(location);
 	} else if (location->is_auto_loop()) {
 		loop_edit_row.set_location(location);
+	} else if (location->is_xrun()) {
+		/* we don't show xrun markers here */
+		return;
 	} else if (location->is_range_marker() || location->is_mark()) {
 		Locations::LocationList loc = _session->locations()->list ();
 		loc.sort (LocationSortByStart ());
@@ -945,7 +930,7 @@ LocationUI::location_added (Location* location)
 		Box_Helpers::BoxList::iterator j = children.begin ();
 		while (i != loc.end()) {
 
-			if (location->flags() != (*i)->flags()) {
+			if (location->is_range_marker() != (*i)->is_range_marker()) {
 				/* Skip locations in the session list that aren't of the right type */
 				++i;
 				continue;
@@ -995,19 +980,50 @@ LocationUI::location_removed (Location* location)
 }
 
 void
+LocationUI::start_changed (Location *location)
+{
+	Gtk::VBox& box = location->is_range_marker() ? range_rows : location_rows;
+	LocationEditRow* r = NULL;
+	for (auto const& i : box.children ()) {
+		r = dynamic_cast<LocationEditRow*> (i.get_widget());
+		if (r && r->get_location() == location) {
+			break;
+		}
+	}
+	if (!r) {
+		return;
+	}
+
+	int pos = 0;
+	Locations::LocationList loc = _session->locations()->list ();
+	loc.sort (LocationSortByStart ());
+	for (auto const& l : loc) {
+		if (location->is_range_marker() != l->is_range_marker()) {
+			/* Skip locations in the session list that aren't of the right type */
+			continue;
+		}
+		if (location->is_auto_loop() || location-> is_auto_punch()) {
+			continue;
+		}
+		if (l == location) {
+			box.reorder_child (*r, pos);
+			break;
+		}
+		++pos;
+	}
+}
+
+void
 LocationUI::map_locations (const Locations::LocationList& locations)
 {
 	Locations::LocationList::iterator i;
-	gint n;
 	int mark_n = 0;
 	Locations::LocationList temp = locations;
 	LocationSortByStart cmp;
 
 	temp.sort (cmp);
 
-	for (n = 0, i = temp.begin(); i != temp.end(); ++n, ++i) {
-
-		Location* location = *i;
+	for (auto & location : temp) {
 
 		if (location->is_mark()) {
 			LocationEditRow* erow = manage (new LocationEditRow (_session, location, mark_n));
@@ -1047,7 +1063,7 @@ LocationUI::add_new_location()
 	string markername;
 
 	if (_session) {
-		samplepos_t where = _session->audible_sample();
+		timepos_t where (_session->audible_sample());
 		_session->locations()->next_available_name(markername,"mark");
 		Location *location = new Location (*_session, where, where, markername, Location::IsMark);
 		if (UIConfiguration::instance().get_name_new_markers()) {
@@ -1069,7 +1085,7 @@ LocationUI::add_new_range()
 	string rangename;
 
 	if (_session) {
-		samplepos_t where = _session->audible_sample();
+		timepos_t where (_session->audible_sample());
 		_session->locations()->next_available_name(rangename,"unnamed");
 		Location *location = new Location (*_session, where, where, rangename, Location::IsRangeMarker);
 		PublicEditor::instance().begin_reversible_command (_("add range marker"));
@@ -1088,7 +1104,7 @@ LocationUI::refresh_location_list ()
 	using namespace Box_Helpers;
 
 	// this is just too expensive to do when window is not shown
-	if (!is_mapped()) {
+	if (!get_mapped ()) {
 		return;
 	}
 
@@ -1109,17 +1125,18 @@ LocationUI::set_session(ARDOUR::Session* s)
 	SessionHandlePtr::set_session (s);
 
 	if (_session) {
-		_session->locations()->added.connect (_session_connections, invalidator (*this), boost::bind (&LocationUI::location_added, this, _1), gui_context());
-		_session->locations()->removed.connect (_session_connections, invalidator (*this), boost::bind (&LocationUI::location_removed, this, _1), gui_context());
-		_session->locations()->changed.connect (_session_connections, invalidator (*this), boost::bind (&LocationUI::refresh_location_list, this), gui_context());
+		_session->locations()->added.connect (_session_connections, invalidator (*this), std::bind (&LocationUI::location_added, this, _1), gui_context());
+		_session->locations()->removed.connect (_session_connections, invalidator (*this), std::bind (&LocationUI::location_removed, this, _1), gui_context());
+		_session->locations()->changed.connect (_session_connections, invalidator (*this), std::bind (&LocationUI::refresh_location_list, this), gui_context());
+		Location::start_changed.connect (_session_connections, invalidator (*this), std::bind (&LocationUI::start_changed, this, _1), gui_context());
 
 		_clock_group->set_clock_mode (clock_mode_from_session_instant_xml ());
+
+		loop_edit_row.set_session (s);
+		punch_edit_row.set_session (s);
 	} else {
 		_mode_set = false;
 	}
-
-	loop_edit_row.set_session (s);
-	punch_edit_row.set_session (s);
 
 	refresh_location_list ();
 }
@@ -1135,12 +1152,6 @@ LocationUI::session_going_away()
 
 	loc_children.clear();
 	range_children.clear();
-
-	loop_edit_row.set_session (0);
-	loop_edit_row.set_location (0);
-
-	punch_edit_row.set_session (0);
-	punch_edit_row.set_location (0);
 
 	_mode_set = false;
 
@@ -1180,11 +1191,11 @@ LocationUI::clock_mode_from_session_instant_xml ()
 
 	XMLNode* node = _session->instant_xml (_state_node_name);
 	if (!node) {
-		return ARDOUR_UI::instance()->secondary_clock->mode();
+		return ARDOUR_UI::instance()->primary_clock->mode();
 	}
 
 	if (!node->get_property (X_("clock-mode"), _mode)) {
-		return ARDOUR_UI::instance()->secondary_clock->mode();
+		return ARDOUR_UI::instance()->primary_clock->mode();
 	}
 
 	_mode_set = true;
@@ -1224,8 +1235,10 @@ void
 LocationUIWindow::set_session (Session *s)
 {
 	ArdourWindow::set_session (s);
-	_ui.set_session (s);
-	_ui.show_all ();
+	if (s) {
+		_ui.set_session (s);
+		_ui.show_all ();
+	}
 }
 
 void

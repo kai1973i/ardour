@@ -1,27 +1,29 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2013 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2008-2013 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2015 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __export_channel_selector_h__
-#define __export_channel_selector_h__
+#pragma once
 
 #include <list>
+#include <memory>
 
 #include "ardour/export_profile_manager.h"
 
@@ -30,18 +32,20 @@
 #endif
 
 #include <sigc++/signal.h>
-#include <boost/shared_ptr.hpp>
 
-#include <gtkmm/alignment.h>
-#include <gtkmm/box.h>
-#include <gtkmm/cellrenderercombo.h>
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/label.h>
-#include <gtkmm/liststore.h>
-#include <gtkmm/scrolledwindow.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/treemodel.h>
-#include <gtkmm/treeview.h>
+
+#include <ytkmm/alignment.h>
+#include <ytkmm/box.h>
+#include <ytkmm/cellrenderercombo.h>
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/label.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/scrolledwindow.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/treemodel.h>
+#include <ytkmm/treeview.h>
+
+#include "widgets/ardour_dropdown.h"
 
 namespace ARDOUR {
 	class Session;
@@ -59,9 +63,9 @@ class XMLNode;
 class ExportChannelSelector : public Gtk::HBox, public ARDOUR::SessionHandlePtr
 {
 protected:
-	typedef boost::shared_ptr<ARDOUR::ExportChannelConfiguration> ChannelConfigPtr;
+	typedef std::shared_ptr<ARDOUR::ExportChannelConfiguration> ChannelConfigPtr;
 	typedef std::list<ChannelConfigPtr> ChannelConfigList;
-	typedef boost::shared_ptr<ARDOUR::ExportProfileManager> ProfileManagerPtr;
+	typedef std::shared_ptr<ARDOUR::ExportProfileManager> ProfileManagerPtr;
 
 	ProfileManagerPtr manager;
 
@@ -74,6 +78,7 @@ public:
 	virtual ~ExportChannelSelector () {}
 
 	virtual void sync_with_manager () = 0;
+	virtual bool channel_limit_reached () const = 0;
 
 	sigc::signal<void> CriticalSelectionChanged;
 };
@@ -86,6 +91,7 @@ public:
 	~PortExportChannelSelector ();
 
 	void sync_with_manager ();
+	bool channel_limit_reached () const;
 
 private:
 
@@ -141,7 +147,7 @@ private:
 		public:
 			Channel (RouteCols & cols) { cols.add (port); cols.add (label); }
 
-			Gtk::TreeModelColumn<boost::weak_ptr<ARDOUR::AudioPort> > port;
+			Gtk::TreeModelColumn<std::weak_ptr<ARDOUR::AudioPort> > port;
 			Gtk::TreeModelColumn<std::string> label;
 		};
 		std::list<Channel> channels;
@@ -159,7 +165,7 @@ private:
 			PortCols () { add(selected); add(port); add(label); }
 
 			Gtk::TreeModelColumn<bool> selected;  // not used ATM
-			Gtk::TreeModelColumn<boost::weak_ptr<ARDOUR::AudioPort> > port;
+			Gtk::TreeModelColumn<std::weak_ptr<ARDOUR::AudioPort> > port;
 			Gtk::TreeModelColumn<std::string> label;
 		};
 		PortCols port_cols;
@@ -179,6 +185,8 @@ private:
 		void clear_routes () { route_list->clear (); }
 		void add_route (ARDOUR::IO * route);
 		void set_channel_count (uint32_t channels);
+		uint32_t channel_count () const { return n_channels; }
+		uint32_t max_route_channel_count () const;
 
 		sigc::signal<void> CriticalSelectionChanged;
 
@@ -216,18 +224,18 @@ public:
 	                             ARDOUR::AudioTrack & track);
 
 	virtual void sync_with_manager ();
+	bool channel_limit_reached () const { return false; }
 
 private:
 
 	void handle_selection ();
 
 	ARDOUR::ExportProfileManager::ChannelConfigStatePtr state;
-	boost::shared_ptr<ARDOUR::RegionExportChannelFactory> factory;
+	std::shared_ptr<ARDOUR::RegionExportChannelFactory> factory;
 	ARDOUR::AudioRegion const & region;
 	ARDOUR::AudioTrack & track;
 
 	uint32_t region_chans;
-	uint32_t track_chans;
 
 	/*** GUI components ***/
 
@@ -236,22 +244,24 @@ private:
 	Gtk::RadioButtonGroup type_group;
 	Gtk::RadioButton      raw_button;
 	Gtk::RadioButton      fades_button;
-	Gtk::RadioButton      processed_button;
 };
 
 class TrackExportChannelSelector : public ExportChannelSelector
 {
   public:
 	TrackExportChannelSelector (ARDOUR::Session * session, ProfileManagerPtr manager);
+	~TrackExportChannelSelector ();
 
-	virtual void sync_with_manager ();
+	void sync_with_manager ();
 
 	bool track_output () const { return track_output_button.get_active(); }
+	bool channel_limit_reached () const { return false; }
 
   private:
 
 	void fill_list();
-	void add_track (boost::shared_ptr<ARDOUR::Route> route);
+	bool sync_with_manager_state ();
+	void add_track (std::shared_ptr<ARDOUR::Route> route, bool selected);
 	void update_config();
 	ChannelConfigList configs;
 
@@ -260,7 +270,7 @@ class TrackExportChannelSelector : public ExportChannelSelector
 	struct TrackCols : public Gtk::TreeModelColumnRecord
 	{
 	  public:
-		Gtk::TreeModelColumn<boost::shared_ptr<ARDOUR::Route> > route;
+		Gtk::TreeModelColumn<std::shared_ptr<ARDOUR::Route> > route;
 		Gtk::TreeModelColumn<std::string>     label;
 		Gtk::TreeModelColumn<bool>            selected;
 		Gtk::TreeModelColumn<uint32_t>        order_key;
@@ -274,16 +284,16 @@ class TrackExportChannelSelector : public ExportChannelSelector
 
 	Gtk::ScrolledWindow          track_scroller;
 
-	Gtk::HBox                    options_box;
-	Gtk::CheckButton             track_output_button;
-	Gtk::Button                  select_tracks_button;
-	Gtk::Button                  select_busses_button;
-	Gtk::Button                  select_none_button;
-	void select_tracks ();
+	Gtk::HBox                     options_box;
+	Gtk::CheckButton              track_output_button;
+	ArdourWidgets::ArdourDropdown select_menu;
+	Gtk::CheckMenuItem*           exclude_hidden;
+	Gtk::CheckMenuItem*           exclude_muted;
+	void select_tracks (int);
 	void select_busses ();
 	void select_none ();
 
 	void track_outputs_selected ();
+	bool _syncing_with_manager;
 };
 
-#endif /* __export_channel_selector_h__ */

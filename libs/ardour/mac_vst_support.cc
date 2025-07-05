@@ -1,20 +1,19 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
- * Copyright (C) 2012 Paul Davis
+ * Copyright (C) 2016-2021 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <stdio.h>
@@ -39,8 +38,6 @@
 #include "pbd/error.h"
 
 #include "pbd/i18n.h"
-
-#include <Carbon/Carbon.h>
 
 /*Simple error handler stuff for VSTFX*/
 
@@ -97,42 +94,43 @@ mac_vst_load (const char *path)
 
 	fhandle = mac_vst_handle_new ();
 
-	fhandle->dll = NULL;
+	fhandle->bundleRef = 0;
 
 	CFURLRef url;
 	if (!(url = CFURLCreateFromFileSystemRepresentation (0, (const UInt8*)path, (CFIndex) strlen (path), true))) {
 		return 0;
 	}
 
-	CFBundleRef bundleRef = CFBundleCreate (kCFAllocatorDefault, url);
+	fhandle->bundleRef = CFBundleCreate (kCFAllocatorDefault, url);
 	CFRelease (url);
 
-	if (bundleRef == 0) {
+	if (fhandle->bundleRef == 0) {
+		free (fhandle);
 		return 0;
 	}
 
-	if (!CFBundleLoadExecutable (bundleRef)) {
-		CFRelease (bundleRef);
+	if (!CFBundleLoadExecutable (fhandle->bundleRef)) {
+		free (fhandle);
 		return 0;
 	}
 
 	fhandle->name = strdup (path);
-	fhandle->dll = (void*) &bundleRef;
 
 	fhandle->main_entry = (main_entry_t)
-		CFBundleGetFunctionPointerForName (bundleRef, CFSTR("main_macho"));
+		CFBundleGetFunctionPointerForName (fhandle->bundleRef, CFSTR("main_macho"));
 
 	if (!fhandle->main_entry) {
 		fhandle->main_entry = (main_entry_t)
-			CFBundleGetFunctionPointerForName (bundleRef, CFSTR("VSTPluginMain"));
+			CFBundleGetFunctionPointerForName (fhandle->bundleRef, CFSTR("VSTPluginMain"));
 	}
 
 	if (fhandle->main_entry == 0) {
+		PBD::error << string_compose (_("Missing entry method in VST2 plugin '%1'"), path) << endmsg;
 		mac_vst_unload (fhandle);
 		return 0;
 	}
 
-	fhandle->res_file_id = CFBundleOpenBundleResourceMap (bundleRef);
+	fhandle->res_file_id = CFBundleOpenBundleResourceMap (fhandle->bundleRef);
 
 	/*return the handle of the plugin*/
 	return fhandle;
@@ -145,25 +143,22 @@ mac_vst_unload (VSTHandle* fhandle)
 {
 	if (fhandle->plugincnt)
 	{
-		/*Still have plugin instances - can't unload the library
-		- actually dlclose keeps an instance count anyway*/
-
+		/*Still have plugin instances - can't unload the library */
 		return -1;
 	}
 
 	/*Valid plugin loaded?*/
 
-	if (fhandle->dll)
+	if (fhandle->bundleRef)
 	{
-		CFBundleRef* bundleRefPtr = (CFBundleRef*) fhandle->dll;
-		CFBundleCloseBundleResourceMap (*bundleRefPtr, (CFBundleRefNum)fhandle->res_file_id);
-		CFRelease (*bundleRefPtr);
-		fhandle->dll = 0;
+		CFBundleCloseBundleResourceMap (fhandle->bundleRef, fhandle->res_file_id);
+		fhandle->bundleRef = 0;
 	}
 
 	if (fhandle->name)
 	{
 		free (fhandle->name);
+		fhandle->name = 0;
 	}
 
 	/*Don't need the plugin handle any more*/
@@ -227,7 +222,7 @@ mac_vst_instantiate (VSTHandle* fhandle, audioMasterCallback amc, void* userptr)
 
 void mac_vst_close (VSTState* mac_vst)
 {
-	// assert that the GUI object is destoyed
+	// assert that the GUI object is destroyed
 
 	if (mac_vst->plugin)
 	{
@@ -239,31 +234,20 @@ void mac_vst_close (VSTState* mac_vst)
 		mac_vst->plugin->dispatcher (mac_vst->plugin, effClose, 0, 0, 0, 0);
 	}
 
-	if (mac_vst->handle->plugincnt)
+	if (mac_vst->handle->plugincnt) {
 			mac_vst->handle->plugincnt--;
-
-	/*mac_vst_unload will unload the dll if the instance count allows -
-	we need to do this because some plugins keep their own instance count
-	and (JUCE) manages the plugin UI in its own thread.  When the plugins
-	internal instance count reaches zero, JUCE stops the UI thread and won't
-	restart it until the next time the library is loaded.  If we don't unload
-	the lib JUCE will never restart*/
-
-
-	if (mac_vst->handle->plugincnt)
-	{
-		return;
 	}
 
-	/*Valid plugin loaded - so we can unload it and 0 the pointer
-	to it.  We can't free the handle here because we don't know what else
-	might need it.  It should be / is freed when the plugin is deleted*/
+	/* mac_vst_unload will unload the dll if the instance count allows -
+	 * we need to do this because some plugins keep their own instance count
+	 * and (JUCE) manages the plugin UI in its own thread.  When the plugins
+	 * internal instance count reaches zero, JUCE stops the UI thread and won't
+	 * restart it until the next time the library is loaded. If we don't unload
+	 * the lib JUCE will never restart
+	 */
 
-	if (mac_vst->handle->dll)
-	{
-		dlclose (mac_vst->handle->dll); //dlclose keeps its own reference count
-		mac_vst->handle->dll = 0;
-	}
+	mac_vst_unload (mac_vst->handle);
+
 	free (mac_vst);
 }
 

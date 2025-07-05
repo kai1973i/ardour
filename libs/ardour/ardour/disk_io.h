@@ -1,24 +1,23 @@
 /*
-    Copyright (C) 2009-2016 Paul Davis
+ * Copyright (C) 2016-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_disk_io_h__
-#define __ardour_disk_io_h__
+#pragma once
 
 #include <vector>
 #include <string>
@@ -27,8 +26,14 @@
 #include "pbd/ringbufferNPT.h"
 #include "pbd/rcu.h"
 
-#include "ardour/interpolation.h"
+#include "ardour/midi_buffer.h"
 #include "ardour/processor.h"
+#include "ardour/rt_midibuffer.h"
+#include "types.h"
+
+namespace PBD {
+	template<class T> class PlaybackBuffer;
+}
 
 namespace ARDOUR {
 
@@ -37,28 +42,25 @@ class AudioPlaylist;
 class Location;
 class MidiPlaylist;
 class Playlist;
-class Route;
-class Route;
+class Track;
 class Session;
 
 template<typename T> class MidiRingBuffer;
 
 class LIBARDOUR_API DiskIOProcessor : public Processor
 {
-  public:
+public:
 	enum Flag {
 		Recordable  = 0x1,
 		Hidden      = 0x2,
-		Destructive = 0x4,
 		NonLayered  = 0x8 // deprecated (kept only for enum compat)
 	};
 
 	static const std::string state_node_name;
 
-	DiskIOProcessor (Session&, const std::string& name, Flag f);
+	DiskIOProcessor (Session&, Track&, const std::string& name, Flag f, Temporal::TimeDomainProvider const &);
 
-	void set_route (boost::shared_ptr<Route>);
-	void drop_route ();
+	virtual ~DiskIOProcessor ();
 
 	static void set_buffering_parameters (BufferingPreset bp);
 
@@ -80,17 +82,14 @@ class LIBARDOUR_API DiskIOProcessor : public Processor
 
 	virtual void non_realtime_locate (samplepos_t);
 
-	void non_realtime_speed_change ();
-	bool realtime_speed_change ();
-
 	virtual void punch_in()  {}
 	virtual void punch_out() {}
 
 	bool slaved() const      { return _slaved; }
 	void set_slaved(bool yn) { _slaved = yn; }
 
-	PBD::Signal0<void>            SpeedChanged;
-	PBD::Signal0<void>            ReverseChanged;
+	PBD::Signal<void()>            SpeedChanged;
+	PBD::Signal<void()>            ReverseChanged;
 
 	int set_state (const XMLNode&, int version);
 
@@ -99,30 +98,27 @@ class LIBARDOUR_API DiskIOProcessor : public Processor
 
 	bool need_butler() const { return _need_butler; }
 
-	boost::shared_ptr<Playlist>      get_playlist (DataType dt) const { return _playlists[dt]; }
-	boost::shared_ptr<MidiPlaylist>  midi_playlist() const;
-	boost::shared_ptr<AudioPlaylist> audio_playlist() const;
+	std::shared_ptr<Playlist>      get_playlist (DataType dt) const { return _playlists[dt]; }
+	std::shared_ptr<MidiPlaylist>  midi_playlist() const;
+	std::shared_ptr<AudioPlaylist> audio_playlist() const;
 
 	virtual void playlist_modified () {}
-	virtual int use_playlist (DataType, boost::shared_ptr<Playlist>);
+	virtual int use_playlist (DataType, std::shared_ptr<Playlist>);
 
 	virtual void adjust_buffering() = 0;
 
-  protected:
+protected:
 	friend class Auditioner;
 	virtual int  seek (samplepos_t which_sample, bool complete_refill = false) = 0;
+	virtual void configuration_changed () = 0;
 
-  protected:
+protected:
 	Flag         _flags;
-	uint32_t      i_am_the_modifier;
-	double       _actual_speed;
-	double       _target_speed;
-	bool         _seek_required;
 	bool         _slaved;
 	bool          in_set_state;
 	samplepos_t   playback_sample;
 	bool         _need_butler;
-	boost::shared_ptr<Route> _route;
+	Track&       _track;
 
 	void init ();
 
@@ -147,51 +143,53 @@ class LIBARDOUR_API DiskIOProcessor : public Processor
 	/** Information about one audio channel, playback or capture
 	 * (depending on the derived class)
 	 */
-	struct ChannelInfo : public boost::noncopyable {
+	struct ChannelInfo {
 
 		ChannelInfo (samplecnt_t buffer_size);
-		~ChannelInfo ();
+		ChannelInfo (const ChannelInfo&) = delete;
+		ChannelInfo& operator= (const ChannelInfo&) = delete;
+		virtual ~ChannelInfo ();
 
-		/** A ringbuffer for data to be played back, written to in the
-		    butler thread, read from in the process thread.
-		*/
-		PBD::RingBufferNPT<Sample>* buf;
+		/** A semi-random-access ringbuffers for data to be played back.
+		 * written to in the butler thread, read from in the process
+		 * thread.
+		 */
+		PBD::PlaybackBuffer<Sample>* rbuf;
+
+		/** A ringbuffer for data to be recorded back, written to in the
+		 * process thread, read from in the butler thread.
+		 */
+		PBD::RingBufferNPT<Sample>* wbuf;
 		PBD::RingBufferNPT<Sample>::rw_vector rw_vector;
 
 		/* used only by capture */
-		boost::shared_ptr<AudioFileSource> write_source;
-		PBD::RingBufferNPT<CaptureTransition> * capture_transition_buf;
+		std::shared_ptr<AudioFileSource> write_source;
 
 		/* used in the butler thread only */
 		samplecnt_t curr_capture_cnt;
 
-		void resize (samplecnt_t);
+		virtual void resize (samplecnt_t) = 0;
 	};
 
 	typedef std::vector<ChannelInfo*> ChannelList;
 	SerializedRCUManager<ChannelList> channels;
 
-	int add_channel_to (boost::shared_ptr<ChannelList>, uint32_t how_many);
-	int remove_channel_from (boost::shared_ptr<ChannelList>, uint32_t how_many);
+	virtual int add_channel_to (std::shared_ptr<ChannelList>, uint32_t how_many) = 0;
+	int remove_channel_from (std::shared_ptr<ChannelList>, uint32_t how_many);
 
-	CubicInterpolation interpolation;
-
-	boost::shared_ptr<Playlist> _playlists[DataType::num_types];
+	std::shared_ptr<Playlist> _playlists[DataType::num_types];
 	PBD::ScopedConnectionList playlist_connections;
 
 	virtual void playlist_changed (const PBD::PropertyChange&) {}
-	virtual void playlist_deleted (boost::weak_ptr<Playlist>);
-	virtual void playlist_ranges_moved (std::list< Evoral::RangeMove<samplepos_t> > const &, bool) {}
+	virtual void playlist_deleted (std::weak_ptr<Playlist>);
+	virtual void playlist_ranges_moved (std::list<Temporal::RangeMove> const &, bool) {}
 
 	/* The MIDI stuff */
 
 	MidiRingBuffer<samplepos_t>*  _midi_buf;
-	gint                         _samples_written_to_ringbuffer;
-	gint                         _samples_read_from_ringbuffer;
 
-	static void get_location_times (const Location* location, samplepos_t* start, samplepos_t* end, samplepos_t* length);
+	static void get_location_times (const Location* location, timepos_t* start, timepos_t* end, timecnt_t* length);
 };
 
 } // namespace ARDOUR
 
-#endif /* __ardour_disk_io_h__ */

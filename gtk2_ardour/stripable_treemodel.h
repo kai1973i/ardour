@@ -1,30 +1,29 @@
-/* Copyright (C) 2017 Paul Davis
- *    based on gtkmm example Copyright (C) 2002 gtkmm development team
+/*
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #ifndef __gtk2_ardour_stripable_treemodel_h__
 #define __gtk2_ardour_stripable_treemodel_h__
 
+#include <cstdint>
+#include <memory>
 #include <set>
 
-#include <boost/shared_ptr.hpp>
-#include <boost/weak_ptr.hpp>
-#include <stdint.h>
-
-#include <gtkmm/treemodel.h>
+#include <ytkmm/treemodel.h>
 
 namespace ARDOUR {
 	class Session;
@@ -67,7 +66,7 @@ public:
 	typedef Gtk::TreeModelColumn<bool>        BoolColumn;
 	typedef Gtk::TreeModelColumn<uint32_t>    UnsignedColumn;
 	typedef Gtk::TreeModelColumn<AxisView*> AVColumn;
-	typedef Gtk::TreeModelColumn<boost::shared_ptr<ARDOUR::Stripable> > StripableColumn;
+	typedef Gtk::TreeModelColumn<std::shared_ptr<ARDOUR::Stripable> > StripableColumn;
 
 	struct Columns : public Gtk::TreeModel::ColumnRecord
 	{
@@ -117,13 +116,13 @@ private:
 
 	int n_columns;
 
-	void text_value (boost::shared_ptr<ARDOUR::Stripable> stripable, Glib::ValueBase& value) const;
+	void text_value (std::shared_ptr<ARDOUR::Stripable> stripable, Glib::ValueBase& value) const;
 
 	struct Glue
 	{
-		Glue (boost::shared_ptr<ARDOUR::Stripable>);
+		Glue (std::shared_ptr<ARDOUR::Stripable>);
 
-		boost::weak_ptr<ARDOUR::Stripable> stripable;
+		std::weak_ptr<ARDOUR::Stripable> stripable;
 	};
 
 	typedef std::set<Glue*> GlueList;

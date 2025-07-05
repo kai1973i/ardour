@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2014 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2014 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <iostream>
 #include <cmath>
@@ -26,7 +26,6 @@
 #include "pbd/compose.h"
 #include "pbd/controllable.h"
 #include "pbd/error.h"
-#include "pbd/stacktrace.h"
 
 #include "gtkmm2ext/utils.h"
 #include "gtkmm2ext/rgb_macros.h"
@@ -71,7 +70,7 @@ ArdourDisplay::on_scroll_event (GdkEventScroll* ev)
 		}
 	}
 
-	boost::shared_ptr<PBD::Controllable> c = binding_proxy.get_controllable();
+	std::shared_ptr<PBD::Controllable> c = binding_proxy.get_controllable();
 	if (c) {
 		float val = c->get_interface();
 
@@ -101,7 +100,7 @@ static inline float dB_to_coefficient (float dB) {
 void
 ArdourDisplay::handle_controllable_preset (float p)
 {
-	boost::shared_ptr<PBD::Controllable> c = binding_proxy.get_controllable();
+	std::shared_ptr<PBD::Controllable> c = binding_proxy.get_controllable();
 
 	if (!c) return;
 
@@ -116,7 +115,7 @@ ArdourDisplay::handle_controllable_preset (float p)
 
 
 void
-ArdourDisplay::set_controllable (boost::shared_ptr<Controllable> c)
+ArdourDisplay::set_controllable (std::shared_ptr<Controllable> c)
 {
     watch_connection.disconnect ();  //stop watching the old controllable
 
@@ -124,7 +123,7 @@ ArdourDisplay::set_controllable (boost::shared_ptr<Controllable> c)
 
 	binding_proxy.set_controllable (c);
 
-	c->Changed.connect (watch_connection, invalidator(*this), boost::bind (&ArdourDisplay::controllable_changed, this), gui_context());
+	c->Changed.connect (watch_connection, invalidator(*this), std::bind (&ArdourDisplay::controllable_changed, this), gui_context());
 
 	controllable_changed();
 }
@@ -132,7 +131,7 @@ ArdourDisplay::set_controllable (boost::shared_ptr<Controllable> c)
 void
 ArdourDisplay::controllable_changed ()
 {
-	boost::shared_ptr<PBD::Controllable> c = binding_proxy.get_controllable();
+	std::shared_ptr<PBD::Controllable> c = binding_proxy.get_controllable();
 
 	if (!c) return;
 

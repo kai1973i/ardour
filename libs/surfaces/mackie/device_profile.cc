@@ -1,21 +1,23 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-	Copyright (C) 2012 Paul Davis
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2012-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2012-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cerrno>
 #include <cstdlib>
@@ -28,6 +30,7 @@
 #include "pbd/stl_delete.h"
 #include "pbd/replace_all.h"
 
+#include "ardour/debug.h"
 #include "ardour/filesystem_paths.h"
 
 #include "mackie_control_protocol.h"
@@ -38,12 +41,13 @@
 using namespace PBD;
 using namespace ARDOUR;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 using std::string;
 using std::vector;
 
-std::map<std::string,DeviceProfile> DeviceProfile::device_profiles;
+std::map<std::string,DeviceProfile> MACKIE_NAMESPACE::DeviceProfile::device_profiles;
+
 const std::string DeviceProfile::edited_indicator (" (edited)");
 const std::string DeviceProfile::default_profile_name ("User");
 
@@ -100,6 +104,8 @@ DeviceProfile::reload_device_profiles ()
 	find_files_matching_filter (devprofiles, spath, devprofile_filter, 0, false, true);
 	device_profiles.clear ();
 
+	DEBUG_TRACE (DEBUG::MackieControl, "DeviceProfile::reload_device_profiles\n");
+
 	if (devprofiles.empty()) {
 		error << "No MCP device info files found using " << spath.to_string() << endmsg;
 		return;
@@ -121,6 +127,7 @@ DeviceProfile::reload_device_profiles ()
 		}
 
 		if (dp.set_state (*root, 3000) == 0) { /* version is ignored for now */
+			DEBUG_TRACE (DEBUG::MackieControl, string_compose ("Found profile '%1'\n", dp.name ()));
 			dp.set_path (fullpath);
 			device_profiles[dp.name()] = dp;
 		}
@@ -258,16 +265,13 @@ DeviceProfile::get_button_action (Button::ID id, int modifier_state) const
 }
 
 void
-DeviceProfile::set_button_action (Button::ID id, int modifier_state, const string& act)
+DeviceProfile::set_button_action (Button::ID id, int modifier_state, const string& action)
 {
 	ButtonActionMap::iterator i = _button_map.find (id);
 
 	if (i == _button_map.end()) {
 		i = _button_map.insert (std::make_pair (id, ButtonActions())).first;
 	}
-
-	string action (act);
-	replace_all (action, "<Actions>/", "");
 
 	if (modifier_state == MackieControlProtocol::MODIFIER_CONTROL) {
 		i->second.control = action;

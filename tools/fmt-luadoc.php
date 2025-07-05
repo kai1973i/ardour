@@ -34,9 +34,10 @@ foreach (json_decode ($json, true) as $b) {
 		if (isset ($b['version'])) { $ardourversion = $b['version']; }
 		continue;
 	}
-	# reserved lua words
+	# reserved Lua words -> C++
 	$b ['lua'] = preg_replace ('/:_end/', ':end', $b ['lua']);
 	$b ['lua'] = preg_replace ('/:_type/', ':type', $b ['lua']);
+	# resolves C++ ambiguities
 	$b ['ldec'] = preg_replace ('/ const/', '', preg_replace ('/ const&/', '', $b['decl']));
 	$b ['ldec'] = preg_replace ('/_VampHost::/', '', $b['ldec']);
 	$b ['decl'] = preg_replace ('/_VampHost::/', '', $b['decl']);
@@ -52,7 +53,7 @@ foreach (json_decode ($json, true) as $b) {
 
 if (count ($doc) == 0) {
 	fwrite (STDERR, "Failed to read luadoc.json\n");
-	exit (1);
+	exit (EXIT_FAILURE);
 }
 
 ################################################################################
@@ -81,10 +82,10 @@ function my_die ($msg) {
 }
 
 ##function ptr_strip ($ctype) {
-#	# boost::shared_ptr<std::list<boost::shared_ptr<ARDOUR::Route>> > >
+#	# std::shared_ptr<std::list<std::shared_ptr<ARDOUR::Route>> > >
 #	# -> std::list<ARDOUR::Route>
-#	$ctype = preg_replace ('/boost::shared_ptr<([^>]*)[ ]*>/', '$1', $ctype);
-#	return preg_replace ('/boost::shared_ptr<([^>]*)[ ]*>/', '$1', $ctype);
+#	$ctype = preg_replace ('/std::shared_ptr<([^>]*)[ ]*>/', '$1', $ctype);
+#	return preg_replace ('/std::shared_ptr<([^>]*)[ ]*>/', '$1', $ctype);
 #}
 
 function arg2lua ($argtype, $flags = 0) {
@@ -104,6 +105,9 @@ function arg2lua ($argtype, $flags = 0) {
 
 	if ($arg == 'luabridge::LuaRef') {
 		return array ('Lua-Function' => $flags | 4);
+	}
+	if ($arg == 'LTC_TV_STANDARD') {
+		$arg = 'ARDOUR::DSP::LTC_TV_STANDARD';
 	}
 
 	# check Class declarations first
@@ -189,7 +193,7 @@ function canonical_ctor ($b) {
 function canonical_decl ($b) {
 	$rv = '';
 	$pfx = '';
-	# match clang's declatation format
+	# match clang's declaration format
 	if (preg_match('/[^(]*\(([^)*]*)\*\)\((.*)\)/', $b['decl'], $matches)) {
 		if (strpos ($b['type'], 'Free Function') !== false) {
 			$pfx = str_replace (':', '::', luafn2class ($b['lua'])) . '::';
@@ -202,7 +206,6 @@ function canonical_decl ($b) {
 			if (!$first) { $rv .= ', '; }; $first = false;
 			if (empty ($a)) { continue; }
 			$a = preg_replace ('/([^>]) >/', '$1>', $a);
-			$a = preg_replace ('/^Cairo::/', '', $a); // special case cairo enums
 			$a = preg_replace ('/([^ ])&/', '$1 &', $a);
 			$a = preg_replace ('/std::vector<([^>]*)> const/', 'const std::vector<$1>', $a);
 			$a = str_replace ('std::vector', 'vector', $a);
@@ -304,6 +307,14 @@ foreach ($doc as $b) {
 			$args = array ();
 			$ret = array (luafn2class ($b['lua']) => 0);
 			$canon = 'ARDOUR::LuaAPI::datatype_ctor_'.strtolower (luafn2name ($b['lua'])).'(lua_State*)';
+		} else if (strpos ($b['lua'], 'ARDOUR:RouteListPtr') === 0) {
+			$ret = array ('ARDOUR.RouteListPtr' => 0);
+			$args = decl2args ('void (RouteList::*)(std::list<std::shared_ptr<ARDOUR::Route> >)');
+			$canon = '';
+		} else if (strpos ($b['lua'], 'ARDOUR:RegionListPtr') === 0) {
+			$ret = array ('ARDOUR.RegionListPtr' => 0);
+			$args = decl2args ('void (RouteList::*)(std::list<std::shared_ptr<ARDOUR::Region> >)');
+			$canon = '';
 		} else {
 			my_die ('unhandled Static C: ' . print_r($b, true));
 		}
@@ -451,7 +462,7 @@ foreach ($classlist as $ns => $cl) {
 		if ($c['lua'] == $ns) {
 			if (strpos ($c['type'], 'Pointer Class') !== false) {
 				$classlist[$ns]['ptr'] = true;
-				$classlist[$ns]['cdecl'] = 'boost::shared_ptr< '.$c['decl']. ' >, boost::weak_ptr< '.$c['decl']. ' >';
+				$classlist[$ns]['cdecl'] = 'std::shared_ptr< '.$c['decl']. ' >, std::weak_ptr< '.$c['decl']. ' >';
 				break;
 			} else {
 				$classlist[$ns]['cdecl'] = $c['decl'];
@@ -470,7 +481,7 @@ foreach ($classlist as $ns => $cl) {
 # step 4c: merge free functions into classlist
 foreach ($funclist as $ns => $fl) {
 	if (isset ($classlist[$ns])) {
-		my_die ('Free Funcion in existing namespace: '.$ns.' '. print_r ($ns, true));
+		my_die ('Free Function in existing namespace: '.$ns.' '. print_r ($ns, true));
 	}
 	$classlist[$ns]['func'] = $fl;
 	$classlist[$ns]['free'] = true;
@@ -506,7 +517,7 @@ foreach (json_decode ($json, true) as $a) {
 $dox_found = 0;
 $dox_miss = 0;
 
-# retrive a value from $api
+# retrieve a value from $api
 function doxydoc ($canonical_declaration) {
 	global $api;
 	global $dox_found;
@@ -516,8 +527,8 @@ function doxydoc ($canonical_declaration) {
 		return $api[$canonical_declaration]['doc'];
 	}
 	// remove template namespace e.g.
-	//  "ARDOUR::Track::bounceable(boost::shared_ptr<ARDOUR::Processor>"
-	//  "ARDOUR::Track::bounceable(boost::shared_ptr<Processor>"
+	//  "ARDOUR::Track::bounceable(std::shared_ptr<ARDOUR::Processor>"
+	//  "ARDOUR::Track::bounceable(std::shared_ptr<Processor>"
 	$cn = preg_replace ('/<[^>]*::([^>]*)>/', '<$1>', $canonical_declaration);
 	if (isset ($api[$cn])) {
 		$dox_found++;
@@ -543,6 +554,13 @@ function ctorname ($name) {
 	return htmlentities (str_replace (':', '.', $name));
 }
 
+function luaname ($name) {
+	# reserved Lua words
+	$name = preg_replace ('/:end$/', ':_end', $name);
+	$name = preg_replace ('/:type$/', ':_type', $name);
+	return $name;
+}
+
 # strip class prefix (e.g "Evoral:MidiEvent:channel"  -> "channel")
 function shortname ($name) {
 	return htmlentities (substr ($name, strrpos ($name, ':') + 1));
@@ -553,7 +571,7 @@ function varname ($a) {
 	return array_keys ($a)[0];
 }
 
-# recusively collect class parents (derived classes)
+# recursively collect class parents (derived classes)
 function traverse_parent ($ns, &$inherited) {
 	global $classlist;
 	$rv = '';
@@ -647,7 +665,7 @@ function name_sort_cb ($a, $b) {
 # main output function for every class
 function format_class_members ($ns, $cl, &$dups) {
 	$rv = '';
-	# print contructor - if any
+	# print constructor - if any
 	if (isset ($cl['ctor'])) {
 		usort ($cl['ctor'], 'name_sort_cb');
 		$rv.= ' <tr><th colspan="3">Constructor</th></tr>'.NL;
@@ -659,7 +677,7 @@ function format_class_members ($ns, $cl, &$dups) {
 				$rv.= '<td class="def">&Copf;</td>';
 			}
 			$rv.= '<td class="decl">';
-			$rv.= '<span class="functionname">'.ctorname ($f['name']).'</span>';
+			$rv.= '<span class="functionname">'.ctorname (luaname ($f['name'])).'</span>';
 			$rv.= format_args ($f['args']);
 			$rv.= '</td><td class="fill"></td></tr>'.NL;
 			# doxygen documentation (may be empty)
@@ -701,7 +719,7 @@ function format_class_members ($ns, $cl, &$dups) {
 			}
 			# function declaration and arguments
 			$rv.= '</td><td class="decl">';
-			$rv.= '<span class="functionname"><abbr title="'.htmlentities($f['bind']['decl']).'">'.stripclass ($ns, $f['name']).'</abbr></span>';
+			$rv.= '<span class="functionname"><abbr title="'.htmlentities($f['bind']['decl']).'">'.stripclass ($ns, luaname ($f['name'])).'</abbr></span>';
 			$rv.= format_args ($f['args']);
 			$rv.= '</td><td class="fill"></td></tr>'.NL;
 			# doxygen documentation (may be empty)
@@ -717,7 +735,7 @@ function format_class_members ($ns, $cl, &$dups) {
 			$rv.= typelink (varname ($f['ret']), true, 'em');
 			# function declaration and arguments
 			$rv.= '</td><td class="decl">';
-			$rv.= '<span class="functionname"><abbr title="'.htmlentities($f['bind']['decl']).'">'.stripclass ($ns, $f['name']).'</abbr></span>';
+			$rv.= '<span class="functionname"><abbr title="'.htmlentities($f['bind']['decl']).'">'.stripclass ($ns, luaname ($f['name'])).'</abbr></span>';
 			$rv.= format_args ($f['args']);
 			$rv.= '</td><td class="fill"></td></tr>'.NL;
 			# doxygen documentation (may be empty)
@@ -731,7 +749,7 @@ function format_class_members ($ns, $cl, &$dups) {
 		$rv.= ' <tr><th colspan="3">Properties</th></tr>'.NL;
 		foreach ($cl['props'] as $f) {
 			$rv.= ' <tr><td class="def">'.typelink (array_keys ($f['ret'])[0], false, 'em').'</td><td class="decl">';
-			$rv.= '<span class="functionname">'.stripclass ($ns, $f['name']).'</span>';
+			$rv.= '<span class="functionname">'.stripclass ($ns, luaname ($f['name'])).'</span>';
 			$rv.= '</td><td class="fill"></td></tr>'.NL;
 		}
 	}
@@ -742,7 +760,7 @@ function format_class_members ($ns, $cl, &$dups) {
 		$rv.= ' <tr><th colspan="3">Data Members</th></tr>'.NL;
 		foreach ($cl['data'] as $f) {
 			$rv.= ' <tr><td class="def">'.typelink (array_keys ($f['ret'])[0], false, 'em').'</td><td class="decl">';
-			$rv.= '<span class="functionname">'.stripclass ($ns, $f['name']).'</span>';
+			$rv.= '<span class="functionname">'.stripclass ($ns, luaname ($f['name'])).'</span>';
 			$rv.= '</td><td class="fill"></td></tr>'.NL;
 			$f['cand'] = str_replace (':', '::', $f['name']);
 			$rv.= format_doxydoc($f);
@@ -871,10 +889,10 @@ Operations are performed on objects. One gets a reference to an object and then 
 e.g <code>obj = Session:route_by_name("Audio")   obj:set_name("Guitar")</code>.
 </p>
 <p>
-Lua automatically follows C++ class inheritance. e.g one can directly call all SessionObject and Route methods on Track object. However lua does not automatically promote objects. A Route object which just happens to be a Track needs to be explicily cast to a Track. Methods for casts are provided with each class. Note that the cast may fail and return a <em>nil</em> reference.
+Lua automatically follows C++ class inheritance. e.g one can directly call all SessionObject and Route methods on Track object. However lua does not automatically promote objects. A Route object which just happens to be a Track needs to be explicitly cast to a Track. Methods for casts are provided with each class. Note that the cast may fail and return a <em>nil</em> reference.
 </p>
 <p>
-Likewise multiple inheritance is a <a href="http://www.lua.org/pil/16.3.html">non-trivial issue</a> in lua. To avoid performance penalties involved with lookups, explicit casts are required in this case. One example is <?=typelink('ARDOUR:SessionObject')?> which is-a StatefulDestructible which inhertis from both Stateful and Destructible.
+Likewise multiple inheritance is a <a href="http://www.lua.org/pil/16.3.html">non-trivial issue</a> in Lua. To avoid performance penalties involved with lookups, explicit casts are required in this case. One example is <?=typelink('ARDOUR:SessionObject')?> which is-a StatefulDestructible which inherits from both Stateful and Destructible.
 </p>
 <p>
 Object lifetimes are managed by the Session. Most Objects cannot be directly created, but one asks the Session to create or destroy them. This is mainly due to realtime constrains:
@@ -882,7 +900,7 @@ you cannot simply remove a track that is currently processing audio. There are v
 </p>
 <h3>Pass by Reference</h3>
 <p>
-Since lua functions are closures, C++ methods that pass arguments by reference cannot be used as-is.
+Since Lua functions are closures, C++ methods that pass arguments by reference cannot be used as-is.
 All parameters passed to a C++ method which uses references are returned as Lua Table.
 If the C++ method also returns a value it is prefixed. Two parameters are returned: the value and a Lua Table holding the parameters.
 </p>
@@ -933,13 +951,13 @@ print (rv, ref[1], ref[2])
 
 <h3>Pointer Classes</h3>
 <p>
-Libardour makes extensive use of reference counted <code>boost::shared_ptr</code> to manage lifetimes.
-The Lua bindings provide a complete abstration of this. There are no pointers in lua.
-For example a <?=typelink('ARDOUR:Route')?> is a pointer in C++, but lua functions operate on it like it was a class instance.
+Libardour makes extensive use of reference counted <code>std::shared_ptr</code> to manage lifetimes.
+The Lua bindings provide a complete abstraction of this. There are no pointers in Lua.
+For example a <?=typelink('ARDOUR:Route')?> is a pointer in C++, but Lua functions operate on it like it was a class instance.
 </p>
 <p>
-<code>shared_ptr</code> are reference counted. Once assigned to a lua variable, the C++ object will be kept and remains valid.
-It is good practice to assign references to lua <code>local</code> variables or reset the variable to <code>nil</code> to drop the ref.
+<code>shared_ptr</code> are reference counted. Once assigned to a Lua variable, the C++ object will be kept and remains valid.
+It is good practice to assign references to Lua <code>local</code> variables or reset the variable to <code>nil</code> to drop the ref.
 </p>
 <p>
 All pointer classes have a <code>isnil ()</code> method. This is for two cases:
@@ -947,15 +965,15 @@ Construction may fail. e.g. <code><?=typelink('ARDOUR:LuaAPI')?>.newplugin()</co
 may not be able to find the given plugin and hence cannot create an object.
 </p>
 <p>
-The second case if for <code>boost::weak_ptr</code>. As opposed to <code>boost::shared_ptr</code> weak-pointers are not reference counted.
+The second case if for <code>std::weak_ptr</code>. As opposed to <code>std::shared_ptr</code> weak-pointers are not reference counted.
 The object may vanish at any time.
-If lua code calls a method on a nil object, the interpreter will raise an exception and the script will not continue.
+If Lua code calls a method on a nil object, the interpreter will raise an exception and the script will not continue.
 This is not unlike <code>a = nil a:test()</code> which results in en error "<em>attempt to index a nil value</em>".
 </p>
 <p>
-From the lua side of things there is no distinction between weak and shared pointers. They behave identically.
-Below they're inidicated in orange and have an arrow to indicate the pointer type.
-Pointer Classes cannot be created in lua scripts. It always requires a call to C++ to create the Object and obtain a reference to it.
+From the Lua side of things there is no distinction between weak and shared pointers. They behave identically.
+Below they're indicated in orange and have an arrow to indicate the pointer type.
+Pointer Classes cannot be created in Lua scripts. It always requires a call to C++ to create the Object and obtain a reference to it.
 </p>
 
 

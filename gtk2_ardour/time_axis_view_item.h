@@ -1,29 +1,34 @@
 /*
-    Copyright (C) 2003 Paul Davis
+ * Copyright (C) 2005-2009 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2005-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Karsten Wiese <fzuuzf@googlemail.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2007-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2008-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __gtk_ardour_time_axis_view_item_h__
-#define __gtk_ardour_time_axis_view_item_h__
+#pragma once
 
 #include <string>
-#include <gdk/gdk.h>
-#include <gdkmm/color.h>
+#include <ydk/gdk.h>
+#include <ydkmm/color.h>
 #include <pangomm/fontdescription.h>
+#include "ardour/types.h"
 #include "pbd/signals.h"
 #include "selectable.h"
 
@@ -34,7 +39,7 @@ namespace ArdourCanvas {
 	class Rectangle;
 	class Item;
 	class Container;
- 	class Text;
+	class Text;
 }
 
 using ARDOUR::samplepos_t;
@@ -49,14 +54,14 @@ class TimeAxisViewItem : public Selectable, public PBD::ScopedConnectionList
 public:
 	virtual ~TimeAxisViewItem();
 
-	virtual bool set_position(samplepos_t, void*, double* delta = 0);
-	samplepos_t get_position() const;
-	virtual bool set_duration(samplecnt_t, void*);
-	samplecnt_t get_duration() const;
-	virtual void set_max_duration(samplecnt_t, void*);
-	samplecnt_t get_max_duration() const;
-	virtual void set_min_duration(samplecnt_t, void*);
-	samplecnt_t get_min_duration() const;
+	virtual bool set_position(Temporal::timepos_t const &, void*, double* delta = 0);
+	Temporal::timepos_t get_position() const;
+	virtual bool set_duration(Temporal::timecnt_t const &, void*);
+	Temporal::timecnt_t get_duration() const;
+	virtual void set_max_duration(Temporal::timecnt_t const &, void*);
+	Temporal::timecnt_t get_max_duration() const;
+	virtual void set_min_duration(Temporal::timecnt_t const &, void*);
+	Temporal::timecnt_t get_min_duration() const;
 	virtual void set_position_locked(bool, void*);
 	bool get_position_locked() const;
 	void set_max_duration_active(bool, void*);
@@ -76,10 +81,11 @@ public:
 	void set_color (uint32_t);
 	void set_name_text_color ();
 
+	virtual void     set_frame_color();
 	virtual uint32_t get_fill_color () const;
 
-	ArdourCanvas::Item* get_canvas_sample();
-	ArdourCanvas::Item* get_canvas_group();
+	ArdourCanvas::Item* get_canvas_frame();
+	ArdourCanvas::Item* get_canvas_group() const;
 	ArdourCanvas::Item* get_name_highlight();
 
 	virtual void set_samples_per_pixel (double);
@@ -90,10 +96,11 @@ public:
 	virtual void drag_end();
 	bool dragging() const { return _dragging; }
 
-	virtual void raise () { return; }
-	virtual void raise_to_top () { return; }
-	virtual void lower () { return; }
-	virtual void lower_to_bottom () { return; }
+	virtual void visual_layer_on_top() {}
+	virtual void raise () {}
+	virtual void raise_to_top () {}
+	virtual void lower () {}
+	virtual void lower_to_bottom () {}
 
 	/** @return true if the name area should respond to events */
 	bool name_active() const { return name_connected; }
@@ -123,24 +130,6 @@ public:
 
 	sigc::signal<void,std::string,void*> ItemRemoved;
 
-	/** Emitted when the name of this item is changed */
-	sigc::signal<void,std::string,std::string,void*> NameChanged;
-
-	/** Emiited when the position of this item changes */
-	sigc::signal<void,samplepos_t,void*> PositionChanged;
-
-	/** Emitted when the position lock of this item is changed */
-	sigc::signal<void,bool,void*> PositionLockChanged;
-
-	/** Emitted when the duration of this item changes */
-	sigc::signal<void,samplecnt_t,void*> DurationChanged;
-
-	/** Emitted when the maximum item duration is changed */
-	sigc::signal<void,samplecnt_t,void*> MaxDurationChanged;
-
-	/** Emitted when the mionimum item duration is changed */
-	sigc::signal<void,samplecnt_t,void*> MinDurationChanged;
-
 	enum Visibility {
 		ShowFrame = 0x1,
 		ShowNameHighlight = 0x2,
@@ -152,19 +141,21 @@ public:
 		FullWidthNameHighlight = 0x80
 	};
 
+	virtual void update_visibility () {}
+
 protected:
 	TimeAxisViewItem (const std::string &, ArdourCanvas::Item&, TimeAxisView&, double, uint32_t fill_color,
-	                  samplepos_t, samplecnt_t, bool recording = false, bool automation = false, Visibility v = Visibility (0));
+	                  Temporal::timepos_t const &, Temporal::timecnt_t const &, bool recording = false, bool automation = false, Visibility v = Visibility (0));
 
 	TimeAxisViewItem (const TimeAxisViewItem&);
 
-	void init (ArdourCanvas::Item*, double, uint32_t, samplepos_t, samplepos_t, Visibility, bool, bool);
+	void init (ArdourCanvas::Item*, double, uint32_t, Temporal::timepos_t const &, Temporal::timecnt_t const &, Visibility, bool, bool);
 
 	virtual bool canvas_group_event (GdkEvent*);
 
 	virtual void set_colors();
-	virtual void set_sample_color();
-	virtual void set_sample_gradient ();
+	virtual void set_frame_gradient ();
+
 	void set_trim_handle_colors();
 
 	virtual void reset_width_dependent_items (double);
@@ -178,16 +169,16 @@ protected:
 	bool position_locked;
 
 	/** position of this item on the timeline */
-	samplepos_t sample_position;
+	Temporal::timepos_t time_position;
 
 	/** duration of this item upon the timeline */
-	samplecnt_t item_duration;
+	Temporal::timecnt_t item_duration;
 
 	/** maximum duration that this item can have */
-	samplecnt_t max_item_duration;
+	Temporal::timecnt_t max_item_duration;
 
 	/** minimum duration that this item can have */
-	samplecnt_t min_item_duration;
+	Temporal::timecnt_t min_item_duration;
 
 	/** indicates whether the max duration constraint is active */
 	bool max_duration_active;
@@ -217,17 +208,18 @@ protected:
 	bool wide_enough_for_name;
 	bool high_enough_for_name;
 
-	ArdourCanvas::Container*      group;
-	ArdourCanvas::Rectangle* sample;
-	ArdourCanvas::Rectangle* selection_sample;
+	ArdourCanvas::Container* group;
+
+	ArdourCanvas::Rectangle* frame;
+	ArdourCanvas::Rectangle* selection_frame;
 	ArdourCanvas::Text*      name_text;
 	ArdourCanvas::Rectangle* name_highlight;
 
-	/* with these two values, if sample_handle_start == 0 then sample_handle_end will also be 0 */
-	ArdourCanvas::Rectangle* sample_handle_start; ///< `sample' (fade) handle for the start of the item, or 0
-	ArdourCanvas::Rectangle* sample_handle_end; ///< `sample' (fade) handle for the end of the item, or 0
+	/* with these two values, if frame_handle_start == 0 then frame_handle_end will also be 0 */
+	ArdourCanvas::Rectangle* frame_handle_start; ///< `frame' (fade) handle for the start of the item, or 0
+	ArdourCanvas::Rectangle* frame_handle_end; ///< `frame' (fade) handle for the end of the item, or 0
 
-	bool sample_handle_crossing (GdkEvent*, ArdourCanvas::Rectangle*);
+	bool frame_handle_crossing (GdkEvent*, ArdourCanvas::Rectangle*);
 
 	double _height;
 	Visibility visibility;
@@ -237,11 +229,11 @@ protected:
 	bool _dragging;
 	double _width;
 
+	void manage_name_text ();
+
 private:
 	void parameter_changed (std::string);
 	void manage_name_highlight ();
-	void manage_name_text ();
 
 }; /* class TimeAxisViewItem */
 
-#endif /* __gtk_ardour_time_axis_view_item_h__ */

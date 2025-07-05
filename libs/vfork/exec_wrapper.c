@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2014 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2016 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,9 +11,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #include <stdio.h>
 #include <unistd.h>
@@ -21,6 +21,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <errno.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 
 #ifndef STDIN_FILENO
 #define STDIN_FILENO 0
@@ -34,6 +37,42 @@
 
 extern char **environ;
 static void close_fd (int *fd) { if ((*fd) >= 0) close (*fd); *fd = -1; }
+
+static int close_allv (const int except_fds[]) {
+	struct rlimit rl;
+
+	if (getrlimit (RLIMIT_NOFILE, &rl) < 0) {
+		return -1;
+	}
+
+	int max_fd;
+	if (rl.rlim_cur >= 4194304) {
+		/* Impose a sane limit, in case the value is
+		 * RLIM_INFINITY 2^63 -1
+		 */
+		max_fd = 4194304;
+	} else {
+		max_fd = (int)rl.rlim_cur;
+	}
+
+	for (int fd = 0; fd < max_fd; fd++) {
+		if (fd <= 3) {
+			continue;
+		}
+
+		for (int i = 0; except_fds[i] >= 0; i++) {
+			if (except_fds[i] == fd) {
+				continue;
+			}
+		}
+
+		if (close (fd) < 0 && errno != EBADF) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
 
 int main(int argc, char *argv[]) {
 	if (argc < 10) {
@@ -106,8 +145,11 @@ int main(int argc, char *argv[]) {
 	signal(SIGPIPE, SIG_DFL);
 #endif
 
-	/* all systems go */
-	execve(argv[9], &argv[9], envp);
+	int good_fds[2] = { pok[1], -1 };
+	if (0 == close_allv (good_fds)) {
+		/* all systems go */
+		execve(argv[9], &argv[9], envp);
+	}
 
 	/* if we reach here something went wrong.. */
 	char buf = 0;

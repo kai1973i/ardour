@@ -1,26 +1,27 @@
 /*
-    Copyright (C) 2010-2013 Paul Davis
-    Author: Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015 André Nusser <andre.nusser@googlemail.com>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #include <cstdio>
 #include <string>
 #include <cerrno>
-#include <gtkmm.h>
+#include <ytkmm/ytkmm.h>
 
 #include "pbd/error.h"
 #include "pbd/string_convert.h"
@@ -69,7 +70,12 @@ VideoUtils::confirm_video_outfn (Gtk::Window& parent, std::string outfn, std::st
 		confirm.add_button (Gtk::Stock::CANCEL, Gtk::RESPONSE_CANCEL);
 		confirm.add_button (_("Continue"), Gtk::RESPONSE_ACCEPT);
 		confirm.show_all ();
-		if (confirm.run() == RESPONSE_CANCEL) { return false; }
+		switch (confirm.run ()) {
+			case Gtk::RESPONSE_ACCEPT:
+				break;
+			default:
+				return false;
+		}
 	}
 
 	if (Glib::file_test(outfn, Glib::FILE_TEST_EXISTS)) {
@@ -273,7 +279,7 @@ VideoUtils::video_query_info (
 			, video_server_url.c_str()
 			, (video_server_url.length()>0 && video_server_url.at(video_server_url.length()-1) == '/')?"":"/"
 			, filepath.c_str());
-	std::string res = ArdourCurl::http_get (url);
+	std::string res = ArdourCurl::http_get (url, false);
 	if (res.empty ()) {
 		return false;
 	}

@@ -1,20 +1,19 @@
 /*
- * Copyright (C) 2016 Robin Gareus <robin@gareus.org>
- * Copyright (C) 2004 Paul Davis
+ * Copyright (C) 2016-2018 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <glibmm/fileutils.h>
@@ -60,7 +59,7 @@ MacVSTPlugin::MacVSTPlugin (const MacVSTPlugin &other)
 
 	XMLNode* root = new XMLNode (other.state_node_name ());
 	other.add_state (root);
-	set_state (*root, Stateful::loading_state_version);
+	set_state (*root, Stateful::current_state_version);
 	delete root;
 
 	init_plugin ();
@@ -91,12 +90,11 @@ MacVSTPluginInfo::load (Session& session)
 
 			if (handle == NULL) {
 				error << string_compose (_("MacVST: cannot load module from \"%1\""), path) << endmsg;
-			}
-			else {
+				return PluginPtr ((Plugin*) 0);
+			} else {
 				plugin.reset (new MacVSTPlugin (session.engine (), session, handle, PBD::atoi (unique_id)));
 			}
-		}
-		else {
+		} else {
 			error << _("You asked ardour to not use any MacVST plugins") << endmsg;
 			return PluginPtr ((Plugin*) 0);
 		}
@@ -114,7 +112,7 @@ std::vector<Plugin::PresetRecord>
 MacVSTPluginInfo::get_presets (bool user_only) const
 {
 	std::vector<Plugin::PresetRecord> p;
-#ifndef NO_PLUGIN_STATE
+
 	if (!Config->get_use_macvst ()) {
 		return p;
 	}
@@ -132,7 +130,7 @@ MacVSTPluginInfo::get_presets (bool user_only) const
 		int const vst_version = plugin->dispatcher (plugin, effGetVstVersion, 0, 0, NULL, 0);
 
 		for (int i = 0; i < plugin->numPrograms; ++i) {
-			Plugin::PresetRecord r (string_compose (X_("VST:%1:%2"), unique_id, i), "", false);
+			Plugin::PresetRecord r (string_compose (X_("VST:%1:%2"), unique_id, std::setw(4), std::setfill('0'), i), "", false);
 			if (vst_version >= 2) {
 				char buf[256];
 				if (plugin->dispatcher (plugin, 29, i, 0, buf, 0) == 1) {
@@ -170,12 +168,10 @@ MacVSTPluginInfo::get_presets (bool user_only) const
 		}
 	}
 	delete t;
-#endif
-
 	return p;
 }
 
-MacVSTPluginInfo::MacVSTPluginInfo ()
+MacVSTPluginInfo::MacVSTPluginInfo (VST2Info const& nfo) : VSTPluginInfo (nfo)
 {
 	type = ARDOUR::MacVST;
 }

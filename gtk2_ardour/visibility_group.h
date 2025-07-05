@@ -1,27 +1,28 @@
 /*
-    Copyright (C) 2011 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_visibility_group__
 #define __ardour_visibility_group__
 
-#include <gtkmm/liststore.h>
+#include <ytkmm/liststore.h>
+#include <ytkmm/widget.h>
+
 #include "pbd/signals.h"
 
 class XMLNode;
@@ -42,10 +43,9 @@ public:
 		std::string const &,
 		std::string const &,
 		bool visible = false,
-		boost::function<boost::optional<bool> ()> = 0
+		std::function<std::optional<bool> ()> = 0
 		);
 
-	Gtk::Menu* menu ();
 	Gtk::Widget* list_view ();
 	bool button_press_event (GdkEventButton *);
 	void update ();
@@ -54,7 +54,7 @@ public:
 	std::string get_state_name () const;
 	std::string get_state_value () const;
 
-	PBD::Signal0<void> VisibilityChanged;
+	PBD::Signal<void()> VisibilityChanged;
 
 	static std::string remove_element (std::string const& from, std::string const& element);
 	static std::string add_element (std::string const& from, std::string const& element);
@@ -66,7 +66,7 @@ private:
 		std::string  id;
 		std::string  name;
 		bool         visible;
-		boost::function<boost::optional<bool> ()> override;
+		std::function<std::optional<bool> ()> override;
 	};
 
 	class ModelColumns : public Gtk::TreeModelColumnRecord {

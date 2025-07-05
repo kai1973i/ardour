@@ -1,28 +1,26 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2013 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2010-2013 Sakari Bergen <sakari.bergen@beatwaves.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_export_filename_h__
-#define __ardour_export_filename_h__
-
-#include <boost/shared_ptr.hpp>
-
+#include <memory>
 #include <string>
 
 #include <ardour/export_pointers.h>
@@ -58,7 +56,7 @@ class LIBARDOUR_API ExportFilename {
   public:
 	/* Serialization */
 
-	XMLNode & get_state ();
+	XMLNode & get_state () const;
 	int set_state (const XMLNode &);
 
 	/* data access */
@@ -122,12 +120,11 @@ class LIBARDOUR_API ExportFilename {
 
 	typedef std::pair<bool, std::string> FieldPair;
 
-	void add_field (XMLNode * node, std::string const & name, bool enabled, std::string const & value = "");
+	static void add_field (XMLNode * node, std::string const & name, bool enabled, std::string const & value = "");
 	FieldPair get_field (XMLNode const & node, std::string const & name);
-	FieldPair analyse_folder ();
+	FieldPair analyse_folder () const;
 };
 
 
 } // namespace ARDOUR
 
-#endif /* __ardour_export_filename_h__ */

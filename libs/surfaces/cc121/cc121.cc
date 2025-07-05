@@ -1,24 +1,24 @@
 /*
-    Copyright (C) 2015 Paul Davis
-    Copyright (C) 2016 W.P. van Paassen
-
-    Thanks to Rolf Meyerhoff for reverse engineering the CC121 protocol.
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016 W.P. van Paass
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017-2018 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * Thanks to Rolf Meyerhoff for reverse engineering the CC121 protocol.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstdlib>
 #include <sstream>
@@ -44,11 +44,11 @@
 #include "ardour/audioengine.h"
 #include "ardour/amp.h"
 #include "ardour/bundle.h"
-#include "ardour/controllable_descriptor.h"
 #include "ardour/debug.h"
 #include "ardour/filesystem_paths.h"
 #include "ardour/midi_port.h"
 #include "ardour/midiport_manager.h"
+#include "ardour/monitor_control.h"
 #include "ardour/monitor_processor.h"
 #include "ardour/profile.h"
 #include "ardour/rc_configuration.h"
@@ -57,6 +57,7 @@
 #include "ardour/session.h"
 #include "ardour/session_configuration.h"
 #include "ardour/track.h"
+#include "ardour/well_known_enum.h"
 
 #include "cc121.h"
 
@@ -68,7 +69,7 @@ using namespace std;
 
 #include "pbd/i18n.h"
 
-#include "pbd/abstract_ui.cc" // instantiate template
+#include "pbd/abstract_ui.inc.cc" // instantiate template
 
 CC121::CC121 (Session& s)
 	: ControlProtocol (s, _("Steinberg CC121"))
@@ -86,14 +87,14 @@ CC121::CC121 (Session& s)
 {
 	last_encoder_time = 0;
 
-	boost::shared_ptr<ARDOUR::Port> inp;
-	boost::shared_ptr<ARDOUR::Port> outp;
+	std::shared_ptr<ARDOUR::Port> inp;
+	std::shared_ptr<ARDOUR::Port> outp;
 
 	inp  = AudioEngine::instance()->register_input_port (DataType::MIDI, "CC121 Recv", true);
 	outp = AudioEngine::instance()->register_output_port (DataType::MIDI, "CC121 Send", true);
 
-	_input_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(inp);
-	_output_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(outp);
+	_input_port = std::dynamic_pointer_cast<AsyncMIDIPort>(inp);
+	_output_port = std::dynamic_pointer_cast<AsyncMIDIPort>(outp);
 
 	if (_input_port == 0 || _output_port == 0) {
 		throw failed_constructor();
@@ -103,20 +104,20 @@ CC121::CC121 (Session& s)
 	_output_bundle.reset (new ARDOUR::Bundle (_("CC121 Support (Send) "), false));
 
 	_input_bundle->add_channel (
-		inp->name(),
+		"",
 		ARDOUR::DataType::MIDI,
 		session->engine().make_port_name_non_relative (inp->name())
 		);
 
 	_output_bundle->add_channel (
-		outp->name(),
+		"",
 		ARDOUR::DataType::MIDI,
 		session->engine().make_port_name_non_relative (outp->name())
 		);
 
 
 	/* Catch port connections and disconnections */
-	ARDOUR::AudioEngine::instance()->PortConnectedOrDisconnected.connect (port_connection, MISSING_INVALIDATOR, boost::bind (&CC121::connection_handler, this, _1, _2, _3, _4, _5), this);
+	ARDOUR::AudioEngine::instance()->PortConnectedOrDisconnected.connect (port_connection, MISSING_INVALIDATOR, std::bind (&CC121::connection_handler, this, _1, _2, _3, _4, _5), this);
 	buttons.insert (std::make_pair (EButton, Button (*this, _("EButton"), EButton)));
 	buttons.insert (std::make_pair (OpenVST, Button (*this, _("OpenVST"), OpenVST)));
 	buttons.insert (std::make_pair (InputMonitor, Button (*this, _("InputMonitor"), InputMonitor)));
@@ -152,30 +153,30 @@ CC121::CC121 (Session& s)
 	buttons.insert (std::make_pair (Footswitch, Button (*this, _("Footswitch"), Footswitch)));
 	buttons.insert (std::make_pair (FaderTouch, Button (*this, _("Fader (touch)"), FaderTouch)));
 
-	get_button (Left).set_action ( boost::bind (&CC121::left, this), true);
-	get_button (Right).set_action ( boost::bind (&CC121::right, this), true);
+	get_button (Left).set_action ( std::bind (&CC121::left, this), true);
+	get_button (Right).set_action ( std::bind (&CC121::right, this), true);
 
-	get_button (FP_Read).set_action (boost::bind (&CC121::read, this), true);
-	get_button (FP_Write).set_action (boost::bind (&CC121::write, this), true);
-	get_button (EButton).set_action (boost::bind (&CC121::touch, this), true);
-	get_button (OpenVST).set_action (boost::bind (&CC121::off, this), true);
+	get_button (FP_Read).set_action (std::bind (&CC121::read, this), true);
+	get_button (FP_Write).set_action (std::bind (&CC121::write, this), true);
+	get_button (EButton).set_action (std::bind (&CC121::touch, this), true);
+	get_button (OpenVST).set_action (std::bind (&CC121::off, this), true);
 
-	get_button (Play).set_action (boost::bind (&BasicUI::transport_play, this, true), true);
-	get_button (ToStart).set_action (boost::bind (&BasicUI::prev_marker, this), true);
-	get_button (ToEnd).set_action (boost::bind (&BasicUI::next_marker, this), true);
-	get_button (RecEnable).set_action (boost::bind (&BasicUI::rec_enable_toggle, this), true);
-	get_button (Stop).set_action (boost::bind (&BasicUI::transport_stop, this), true);
-	get_button (Ffwd).set_action (boost::bind (&BasicUI::ffwd, this), true);
+	get_button (Play).set_action (std::bind (&BasicUI::transport_play, this, true), true);
+	get_button (ToStart).set_action (std::bind (&BasicUI::prev_marker, this), true);
+	get_button (ToEnd).set_action (std::bind (&BasicUI::next_marker, this), true);
+	get_button (RecEnable).set_action (std::bind (&BasicUI::rec_enable_toggle, this), true);
+	get_button (Stop).set_action (std::bind (&BasicUI::transport_stop, this), true);
+	get_button (Ffwd).set_action (std::bind (&BasicUI::ffwd, this), true);
 
-	get_button (Rewind).set_action (boost::bind (&BasicUI::rewind, this), true);
-	get_button (Loop).set_action (boost::bind (&BasicUI::loop_toggle, this), true);
+	get_button (Rewind).set_action (std::bind (&BasicUI::rewind, this), true);
+	get_button (Loop).set_action (std::bind (&BasicUI::loop_toggle, this), true);
 
-	get_button (Jog).set_action (boost::bind (&CC121::jog, this), true);
-	get_button (Mute).set_action (boost::bind (&CC121::mute, this), true);
-	get_button (Solo).set_action (boost::bind (&CC121::solo, this), true);
-	get_button (Rec).set_action (boost::bind (&CC121::rec_enable, this), true);
+	get_button (Jog).set_action (std::bind (&CC121::jog, this), true);
+	get_button (Mute).set_action (std::bind (&CC121::mute, this), true);
+	get_button (Solo).set_action (std::bind (&CC121::solo, this), true);
+	get_button (Rec).set_action (std::bind (&CC121::rec_enable, this), true);
 
-	get_button (InputMonitor).set_action (boost::bind (&CC121::input_monitor, this), true);
+	get_button (InputMonitor).set_action (std::bind (&CC121::input_monitor, this), true);
 }
 
 CC121::~CC121 ()
@@ -183,14 +184,14 @@ CC121::~CC121 ()
 	all_lights_out ();
 
 	if (_input_port) {
-		DEBUG_TRACE (DEBUG::CC121, string_compose ("unregistering input port %1\n", boost::shared_ptr<ARDOUR::Port>(_input_port)->name()));
+		DEBUG_TRACE (DEBUG::CC121, string_compose ("unregistering input port %1\n", std::shared_ptr<ARDOUR::Port>(_input_port)->name()));
 		AudioEngine::instance()->unregister_port (_input_port);
 		_input_port.reset ();
 	}
 
 	if (_output_port) {
 		_output_port->drain (10000,  250000); /* check every 10 msecs, wait up to 1/4 second for the port to drain */
-		DEBUG_TRACE (DEBUG::CC121, string_compose ("unregistering output port %1\n", boost::shared_ptr<ARDOUR::Port>(_output_port)->name()));
+		DEBUG_TRACE (DEBUG::CC121, string_compose ("unregistering output port %1\n", std::shared_ptr<ARDOUR::Port>(_output_port)->name()));
 		AudioEngine::instance()->unregister_port (_output_port);
 		_output_port.reset ();
 	}
@@ -202,28 +203,17 @@ CC121::~CC121 ()
 	BaseUI::quit ();
 }
 
-void*
-CC121::request_factory (uint32_t num_requests)
-{
-	/* AbstractUI<T>::request_buffer_factory() is a template method only
-	   instantiated in this source module. To provide something visible for
-	   use in the interface/descriptor, we have this static method that is
-	   template-free.
-	*/
-	return request_buffer_factory (num_requests);
-}
-
 void
 CC121::start_midi_handling ()
 {
 	/* handle buttons press */
-        _input_port->parser()->channel_note_on[0].connect_same_thread (midi_connections, boost::bind (&CC121::button_press_handler, this, _1, _2));
+        _input_port->parser()->channel_note_on[0].connect_same_thread (midi_connections, std::bind (&CC121::button_press_handler, this, _1, _2));
 	/* handle buttons release*/
-        _input_port->parser()->channel_note_off[0].connect_same_thread (midi_connections, boost::bind (&CC121::button_release_handler, this, _1, _2));
+        _input_port->parser()->channel_note_off[0].connect_same_thread (midi_connections, std::bind (&CC121::button_release_handler, this, _1, _2));
 	/* handle fader */
-        _input_port->parser()->pitchbend.connect_same_thread (midi_connections, boost::bind (&CC121::fader_handler, this, _1, _2));
+        _input_port->parser()->pitchbend.connect_same_thread (midi_connections, std::bind (&CC121::fader_handler, this, _1, _2));
 	/* handle encoder */
-	_input_port->parser()->controller.connect_same_thread (midi_connections, boost::bind (&CC121::encoder_handler, this, _1, _2));
+	_input_port->parser()->controller.connect_same_thread (midi_connections, std::bind (&CC121::encoder_handler, this, _1, _2));
 
 	/* This connection means that whenever data is ready from the input
 	 * port, the relevant thread will invoke our ::midi_input_handler()
@@ -268,8 +258,6 @@ CC121::stop ()
 void
 CC121::thread_init ()
 {
-	pthread_set_name (event_loop_name().c_str());
-
 	PBD::notify_event_loops_about_thread_creation (pthread_self(), event_loop_name(), 2048);
 	ARDOUR::SessionEvent::create_per_thread_pool (event_loop_name(), 128);
 
@@ -307,9 +295,9 @@ CC121::button_press_handler (MIDI::Parser &, MIDI::EventTwoBytes* tb)
 	case FaderTouch:
 	  fader_is_touched = true;
 		if (_current_stripable) {
-			boost::shared_ptr<AutomationControl> gain = _current_stripable->gain_control ();
+			std::shared_ptr<AutomationControl> gain = _current_stripable->gain_control ();
 			if (gain) {
-			  samplepos_t now = session->engine().sample_time();
+				timepos_t now (session->engine().sample_time());
 			  gain->start_touch (now);
 			}
 		}
@@ -352,15 +340,15 @@ CC121::button_release_handler (MIDI::Parser &, MIDI::EventTwoBytes* tb)
 
 	switch (id) {
 	case FaderTouch:
-	  fader_is_touched = false;
-	  if (_current_stripable) {
-	    boost::shared_ptr<AutomationControl> gain = _current_stripable->gain_control ();
-	    if (gain) {
-	      samplepos_t now = session->engine().sample_time();
-	      gain->stop_touch (now);
-	    }
-	  }
-	  break;
+		fader_is_touched = false;
+		if (_current_stripable) {
+			std::shared_ptr<AutomationControl> gain = _current_stripable->gain_control ();
+			if (gain) {
+				timepos_t now (session->engine().sample_time());
+				gain->stop_touch (now);
+			}
+		}
+		break;
 	default:
 		break;
 	}
@@ -389,46 +377,54 @@ CC121::encoder_handler (MIDI::Parser &, MIDI::EventTwoBytes* tb)
 {
         DEBUG_TRACE (DEBUG::CC121, "encoder handler");
 
+	std::shared_ptr<Route> r = std::dynamic_pointer_cast<Route> (_current_stripable);
 	/* Extract absolute value*/
 	float adj = static_cast<float>(tb->value & ~0x40);
-
 	/* Get direction (negative values start at 0x40)*/
 	float sign = (tb->value & 0x40) ? -1.0 : 1.0;
+
+	/* Get amount of change (encoder clicks) * (change per click)
+	 * Create an exponential curve
+	 */
+	float curve = sign * powf (adj, (1.f + 10.f) / 10.f);
+	adj = curve * (31.f / 1000.f);
+
 	switch(tb->controller_number) {
 	case 0x10:
 	  /* pan */
-	  DEBUG_TRACE (DEBUG::CC121, "PAN encoder");
-	  if (_current_stripable) {
-	    /* Get amount of change (encoder clicks) * (change per click)*/
-	    /*Create an exponential curve*/
-	    float curve = sign * powf (adj, (1.f + 10.f) / 10.f);
-	    adj = curve * (31.f / 1000.f);
-	    ardour_pan_azimuth (adj);
-	  }
+	  if (r) { set_controllable (r->pan_azimuth_control(), adj); }
 	  break;
 	case 0x20:
 	  /* EQ 1 Q */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 0), adj); }
 	  break;
 	case 0x21:
 	  /* EQ 2 Q */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 1), adj); }
 	  break;
 	case 0x22:
 	  /* EQ 3 Q */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 2), adj); }
 	  break;
 	case 0x23:
 	  /* EQ 4 Q */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandQ, 3), adj); }
 	  break;
 	case 0x30:
 	  /* EQ 1 Frequency */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 0), adj); }
 	  break;
 	case 0x31:
 	  /* EQ 2 Frequency */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 1), adj); }
 	  break;
 	case 0x32:
 	  /* EQ 3 Frequency */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 2), adj); }
 	  break;
 	case 0x33:
 	  /* EQ 4 Frequency */
+	  if (r) { set_controllable (r->mapped_control (EQ_BandFreq, 3), adj); }
 	  break;
 	case 0x3C:
 	  /* AI */
@@ -451,15 +447,19 @@ CC121::encoder_handler (MIDI::Parser &, MIDI::EventTwoBytes* tb)
 	  break;
 	case 0x40:
 	  /* EQ 1 Gain */
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 0), adj); }
 	  break;
 	case 0x41:
 	  /* EQ 2 Gain */
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 1), adj); }
 	  break;
 	case 0x42:
 	  /* EQ 3 Gain */
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 2), adj); }
 	  break;
 	case 0x43:
 	  /* EQ 4 Gain */
+	  if (r) { set_controllable (r->mapped_control(EQ_BandGain, 3), adj); }
 	  break;
 	case 0x50:
 	  /* Value */
@@ -475,7 +475,7 @@ CC121::fader_handler (MIDI::Parser &, MIDI::pitchbend_t pb)
         DEBUG_TRACE (DEBUG::CC121, "fader handler");
 
 	if (_current_stripable) {
-	  boost::shared_ptr<AutomationControl> gain = _current_stripable->gain_control ();
+	  std::shared_ptr<AutomationControl> gain = _current_stripable->gain_control ();
 	  if (gain) {
 	    float val = gain->interface_to_internal (pb/16384.0);
 	    /* even though the cc121 only controls a
@@ -631,19 +631,21 @@ CC121::map_recenable_state ()
 	bool onoff;
 
 	switch (session->record_status()) {
-	case Session::Disabled:
+	case Disabled:
 		onoff = false;
 		break;
-	case Session::Enabled:
+	case Enabled:
 		onoff = blink_state;
 		break;
-	case Session::Recording:
+	case Recording:
 		if (session->have_rec_enabled_track ()) {
 			onoff = true;
 		} else {
 			onoff = blink_state;
 		}
 		break;
+	default:
+		return; /* stupid compilers */
 	}
 
 	if (onoff != rec_enable_state) {
@@ -657,7 +659,7 @@ CC121::map_transport_state ()
 {
 	get_button (Loop).set_led_state (_output_port, session->get_play_loop());
 
-	float ts = session->transport_speed();
+	float ts = get_transport_speed();
 
 	if (ts == 0) {
 		stop_blinking (Play);
@@ -668,23 +670,23 @@ CC121::map_transport_state ()
 		start_blinking (Play);
 	}
 
-	get_button (Stop).set_led_state (_output_port, session->transport_stopped ());
-	get_button (Rewind).set_led_state (_output_port, session->transport_speed() < 0.0);
-	get_button (Ffwd).set_led_state (_output_port, session->transport_speed() > 1.0);
+	get_button (Stop).set_led_state (_output_port, stop_button_onoff());
+	get_button (Rewind).set_led_state (_output_port, rewind_button_onoff());
+	get_button (Ffwd).set_led_state (_output_port, ffwd_button_onoff());
 	get_button (Jog).set_led_state (_output_port, _jogmode == scroll);
 }
 
 void
 CC121::connect_session_signals()
 {
-	session->RecordStateChanged.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_recenable_state, this), this);
-	session->TransportStateChange.connect(session_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_transport_state, this), this);
+	session->RecordStateChanged.connect(session_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_recenable_state, this), this);
+	session->TransportStateChange.connect(session_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_transport_state, this), this);
 }
 
 bool
-CC121::midi_input_handler (Glib::IOCondition ioc, boost::shared_ptr<ARDOUR::AsyncMIDIPort> port)
+CC121::midi_input_handler (Glib::IOCondition ioc, std::shared_ptr<ARDOUR::AsyncMIDIPort> port)
 {
-	DEBUG_TRACE (DEBUG::CC121, string_compose ("something happend on  %1\n", boost::shared_ptr<MIDI::Port>(port)->name()));
+	DEBUG_TRACE (DEBUG::CC121, string_compose ("something happened on  %1\n", std::shared_ptr<MIDI::Port>(port)->name()));
 
 	if (ioc & ~IO_IN) {
 		return false;
@@ -693,7 +695,7 @@ CC121::midi_input_handler (Glib::IOCondition ioc, boost::shared_ptr<ARDOUR::Asyn
 	if (ioc & IO_IN) {
 
 		port->clear ();
-		DEBUG_TRACE (DEBUG::CC121, string_compose ("data available on %1\n", boost::shared_ptr<MIDI::Port>(port)->name()));
+		DEBUG_TRACE (DEBUG::CC121, string_compose ("data available on %1\n", std::shared_ptr<MIDI::Port>(port)->name()));
 		samplepos_t now = session->engine().sample_time();
 		port->parse (now);
 	}
@@ -703,19 +705,19 @@ CC121::midi_input_handler (Glib::IOCondition ioc, boost::shared_ptr<ARDOUR::Asyn
 
 
 XMLNode&
-CC121::get_state ()
+CC121::get_state () const
 {
 	XMLNode& node (ControlProtocol::get_state());
 
 	XMLNode* child;
 
 	child = new XMLNode (X_("Input"));
-	child->add_child_nocopy (boost::shared_ptr<ARDOUR::Port>(_input_port)->get_state());
+	child->add_child_nocopy (std::shared_ptr<ARDOUR::Port>(_input_port)->get_state());
 	node.add_child_nocopy (*child);
 
 
 	child = new XMLNode (X_("Output"));
-	child->add_child_nocopy (boost::shared_ptr<ARDOUR::Port>(_output_port)->get_state());
+	child->add_child_nocopy (std::shared_ptr<ARDOUR::Port>(_output_port)->get_state());
 	node.add_child_nocopy (*child);
 
 	/* Save action state for Function1..4, Lock, Value, EQnEnable, EQType,
@@ -746,7 +748,6 @@ int
 CC121::set_state (const XMLNode& node, int version)
 {
 	XMLNodeList nlist;
-	XMLNodeConstIterator niter;
 	XMLNode const* child;
 
 	if (ControlProtocol::set_state (node, version)) {
@@ -756,21 +757,23 @@ CC121::set_state (const XMLNode& node, int version)
 	if ((child = node.child (X_("Input"))) != 0) {
 		XMLNode* portnode = child->child (Port::state_node_name.c_str());
 		if (portnode) {
-			boost::shared_ptr<ARDOUR::Port>(_input_port)->set_state (*portnode, version);
+			portnode->remove_property ("name");
+			std::shared_ptr<ARDOUR::Port>(_input_port)->set_state (*portnode, version);
 		}
 	}
 
 	if ((child = node.child (X_("Output"))) != 0) {
 		XMLNode* portnode = child->child (Port::state_node_name.c_str());
 		if (portnode) {
-			boost::shared_ptr<ARDOUR::Port>(_output_port)->set_state (*portnode, version);
+			portnode->remove_property ("name");
+			std::shared_ptr<ARDOUR::Port>(_output_port)->set_state (*portnode, version);
 		}
 	}
 
 	for (XMLNodeList::const_iterator n = node.children().begin(); n != node.children().end(); ++n) {
 		if ((*n)->name() == X_("Button")) {
 			int32_t xid;
-			if (!node.get_property ("id", xid)) {
+			if (!(*n)->get_property ("id", xid)) {
 				continue;
 			}
 			ButtonMap::iterator b = buttons.find (ButtonID (xid));
@@ -785,15 +788,15 @@ CC121::set_state (const XMLNode& node, int version)
 }
 
 bool
-CC121::connection_handler (boost::weak_ptr<ARDOUR::Port>, std::string name1, boost::weak_ptr<ARDOUR::Port>, std::string name2, bool yn)
+CC121::connection_handler (std::weak_ptr<ARDOUR::Port>, std::string name1, std::weak_ptr<ARDOUR::Port>, std::string name2, bool yn)
 {
 	DEBUG_TRACE (DEBUG::CC121, "CC121::connection_handler  start\n");
 	if (!_input_port || !_output_port) {
 		return false;
 	}
 
-	string ni = ARDOUR::AudioEngine::instance()->make_port_name_non_relative (boost::shared_ptr<ARDOUR::Port>(_input_port)->name());
-	string no = ARDOUR::AudioEngine::instance()->make_port_name_non_relative (boost::shared_ptr<ARDOUR::Port>(_output_port)->name());
+	string ni = ARDOUR::AudioEngine::instance()->make_port_name_non_relative (std::shared_ptr<ARDOUR::Port>(_input_port)->name());
+	string no = ARDOUR::AudioEngine::instance()->make_port_name_non_relative (std::shared_ptr<ARDOUR::Port>(_output_port)->name());
 
 	if (ni == name1 || ni == name2) {
 		if (yn) {
@@ -939,7 +942,7 @@ CC121::Button::get_action (bool press, CC121::ButtonState bs)
 }
 
 void
-CC121::Button::set_action (boost::function<void()> f, bool when_pressed, CC121::ButtonState bs)
+CC121::Button::set_action (std::function<void()> f, bool when_pressed, CC121::ButtonState bs)
 {
 	ToDo todo;
 	todo.type = InternalFunction;
@@ -956,7 +959,7 @@ CC121::Button::set_action (boost::function<void()> f, bool when_pressed, CC121::
 }
 
 void
-CC121::Button::set_led_state (boost::shared_ptr<MIDI::Port> port, bool onoff)
+CC121::Button::set_led_state (std::shared_ptr<MIDI::Port> port, bool onoff)
 {
 	MIDI::byte buf[3];
 	DEBUG_TRACE(DEBUG::CC121, "Set Led State\n");
@@ -1043,38 +1046,39 @@ CC121::drop_current_stripable ()
 		if (_current_stripable == session->monitor_out()) {
 			set_current_stripable (session->master_out());
 		} else {
-			set_current_stripable (boost::shared_ptr<Stripable>());
+			set_current_stripable (std::shared_ptr<Stripable>());
 		}
 	}
 }
 
 void
-CC121::set_current_stripable (boost::shared_ptr<Stripable> r)
+CC121::set_current_stripable (std::shared_ptr<Stripable> r)
 {
 	stripable_connections.drop_connections ();
 
 	_current_stripable = r;
 
 	if (_current_stripable) {
-		_current_stripable->DropReferences.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::drop_current_stripable, this), this);
+		_current_stripable->DropReferences.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::drop_current_stripable, this), this);
 
-		_current_stripable->mute_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_mute, this), this);
-		_current_stripable->solo_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_solo, this), this);
+		_current_stripable->mute_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_mute, this), this);
+		_current_stripable->solo_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_solo, this), this);
 
-		boost::shared_ptr<Track> t = boost::dynamic_pointer_cast<Track> (_current_stripable);
+		std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track> (_current_stripable);
 		if (t) {
-			t->rec_enable_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_recenable, this), this);
+			t->rec_enable_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_recenable, this), this);
+			t->monitoring_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_monitoring, this), this);
 		}
 
-		boost::shared_ptr<AutomationControl> control = _current_stripable->gain_control ();
+		std::shared_ptr<AutomationControl> control = _current_stripable->gain_control ();
 		if (control) {
-			control->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_gain, this), this);
-			control->alist()->automation_state_changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_auto, this), this);
+			control->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_gain, this), this);
+			control->alist()->automation_state_changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_auto, this), this);
 		}
 
-		boost::shared_ptr<MonitorProcessor> mp = _current_stripable->monitor_control();
+		std::shared_ptr<MonitorProcessor> mp = _current_stripable->monitor_control();
 		if (mp) {
-			mp->cut_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, boost::bind (&CC121::map_cut, this), this);
+			mp->cut_control()->Changed.connect (stripable_connections, MISSING_INVALIDATOR, std::bind (&CC121::map_cut, this), this);
 		}
 	}
 
@@ -1086,7 +1090,7 @@ CC121::set_current_stripable (boost::shared_ptr<Stripable> r)
 void
 CC121::map_auto ()
 {
-	boost::shared_ptr<AutomationControl> control = _current_stripable->gain_control ();
+	std::shared_ptr<AutomationControl> control = _current_stripable->gain_control ();
 	const AutoState as = control->automation_state ();
 
 	switch (as) {
@@ -1102,6 +1106,7 @@ CC121::map_auto ()
 			get_button (EButton).set_led_state (_output_port, false);
 			get_button (OpenVST).set_led_state (_output_port, false);
 		break;
+		case ARDOUR::Latch:
 		case ARDOUR::Touch:
 			get_button (EButton).set_led_state (_output_port, true);
 			get_button (FP_Read).set_led_state (_output_port, false);
@@ -1120,7 +1125,7 @@ CC121::map_auto ()
 void
 CC121::map_cut ()
 {
-	boost::shared_ptr<MonitorProcessor> mp = _current_stripable->monitor_control();
+	std::shared_ptr<MonitorProcessor> mp = _current_stripable->monitor_control();
 
 	if (mp) {
 		bool yn = mp->cut_all ();
@@ -1164,11 +1169,28 @@ CC121::map_solo ()
 void
 CC121::map_recenable ()
 {
-	boost::shared_ptr<Track> t = boost::dynamic_pointer_cast<Track> (_current_stripable);
+	std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track> (_current_stripable);
 	if (t) {
 		get_button (Rec).set_led_state (_output_port, t->rec_enable_control()->get_value());
 	} else {
 		get_button (Rec).set_led_state (_output_port, false);
+	}
+	map_monitoring ();
+}
+
+void
+CC121::map_monitoring ()
+{
+	std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track> (_current_stripable);
+	if (t) {
+	  MonitorState state = t->monitoring_control()->monitoring_state ();
+		if (state == MonitoringInput || state == MonitoringCue) {
+	    get_button(InputMonitor).set_led_state (_output_port, true);
+		} else {
+	    get_button(InputMonitor).set_led_state (_output_port, false);
+		}
+	} else {
+		get_button(InputMonitor).set_led_state (_output_port, false);
 	}
 }
 
@@ -1184,7 +1206,7 @@ CC121::map_gain ()
 		return;
 	}
 
-	boost::shared_ptr<AutomationControl> control = _current_stripable->gain_control ();
+	std::shared_ptr<AutomationControl> control = _current_stripable->gain_control ();
 	double val;
 
 	if (!control) {
@@ -1222,6 +1244,7 @@ CC121::map_stripable_state ()
 		map_recenable ();
 		map_gain ();
 		map_auto ();
+		map_monitoring ();
 
 		if (_current_stripable == session->monitor_out()) {
 			map_cut ();
@@ -1231,10 +1254,10 @@ CC121::map_stripable_state ()
 	}
 }
 
-list<boost::shared_ptr<ARDOUR::Bundle> >
+list<std::shared_ptr<ARDOUR::Bundle> >
 CC121::bundles ()
 {
-	list<boost::shared_ptr<ARDOUR::Bundle> > b;
+	list<std::shared_ptr<ARDOUR::Bundle> > b;
 
 	if (_input_bundle) {
 		b.push_back (_input_bundle);
@@ -1244,13 +1267,13 @@ CC121::bundles ()
 	return b;
 }
 
-boost::shared_ptr<Port>
+std::shared_ptr<Port>
 CC121::output_port()
 {
 	return _output_port;
 }
 
-boost::shared_ptr<Port>
+std::shared_ptr<Port>
 CC121::input_port()
 {
 	return _input_port;

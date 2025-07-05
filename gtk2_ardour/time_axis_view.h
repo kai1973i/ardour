@@ -1,42 +1,48 @@
 /*
-    Copyright (C) 2003 Paul Davis
+ * Copyright (C) 2005-2008 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2005-2019 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Karsten Wiese <fzuuzf@googlemail.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007 Doug McLain <doug@nostar.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2015 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_gtk_time_axis_h__
-#define __ardour_gtk_time_axis_h__
+#pragma once
 
 #include <vector>
 #include <list>
 
-#include <gtkmm/box.h>
-#include <gtkmm/fixed.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/eventbox.h>
-#include <gtkmm/table.h>
-#include <gtkmm/entry.h>
-#include <gtkmm/label.h>
-#include <gtkmm/sizegroup.h>
+#include <ytkmm/box.h>
+#include <ytkmm/fixed.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/eventbox.h>
+#include <ytkmm/table.h>
+#include <ytkmm/entry.h>
+#include <ytkmm/label.h>
+#include <ytkmm/sizegroup.h>
 
 #include "pbd/stateful.h"
 #include "pbd/signals.h"
 
-#include "evoral/Parameter.hpp"
+#include "evoral/Parameter.h"
 
 #include "ardour/types.h"
 #include "ardour/presentation_info.h"
@@ -49,6 +55,7 @@
 #include "axis_view.h"
 #include "enums.h"
 #include "editing.h"
+#include "selectable.h"
 
 namespace ARDOUR {
 	class Session;
@@ -75,7 +82,6 @@ class TimeSelection;
 class PointSelection;
 class TimeAxisViewItem;
 class Selection;
-class Selectable;
 class RegionView;
 class GhostRegion;
 class StreamView;
@@ -88,19 +94,19 @@ class PasteContext;
  * This class provides the basic LHS controls and display methods. This should be
  * extended to create functional time-axis based views.
  */
-class TimeAxisView : public virtual AxisView
+class TimeAxisView : public virtual AxisView, public SelectableOwner
 {
-	private:
+private:
 	enum NamePackingBits {
 		NameLabelPacked = 0x1,
 		NameEntryPacked = 0x2
 	};
 
-	public:
+public:
 	TimeAxisView(ARDOUR::Session* sess, PublicEditor& ed, TimeAxisView* parent, ArdourCanvas::Canvas& canvas);
 	virtual ~TimeAxisView ();
 
-	static PBD::Signal1<void,TimeAxisView*> CatchDeletion;
+	static PBD::Signal<void(TimeAxisView*)> CatchDeletion;
 
 	static void setup_sizes ();
 
@@ -118,7 +124,7 @@ class TimeAxisView : public virtual AxisView
 	uint32_t effective_height () const { return _effective_height; }
 
 	/** @return y position, or -1 if hidden */
-	double y_position () const { return _y_position; }
+	int y_position () const { return _y_position; }
 
 	/** @return our Editor */
 	PublicEditor& editor () const { return _editor; }
@@ -127,7 +133,7 @@ class TimeAxisView : public virtual AxisView
 
 	void idle_resize (int32_t);
 
-	virtual guint32 show_at (double y, int& nth, Gtk::VBox *parent);
+	virtual guint32 show_at (int y, int& nth, Gtk::VBox *parent);
 	virtual void hide ();
 
 	bool touched (double top, double bot);
@@ -152,7 +158,7 @@ class TimeAxisView : public virtual AxisView
 		HeightPerLane
 	};
 
-	virtual void set_height (uint32_t h, TrackHeightMode m = OnlySelf);
+	virtual void set_height (uint32_t h, TrackHeightMode m = OnlySelf, bool from_idle = false);
 	void set_height_enum (Height, bool apply_to_selection = false);
 	void reset_height();
 
@@ -164,13 +170,13 @@ class TimeAxisView : public virtual AxisView
 	virtual void step_height (bool);
 
 	virtual ARDOUR::RouteGroup* route_group() const { return 0; }
-	virtual boost::shared_ptr<ARDOUR::Playlist> playlist() const { return boost::shared_ptr<ARDOUR::Playlist> (); }
+	virtual std::shared_ptr<ARDOUR::Playlist> playlist() const { return std::shared_ptr<ARDOUR::Playlist> (); }
 
 	virtual void set_samples_per_pixel (double);
 	virtual void show_selection (TimeSelection&);
 	virtual void hide_selection ();
 	virtual void reshow_selection (TimeSelection&);
-	virtual void show_timestretch (samplepos_t start, samplepos_t end, int layers, int layer);
+	virtual void show_timestretch (Temporal::timepos_t const & start, Temporal::timepos_t const & end, int layers, int layer);
 	virtual void hide_timestretch ();
 
 	/* editing operations */
@@ -182,24 +188,28 @@ class TimeAxisView : public virtual AxisView
 	 *  @param selection Selection to paste.
 	 *  @param ctx Paste context.
 	 */
-	virtual bool paste (ARDOUR::samplepos_t pos,
-	                    const Selection&   selection,
-	                    PasteContext&      ctx,
-			    const int32_t sub_num) { return false; }
+	virtual bool paste (Temporal::timepos_t const & pos,
+	                    const Selection&    selection,
+	                    PasteContext&       ctx)
+	{
+		return false;
+	}
+
 
 	virtual void set_selected_regionviews (RegionSelection&) {}
 	virtual void set_selected_points (PointSelection&);
 
 	virtual void fade_range (TimeSelection&) {}
 
-	virtual boost::shared_ptr<ARDOUR::Region> find_next_region (samplepos_t /*pos*/, ARDOUR::RegionPoint, int32_t /*dir*/) {
-		return boost::shared_ptr<ARDOUR::Region> ();
+	virtual std::shared_ptr<ARDOUR::Region> find_next_region (ARDOUR::timepos_t const & /*pos*/, ARDOUR::RegionPoint, int32_t /*dir*/) {
+		return std::shared_ptr<ARDOUR::Region> ();
 	}
 
 	void order_selection_trims (ArdourCanvas::Item *item, bool put_start_on_top);
 
-	virtual void get_selectables (ARDOUR::samplepos_t, ARDOUR::samplepos_t, double, double, std::list<Selectable*>&, bool within = false);
-	virtual void get_inverted_selectables (Selection&, std::list<Selectable *>& results);
+	void _get_selectables (Temporal::timepos_t const &, Temporal::timepos_t  const &, double, double, std::list<Selectable*>&, bool within);
+	void get_inverted_selectables (Selection&, std::list<Selectable *>& results);
+	virtual void get_regionviews_at_or_after (Temporal::timepos_t const &, RegionSelection&) {}
 
 	void add_ghost (RegionView*);
 	void remove_ghost (RegionView*);
@@ -215,12 +225,12 @@ class TimeAxisView : public virtual AxisView
 	virtual LayerDisplay layer_display () const { return Overlaid; }
 	virtual StreamView* view () const { return 0; }
 
-	typedef std::vector<boost::shared_ptr<TimeAxisView> > Children;
+	typedef std::vector<std::shared_ptr<TimeAxisView> > Children;
 	Children get_child_list () const;
 
 	static uint32_t preset_height (Height);
 
-	protected:
+protected:
 	static Glib::RefPtr<Gtk::SizeGroup> controls_meters_size_group;
 	static Glib::RefPtr<Gtk::SizeGroup> midi_scroomer_size_group;
 	static unsigned int name_width_px;
@@ -250,7 +260,7 @@ class TimeAxisView : public virtual AxisView
 	Gtk::Menu*            _size_menu;
 	ArdourCanvas::Line*       _canvas_separator;
 	ArdourCanvas::Container*  _canvas_display;
-	double                _y_position;
+	int                   _y_position;
 	PublicEditor&         _editor;
 
 	virtual bool can_edit_name() const;
@@ -263,7 +273,7 @@ class TimeAxisView : public virtual AxisView
 
 	virtual bool name_entry_changed (std::string const&);
 
-	/** Handle mouse relaese on our LHS control name ebox.
+	/** Handle mouse release on our LHS control name ebox.
 	 *
 	 *@ param ev the event
 	 */
@@ -272,12 +282,6 @@ class TimeAxisView : public virtual AxisView
 	virtual bool controls_ebox_button_press (GdkEventButton*);
 	virtual bool controls_ebox_motion (GdkEventMotion*);
 	virtual bool controls_ebox_leave (GdkEventCrossing*);
-
-	/** Display the standard LHS control menu at when.
-	 *
-	 * @param when the popup activation time
-	 */
-	virtual void popup_display_menu (guint32 when);
 
 	/** Build the standard LHS control menu.
 	 * Subclasses should extend this method to add their own menu options.
@@ -292,20 +296,21 @@ class TimeAxisView : public virtual AxisView
 	bool is_child (TimeAxisView*);
 	virtual bool propagate_time_selection () const { return false; }
 
-	virtual void remove_child (boost::shared_ptr<TimeAxisView>);
-	void add_child (boost::shared_ptr<TimeAxisView>);
+	virtual void remove_child (std::shared_ptr<TimeAxisView>);
+	void add_child (std::shared_ptr<TimeAxisView>);
 
 	/* selection display */
 
 	virtual void selection_click (GdkEventButton*);
 
 	void color_handler ();
+	void parameter_changed (std::string const &);
 
 	void conditionally_add_to_selection ();
 
 	void build_size_menu ();
 
-  private:
+private:
 	Gtk::VBox*            control_parent;
 	int                  _order;
 	uint32_t             _effective_height;
@@ -323,7 +328,8 @@ class TimeAxisView : public virtual AxisView
 
 	void compute_heights ();
 	bool maybe_set_cursor (int y);
+	void popup_display_menu (int button, guint32 when);
+
 
 }; /* class TimeAxisView */
 
-#endif /* __ardour_gtk_time_axis_h__ */

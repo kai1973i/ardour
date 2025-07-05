@@ -1,28 +1,28 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef WAF_BUILD
 #include "gtk2ardour-config.h"
 #endif
 
 #include "pbd/gstdio_compat.h"
-#include <gtkmm/stock.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/openuri.h"
 
@@ -167,7 +167,7 @@ NagScreen::is_subscribed (bool& really)
 	really = false;
 
 	/* what we'd really like here is a way to query paypal
-	   for someone's subscription status. thats a bit complicated
+	   for someone's subscription status. that's a bit complicated
 	   so for now, just see if they ever told us they were
 	   subscribed. we try to trust our users :)
 	*/
@@ -201,7 +201,7 @@ NagScreen::offer_to_donate ()
 void
 NagScreen::offer_to_subscribe ()
 {
-	const char* uri = "http://ardour.org/subscribe";
+	const char* uri = "https://ardour.org/subscribe";
 
 	if (PBD::open_uri (uri)) {
 		mark_subscriber ();

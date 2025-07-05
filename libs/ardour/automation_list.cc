@@ -1,21 +1,25 @@
 /*
-    Copyright (C) 2002 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2008-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2012-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Nick Mainsbridge <mainsbridge@gmail.com>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <set>
 #include <climits>
@@ -23,16 +27,19 @@
 #include <cmath>
 #include <sstream>
 #include <algorithm>
+
+#include "temporal/types_convert.h"
+
 #include "ardour/automation_list.h"
-#include "ardour/beats_samples_converter.h"
 #include "ardour/event_type_map.h"
 #include "ardour/parameter_descriptor.h"
 #include "ardour/parameter_types.h"
 #include "ardour/evoral_types_convert.h"
 #include "ardour/types_convert.h"
-#include "evoral/Curve.hpp"
+
+#include "evoral/Curve.h"
+
 #include "pbd/memento_command.h"
-#include "pbd/stacktrace.h"
 #include "pbd/enumwriter.h"
 #include "pbd/types_convert.h"
 
@@ -42,7 +49,7 @@ using namespace std;
 using namespace ARDOUR;
 using namespace PBD;
 
-PBD::Signal1<void,AutomationList *> AutomationList::AutomationListCreated;
+PBD::Signal<void(AutomationList *)> AutomationList::AutomationListCreated;
 
 #if 0
 static void dumpit (const AutomationList& al, string prefix = "")
@@ -54,12 +61,12 @@ static void dumpit (const AutomationList& al, string prefix = "")
 	cerr << "\n";
 }
 #endif
-AutomationList::AutomationList (const Evoral::Parameter& id, const Evoral::ParameterDescriptor& desc)
-	: ControlList(id, desc)
+AutomationList::AutomationList (const Evoral::Parameter& id, const Evoral::ParameterDescriptor& desc, Temporal::TimeDomainProvider const & tdp)
+	: ControlList(id, desc, tdp)
 	, _before (0)
 {
 	_state = Off;
-	g_atomic_int_set (&_touching, 0);
+	_touching.store (0);
 	_interpolation = default_interpolation ();
 
 	create_curve_if_necessary();
@@ -68,12 +75,12 @@ AutomationList::AutomationList (const Evoral::Parameter& id, const Evoral::Param
 	AutomationListCreated(this);
 }
 
-AutomationList::AutomationList (const Evoral::Parameter& id)
-	: ControlList(id, ARDOUR::ParameterDescriptor(id))
+AutomationList::AutomationList (const Evoral::Parameter& id, Temporal::TimeDomainProvider const & tdp)
+	: ControlList(id, ARDOUR::ParameterDescriptor(id), tdp)
 	, _before (0)
 {
 	_state = Off;
-	g_atomic_int_set (&_touching, 0);
+	_touching.store (0);
 	_interpolation = default_interpolation ();
 
 	create_curve_if_necessary();
@@ -88,7 +95,7 @@ AutomationList::AutomationList (const AutomationList& other)
 	, _before (0)
 {
 	_state = other._state;
-	g_atomic_int_set (&_touching, other.touching());
+	_touching.store (other.touching());
 
 	create_curve_if_necessary();
 
@@ -96,12 +103,12 @@ AutomationList::AutomationList (const AutomationList& other)
 	AutomationListCreated(this);
 }
 
-AutomationList::AutomationList (const AutomationList& other, double start, double end)
+AutomationList::AutomationList (const AutomationList& other, timepos_t const & start, timepos_t const & end)
 	: ControlList(other, start, end)
 	, _before (0)
 {
 	_state = other._state;
-	g_atomic_int_set (&_touching, other.touching());
+	_touching.store (other.touching());
 
 	create_curve_if_necessary();
 
@@ -110,13 +117,13 @@ AutomationList::AutomationList (const AutomationList& other, double start, doubl
 }
 
 /** @param id is used for legacy sessions where the type is not present
- * in or below the AutomationList node.  It is used if @param id is non-null.
+ * in or below the AutomationList node.  It is used if @p id is non-null.
  */
 AutomationList::AutomationList (const XMLNode& node, Evoral::Parameter id)
-	: ControlList(id, ARDOUR::ParameterDescriptor(id))
+	: ControlList(id, ARDOUR::ParameterDescriptor(id), Temporal::TimeDomainProvider (Temporal::AudioTime)) /* domain may change in ::set_state */
 	, _before (0)
 {
-	g_atomic_int_set (&_touching, 0);
+	_touching.store (0);
 	_interpolation = default_interpolation ();
 	_state = Off;
 
@@ -137,11 +144,12 @@ AutomationList::~AutomationList()
 	delete _before;
 }
 
-boost::shared_ptr<Evoral::ControlList>
+std::shared_ptr<Evoral::ControlList>
 AutomationList::create(const Evoral::Parameter&           id,
-                       const Evoral::ParameterDescriptor& desc)
+                       const Evoral::ParameterDescriptor& desc,
+                       Temporal::TimeDomainProvider const & tdp)
 {
-	return boost::shared_ptr<Evoral::ControlList>(new AutomationList(id, desc));
+	return std::shared_ptr<Evoral::ControlList>(new AutomationList(id, desc, tdp));
 }
 
 void
@@ -149,6 +157,9 @@ AutomationList::create_curve_if_necessary()
 {
 	switch (_parameter.type()) {
 	case GainAutomation:
+	case BusSendLevel:
+	case SurroundSendLevel:
+	case InsertReturnLevel:
 	case TrimAutomation:
 	case PanAzimuthAutomation:
 	case PanElevationAutomation:
@@ -156,13 +167,14 @@ AutomationList::create_curve_if_necessary()
 	case FadeInAutomation:
 	case FadeOutAutomation:
 	case EnvelopeAutomation:
+	case MidiVelocityAutomation:
 		create_curve();
 		break;
 	default:
 		break;
 	}
 
-	WritePassStarted.connect_same_thread (_writepass_connection, boost::bind (&AutomationList::snapshot_history, this, false));
+	WritePassStarted.connect_same_thread (_writepass_connection, std::bind (&AutomationList::snapshot_history, this, false));
 }
 
 AutomationList&
@@ -175,7 +187,7 @@ AutomationList::operator= (const AutomationList& other)
 		 */
 		ControlList::operator= (other);
 		_state = other._state;
-		_touching = other._touching;
+		_touching.store (other._touching);
 		ControlList::thaw ();
 	}
 
@@ -223,9 +235,12 @@ AutomationList::default_interpolation () const
 	switch (_parameter.type()) {
 		case GainAutomation:
 		case BusSendLevel:
+		case SurroundSendLevel:
+		case InsertReturnLevel:
 		case EnvelopeAutomation:
 			return ControlList::Exponential;
 			break;
+		case MainOutVolume:
 		case TrimAutomation:
 			return ControlList::Logarithmic;
 			break;
@@ -237,39 +252,35 @@ AutomationList::default_interpolation () const
 }
 
 void
-AutomationList::start_write_pass (double when)
+AutomationList::start_write_pass (timepos_t const & when)
 {
 	snapshot_history (true);
 	ControlList::start_write_pass (when);
 }
 
 void
-AutomationList::write_pass_finished (double when, double thinning_factor)
+AutomationList::write_pass_finished (timepos_t const & when, double thinning_factor)
 {
 	ControlList::write_pass_finished (when, thinning_factor);
 }
 
 void
-AutomationList::start_touch (double when)
+AutomationList::start_touch (timepos_t const & when)
 {
-	if (_state == Touch) {
-		start_write_pass (when);
-	}
-
-	g_atomic_int_set (&_touching, 1);
+	_touching.store (1);
 }
 
 void
-AutomationList::stop_touch (double)
+AutomationList::stop_touch (timepos_t const & /* not used */)
 {
-	if (g_atomic_int_get (&_touching) == 0) {
+	if (_touching.load () == 0) {
 		/* this touch has already been stopped (probably by Automatable::transport_stopped),
 		   so we've nothing to do.
 		*/
 		return;
 	}
 
-	g_atomic_int_set (&_touching, 0);
+	_touching.store (0);
 }
 
 /* _before may be owned by the undo stack,
@@ -306,51 +317,27 @@ AutomationList::thaw ()
 	}
 }
 
-bool
-AutomationList::paste (const ControlList& alist, double pos, DoubleBeatsSamplesConverter const& bfc)
-{
-	AutomationType src_type = (AutomationType)alist.parameter().type();
-	AutomationType dst_type = (AutomationType)_parameter.type();
-
-	if (parameter_is_midi (src_type) == parameter_is_midi (dst_type)) {
-		return ControlList::paste (alist, pos);
-	}
-	bool to_sample = parameter_is_midi (src_type);
-
-	ControlList cl (alist);
-	cl.clear ();
-	for (const_iterator i = alist.begin ();i != alist.end (); ++i) {
-		double when = (*i)->when;
-		if (to_sample) {
-			when = bfc.to ((*i)->when);
-		} else {
-			when = bfc.from ((*i)->when);
-		}
-		cl.fast_simple_add (when, (*i)->value);
-	}
-	return ControlList::paste (cl, pos);
-}
-
-Command*
+PBD::Command*
 AutomationList::memento_command (XMLNode* before, XMLNode* after)
 {
 	return new MementoCommand<AutomationList> (*this, before, after);
 }
 
 XMLNode&
-AutomationList::get_state ()
+AutomationList::get_state () const
 {
 	return state (true, true);
 }
 
 XMLNode&
-AutomationList::state (bool save_auto_state, bool need_lock)
+AutomationList::state (bool save_auto_state, bool need_lock) const
 {
 	XMLNode* root = new XMLNode (X_("AutomationList"));
 
 	root->set_property ("automation-id", EventTypeMap::instance().to_symbol(_parameter));
 	root->set_property ("id", id());
 	root->set_property ("interpolation-style", _interpolation);
+	root->set_property ("time-domain", enum_2_string (time_domain()));
 
 	if (save_auto_state) {
 		/* never serialize state with Write enabled - too dangerous
@@ -378,7 +365,7 @@ AutomationList::state (bool save_auto_state, bool need_lock)
 }
 
 XMLNode&
-AutomationList::serialize_events (bool need_lock)
+AutomationList::serialize_events (bool need_lock) const
 {
 	XMLNode* node = new XMLNode (X_("events"));
 	stringstream str;
@@ -387,14 +374,14 @@ AutomationList::serialize_events (bool need_lock)
 	if (need_lock) {
 		lm.acquire ();
 	}
-	for (iterator xx = _events.begin(); xx != _events.end(); ++xx) {
+	for (const_iterator xx = _events.begin(); xx != _events.end(); ++xx) {
 		str << PBD::to_string ((*xx)->when);
 		str << ' ';
 		str << PBD::to_string ((*xx)->value);
 		str << '\n';
 	}
 
-	/* XML is a bit wierd */
+	/* XML is a bit weird */
 
 	XMLNode* content_node = new XMLNode (X_("foo")); /* it gets renamed by libxml when we set content */
 	content_node->set_content (str.str());
@@ -424,13 +411,13 @@ AutomationList::deserialize_events (const XMLNode& node)
 
 	std::string x_str;
 	std::string y_str;
-	double x;
+	timepos_t x;
 	double y;
 	bool ok = true;
 
 	while (str) {
 		str >> x_str;
-		if (!str || !PBD::string_to<double> (x_str, x)) {
+		if (!str || !PBD::string_to<timepos_t> (x_str, x)) {
 			break;
 		}
 		str >> y_str;
@@ -461,6 +448,11 @@ AutomationList::set_state (const XMLNode& node, int version)
 	XMLNodeList nlist = node.children();
 	XMLNode* nsos;
 	XMLNodeIterator niter;
+	Temporal::TimeDomain time_domain;
+
+	if (node.get_property ("time-domain", time_domain)) {
+		set_time_domain (time_domain);
+	}
 
 	if (node.name() == X_("events")) {
 		/* partial state setting*/
@@ -497,7 +489,7 @@ AutomationList::set_state (const XMLNode& node, int version)
 			}
 
 			y = std::min ((double)_desc.upper, std::max ((double)_desc.lower, y));
-			fast_simple_add (x, y);
+			fast_simple_add (timepos_t (x), y);
 		}
 
 		thaw ();
@@ -571,7 +563,7 @@ AutomationListProperty::clone () const
 {
 	return new AutomationListProperty (
 		this->property_id(),
-		boost::shared_ptr<AutomationList> (new AutomationList (*this->_old.get())),
-		boost::shared_ptr<AutomationList> (new AutomationList (*this->_current.get()))
+		std::shared_ptr<AutomationList> (new AutomationList (*this->_old.get())),
+		std::shared_ptr<AutomationList> (new AutomationList (*this->_current.get()))
 		);
 }

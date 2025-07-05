@@ -17,10 +17,16 @@
 #ifndef _ardour_lv2_extensions_h_
 #define _ardour_lv2_extensions_h_
 
-#include "lv2/lv2plug.in/ns/lv2core/lv2.h"
+#ifdef HAVE_LV2_1_18_6
+#include <lv2/core/lv2.h>
+#include <lv2/options/options.h>
+#else
+#include <lv2/lv2plug.in/ns/lv2core/lv2.h>
+#include <lv2/lv2plug.in/ns/ext/options/options.h>
+#endif
 
 /**
-   @defgroup inlinedisplay Inline-Display
+   @defgroup lv2inlinedisplay Inline-Display
 
    Support for displaying a miniaturized generic view
 	 directly in the host's Mixer Window.
@@ -80,7 +86,7 @@ typedef struct {
 */
 
 /**
-   @defgroup automate Self-Automation
+   @defgroup lv2automate Self-Automation
 
    Support for plugins to write automation data via Atom Events
 
@@ -111,7 +117,7 @@ typedef struct {
 */
 
 /**
-   @defgroup license License-Report
+   @defgroup lv2license License-Report
 
    Allow for commercial LV2 to report their
 	 licensing status.
@@ -149,7 +155,7 @@ typedef struct _LV2_License_Interface {
 */
 
 /**
-   @defgroup plugin provided bypass
+   @defgroup lv2bypass Plugin-provided bypass
 
 	 A port with the designation "processing#enable" must
 	 control a plugin's internal bypass mode.
@@ -180,8 +186,31 @@ typedef struct _LV2_License_Interface {
    @}
 */
 
+
 /**
-   @defgroup midnam MIDI Naming
+   @defgroup lv2routing plugin port/routing control
+
+   This is a "feature" to simplify per port meta-data of
+   http://lv2plug.in/ns/ext/port-groups/port-groups.html#source
+
+   Plugins using this feature provide a strong hint that the host
+   should always connect all audio output-ports.
+
+   This allows mono->stereo plugins to override strict_io rules.
+
+   @{
+*/
+
+#define LV2_ROUTING_URI "http://harrisonconsoles.com/lv2/routing"
+#define LV2_ROUTING_PREFIX LV2_ROUTING_URI "#"
+#define LV2_ROUTING__connectAllOutputs LV2_ROUTING_PREFIX "connectAllOutputs"
+
+/**
+   @}
+*/
+
+/**
+   @defgroup lv2midnam MIDI Naming
 
    @{
 */
@@ -208,7 +237,7 @@ typedef struct {
 	 * text which is a valid midnam desciption
 	 * (or NULL in case of error).
 	 *
-	 * The midnam <Model> must be unique and
+	 * The midnam \<Model\> must be unique and
 	 * specific for the given plugin-instance.
 	 */
 	char* (*midnam)(LV2_Handle instance);
@@ -230,7 +259,10 @@ typedef struct {
 */
 
 /**
-   @defgroup bankpatch
+   @defgroup lv2bankpatch MIDI Bank/Patch Notifications
+
+	 LV2 extension to allow a synth to inform a host about the
+	 currentl used MIDI bank/program.
 
    @{
 */
@@ -249,6 +281,31 @@ typedef struct {
 	/** Info from plugin's run(), notify host that bank/program changed */
 	void (*notify)(LV2_BankPatch_Handle handle, uint8_t channel, uint32_t bank, uint8_t pgm);
 } LV2_BankPatch;
+
+/**
+   @}
+*/
+
+/**
+   @defgroup lv2 export Extension
+
+	 Notify plugin to write data to disk
+
+   @{
+*/
+
+
+#define LV2_EXPORT_URI "http://ardour.org/lv2/export"
+#define LV2_EXPORT_PREFIX LV2_EXPORT_URI "#"
+#define LV2_EXPORT__interface LV2_EXPORT_PREFIX "interface"
+
+/** Export interface */
+typedef struct {
+	/** ..  */
+	int (*setup)(LV2_Handle, const char*, LV2_Options_Option const*);
+	/** ..  */
+	int (*finalize)(LV2_Handle);
+} LV2_Export_Interface;
 
 /**
    @}

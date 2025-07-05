@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2004 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <glibmm/fileutils.h>
 #include <glibmm/miscutils.h>
@@ -60,7 +61,7 @@ LXVSTPlugin::LXVSTPlugin (const LXVSTPlugin &other)
 
 	XMLNode* root = new XMLNode (other.state_node_name ());
 	other.add_state (root);
-	set_state (*root, Stateful::loading_state_version);
+	set_state (*root, Stateful::current_state_version);
 	delete root;
 
 	init_plugin ();
@@ -84,12 +85,11 @@ LXVSTPluginInfo::load (Session& session)
 
 			if (handle == NULL) {
 				error << string_compose(_("LXVST: cannot load module from \"%1\""), path) << endmsg;
-			}
-			else {
+				return PluginPtr ((Plugin*) 0);
+			} else {
 				plugin.reset (new LXVSTPlugin (session.engine(), session, handle, PBD::atoi(unique_id)));
 			}
-		}
-		else {
+		} else {
 			error << _("You asked ardour to not use any LXVST plugins") << endmsg;
 			return PluginPtr ((Plugin*) 0);
 		}
@@ -107,7 +107,7 @@ std::vector<Plugin::PresetRecord>
 LXVSTPluginInfo::get_presets (bool user_only) const
 {
 	std::vector<Plugin::PresetRecord> p;
-#ifndef NO_PLUGIN_STATE
+
 	if (!Config->get_use_lxvst()) {
 		return p;
 	}
@@ -125,11 +125,11 @@ LXVSTPluginInfo::get_presets (bool user_only) const
 		int const vst_version = plugin->dispatcher (plugin, effGetVstVersion, 0, 0, NULL, 0);
 
 		for (int i = 0; i < plugin->numPrograms; ++i) {
-			Plugin::PresetRecord r (string_compose (X_("VST:%1:%2"), unique_id, i), "", false);
+			Plugin::PresetRecord r (string_compose (X_("VST:%1:%2"), unique_id, std::setw(4), std::setfill('0'), i), "", false);
 			if (vst_version >= 2) {
 				char buf[256];
 				if (plugin->dispatcher (plugin, 29, i, 0, buf, 0) == 1) {
-					r.label = buf;
+					r.label = string_compose (_("%1 - %2"), i, buf);
 				} else {
 					r.label = string_compose (_("Preset %1"), i);
 				}
@@ -162,14 +162,12 @@ LXVSTPluginInfo::get_presets (bool user_only) const
 			}
 		}
 	}
-	delete t;
-#endif
 
+	delete t;
 	return p;
 }
 
-LXVSTPluginInfo::LXVSTPluginInfo()
+LXVSTPluginInfo::LXVSTPluginInfo (VST2Info const& nfo) : VSTPluginInfo (nfo)
 {
-       type = ARDOUR::LXVST;
+	type = ARDOUR::LXVST;
 }
-

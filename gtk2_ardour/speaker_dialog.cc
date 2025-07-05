@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2011 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/cartesian.h"
 
@@ -91,12 +92,12 @@ SpeakerDialog::SpeakerDialog ()
 }
 
 void
-SpeakerDialog::set_speakers (boost::shared_ptr<Speakers> s)
+SpeakerDialog::set_speakers (std::shared_ptr<Speakers> s)
 {
 	_speakers = s;
 }
 
-boost::shared_ptr<Speakers>
+std::shared_ptr<Speakers>
 SpeakerDialog::get_speakers () const
 {
 	return _speakers.lock ();
@@ -105,7 +106,7 @@ SpeakerDialog::get_speakers () const
 bool
 SpeakerDialog::darea_expose_event (GdkEventExpose* event)
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return false;
 	}
@@ -246,13 +247,13 @@ SpeakerDialog::clamp_to_circle (double& x, double& y)
 void
 SpeakerDialog::darea_size_allocate (Gtk::Allocation& alloc)
 {
-  	width = alloc.get_width();
-  	height = alloc.get_height();
+	width = alloc.get_width();
+	height = alloc.get_height();
 
 	/* The allocation will (should) be rectangualar, but make the basic
-	   drawing square; space to the right of the square is for over-hanging
-	   text labels.
-	*/
+	 * drawing square; space to the right of the square is for over-hanging
+	 * text labels.
+	 */
 	width = height;
 
 	if (height > 100) {
@@ -268,7 +269,7 @@ SpeakerDialog::darea_size_allocate (Gtk::Allocation& alloc)
 bool
 SpeakerDialog::darea_button_press_event (GdkEventButton *ev)
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return false;
 	}
@@ -315,7 +316,7 @@ SpeakerDialog::darea_button_press_event (GdkEventButton *ev)
 bool
 SpeakerDialog::darea_button_release_event (GdkEventButton *ev)
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return false;
 	}
@@ -366,7 +367,7 @@ SpeakerDialog::darea_button_release_event (GdkEventButton *ev)
 int
 SpeakerDialog::find_closest_object (gdouble x, gdouble y)
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return -1;
 	}
@@ -421,7 +422,7 @@ SpeakerDialog::darea_motion_notify_event (GdkEventMotion *ev)
 bool
 SpeakerDialog::handle_motion (gint evx, gint evy, GdkModifierType state)
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return false;
 	}
@@ -487,7 +488,7 @@ SpeakerDialog::handle_motion (gint evx, gint evy, GdkModifierType state)
 void
 SpeakerDialog::add_speaker ()
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return;
 	}
@@ -499,7 +500,7 @@ SpeakerDialog::add_speaker ()
 void
 SpeakerDialog::set_selected (int i)
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return;
 	}
@@ -520,7 +521,7 @@ SpeakerDialog::set_selected (int i)
 		azimuth_adjustment.set_value (speakers->speakers()[selected_index].angles().azi);
 		speakers->speakers()[selected_index].PositionChanged.connect (
 			selected_speaker_connection, MISSING_INVALIDATOR,
-			boost::bind (&SpeakerDialog::speaker_position_changed, this),
+			std::bind (&SpeakerDialog::speaker_position_changed, this),
 			gui_context ()
 			);
 	}
@@ -529,7 +530,7 @@ SpeakerDialog::set_selected (int i)
 void
 SpeakerDialog::azimuth_changed ()
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return;
 	}
@@ -550,7 +551,7 @@ SpeakerDialog::azimuth_changed ()
 void
 SpeakerDialog::speaker_position_changed ()
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return;
 	}
@@ -571,7 +572,7 @@ SpeakerDialog::speaker_position_changed ()
 void
 SpeakerDialog::remove_speaker ()
 {
-	boost::shared_ptr<Speakers> speakers = _speakers.lock ();
+	std::shared_ptr<Speakers> speakers = _speakers.lock ();
 	if (!speakers) {
 		return;
 	}

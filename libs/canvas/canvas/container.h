@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2011-2014 Paul Davis
-    Original Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2015 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __CANVAS_CONTAINER_H__
 #define __CANVAS_CONTAINER_H__
@@ -59,6 +59,25 @@ public:
 	 * overridden as necessary.
 	 */
 	void prepare_for_render (Rect const & area) const;
+
+	/** Render all children of this container as group,
+	 * so that they occlude each other. Then blend the result
+	 * onto the destination with the given alpha level.
+	 *
+	 * @param alpha
+	 *  - alpha < 0 render normally, do not group rendering. This is the default.
+	 *  - alpha == 0 do not render at all. rendered items would be invisible.
+	 *  - alpha < 1.0 use a group to render objects, blend flattened result with the given transparency.
+	 *  - alpha >= 1.0 simply blit the result of the grouped render operation.
+	 */
+	void set_render_with_alpha (double alpha);
+
+	double render_with_alpha () const {
+		return _render_with_alpha;
+	}
+
+private:
+	double _render_with_alpha;
 };
 
 }

@@ -1,22 +1,24 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Copyright (C) 2011 Tim Mayberry
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2013 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifdef HAVE_ALSA
 #include "ardouralsautil/devicelist.h"
@@ -27,18 +29,18 @@
 #include <CoreFoundation/CFString.h>
 #include <sys/param.h>
 #include <mach-o/dyld.h>
+#undef nil
 #endif
 
 #ifdef PLATFORM_WINDOWS
 #include <shobjidl.h>  //  Needed for
 #include <shlguid.h>   // 'IShellLink'
+#include "pbd/windows_special_dirs.h"
 #endif
 
 #if (defined PLATFORM_WINDOWS && defined HAVE_PORTAUDIO)
 #include <portaudio.h>
 #endif
-
-#include <boost/scoped_ptr.hpp>
 
 #include "pbd/gstdio_compat.h"
 #include <glibmm/miscutils.h>
@@ -66,6 +68,7 @@ namespace ARDOUR {
 	const char * const coreaudio_driver_name = X_("CoreAudio");
 	const char * const alsa_driver_name = X_("ALSA");
 	const char * const oss_driver_name = X_("OSS");
+	const char * const sun_driver_name = X_("Sun");
 	const char * const freebob_driver_name = X_("FreeBoB");
 	const char * const ffado_driver_name = X_("FFADO");
 	const char * const netjack_driver_name = X_("NetJACK");
@@ -79,6 +82,7 @@ namespace {
 	const char * const coreaudio_driver_command_line_name = X_("coreaudio");
 	const char * const alsa_driver_command_line_name = X_("alsa");
 	const char * const oss_driver_command_line_name = X_("oss");
+	const char * const sun_driver_command_line_name = X_("sun");
 	const char * const freebob_driver_command_line_name = X_("freebob");
 	const char * const ffado_driver_command_line_name = X_("firewire");
 	const char * const netjack_driver_command_line_name = X_("netjack");
@@ -115,7 +119,11 @@ ARDOUR::get_jack_audio_driver_names (vector<string>& audio_driver_names)
 #ifdef HAVE_ALSA
 	audio_driver_names.push_back (alsa_driver_name);
 #endif
+#if defined(__NetBSD__)
+	audio_driver_names.push_back (sun_driver_name);
+#else
 	audio_driver_names.push_back (oss_driver_name);
+#endif
 	audio_driver_names.push_back (freebob_driver_name);
 	audio_driver_names.push_back (ffado_driver_name);
 #endif
@@ -215,6 +223,9 @@ get_jack_command_line_audio_driver_name (const string& driver_name, string& comm
 		return true;
 	} else if (driver_name == oss_driver_name) {
 		command_line_name = oss_driver_command_line_name;
+		return true;
+	} else if (driver_name == sun_driver_name) {
+		command_line_name = sun_driver_command_line_name;
 		return true;
 	} else if (driver_name == freebob_driver_name) {
 		command_line_name = freebob_driver_command_line_name;
@@ -404,6 +415,13 @@ ARDOUR::get_jack_oss_device_names (device_map_t& devices)
 }
 
 void
+ARDOUR::get_jack_sun_device_names (device_map_t& devices)
+{
+	devices.insert (make_pair (default_device_name, default_device_name));
+}
+
+
+void
 ARDOUR::get_jack_freebob_device_names (device_map_t& devices)
 {
 	devices.insert (make_pair (default_device_name, default_device_name));
@@ -440,6 +458,8 @@ ARDOUR::get_jack_device_names_for_audio_driver (const string& driver_name, devic
 		get_jack_alsa_device_names (devices);
 	} else if (driver_name == oss_driver_name) {
 		get_jack_oss_device_names (devices);
+	} else if (driver_name == sun_driver_name) {
+		get_jack_sun_device_names (devices);
 	} else if (driver_name == freebob_driver_name) {
 		get_jack_freebob_device_names (devices);
 	} else if (driver_name == ffado_driver_name) {
@@ -472,7 +492,8 @@ ARDOUR::get_jack_device_names_for_audio_driver (const string& driver_name)
 bool
 ARDOUR::get_jack_audio_driver_supports_two_devices (const string& driver)
 {
-	return (driver == alsa_driver_name || driver == oss_driver_name);
+	return (driver == alsa_driver_name || driver == oss_driver_name ||
+			driver == sun_driver_name);
 }
 
 bool
@@ -486,7 +507,7 @@ bool
 ARDOUR::get_jack_audio_driver_supports_setting_period_count (const string& driver)
 {
 	return !(driver == dummy_driver_name || driver == coreaudio_driver_name ||
-			driver == portaudio_driver_name);
+			driver == portaudio_driver_name || driver == sun_driver_name);
 }
 
 bool
@@ -533,66 +554,32 @@ ARDOUR::get_jack_server_dir_paths (vector<std::string>& server_dir_paths)
 	Searchpath sp(string(g_getenv("PATH")));
 
 #ifdef PLATFORM_WINDOWS
-// N.B. The #define (immediately below) can be safely removed once we know that this code builds okay with mingw
-#ifdef COMPILER_MSVC
-	IShellLinkA  *pISL = NULL;
-	IPersistFile *ppf  = NULL;
+	std::string reg;
+	
+	/* since https://github.com/jackaudio/jack2/commit/ac62faa9c0268b89e3ea23c0318227612acd8079 */
+	bool found = PBD::windows_query_registry ("Software\\JACK", "InstallPath", reg);
 
-	// Mixbus creates a Windows shortcut giving the location of its
-	// own (bundled) version of Jack. Let's see if that shortcut exists
-	if (SUCCEEDED (CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLink, (void**)&pISL)))
-	{
-		if (SUCCEEDED (pISL->QueryInterface(IID_IPersistFile, (LPVOID*)&ppf)))
-		{
-			char  target_path[MAX_PATH];
-			char  shortcut_pathA[MAX_PATH];
-			WCHAR shortcut_pathW[MAX_PATH];
-
-			// Our Windows installer should have created a shortcut to the Jack
-			// server so let's start by finding out what drive it got installed on
-			if (char *env_path = getenv ("windir"))
-			{
-				strcpy (shortcut_pathA, env_path);
-				shortcut_pathA[2] = '\0'; // Gives us just the drive letter and colon
-			}
-			else // Assume 'C:'
-				strcpy (shortcut_pathA, "C:");
-
-			strcat (shortcut_pathA, "\\Program Files (x86)\\Jack\\Start Jack.lnk");
-
-			MultiByteToWideChar (CP_ACP, MB_PRECOMPOSED, shortcut_pathA, -1, shortcut_pathW, MAX_PATH);
-
-			// If it did, load the shortcut into our persistent file
-			if (SUCCEEDED (ppf->Load(shortcut_pathW, 0)))
-			{
-				// Read the target information from the shortcut object
-				if (S_OK == (pISL->GetPath (target_path, MAX_PATH, NULL, SLGP_UNCPRIORITY)))
-				{
-					char *p = strrchr (target_path, '\\');
-
-					if (p)
-					{
-						*p = NULL;
-						sp.push_back (target_path);
-					}
-				}
-			}
+	if (!found) {
+		/* special-case jack 1.9.16, "Location" included jackd.exe */
+		found = PBD::windows_query_registry ("Software\\JACK", "Location", reg);
+		if (found) {
+			reg = Glib::path_get_dirname (reg);
 		}
 	}
+	if (!found) {
+		// If the newer style regkey wasn't found, check for one in the older style...
+		found = PBD::windows_query_registry ("Software\\Jack", "InstPath", reg, HKEY_CURRENT_USER);
+	}
 
-	if (ppf)
-		ppf->Release();
-
-	if (pISL)
-		pISL->Release();
-#endif
+	if (found) {
+		sp.push_back (reg);
+	}
 
 	gchar *install_dir = g_win32_get_package_installation_directory_of_module (NULL);
 	if (install_dir) {
 		sp.push_back (install_dir);
 		g_free (install_dir);
 	}
-	// don't try and use a system wide JACK install yet.
 #else
 	if (sp.empty()) {
 		sp.push_back ("/usr/bin");
@@ -653,9 +640,16 @@ ARDOUR::get_jack_default_server_path (std::string& server_path)
 	return true;
 }
 
-string
-quote_string (const string& str)
+static string
+quote_string (string str)
 {
+	/* escape quotes in string */
+	size_t pos = 0;
+	while ((pos = str.find("\"", pos)) != std::string::npos) {
+		str.replace (pos, 1, "\\\"");
+		pos += 2;
+	}
+	/* and quote the whole string */
 	return "\"" + str + "\"";
 }
 
@@ -694,7 +688,7 @@ ARDOUR::get_jack_command_line_string (JackCommandLineOptions& options, string& c
 
 	args.push_back (options.server_path);
 
-#ifdef PLATFORM_WINDOWS
+#if defined(PLATFORM_WINDOWS) || defined(__NetBSD__) || defined(__sun)
 	// must use sync mode on windows
 	args.push_back ("-S");
 #endif
@@ -724,6 +718,7 @@ ARDOUR::get_jack_command_line_string (JackCommandLineOptions& options, string& c
 	args.push_back ("-p");
 	args.push_back (to_string(options.ports_max));
 
+#ifndef __NetBSD__
 	if (options.realtime) {
 		args.push_back ("-R");
 		if (options.priority != 0) {
@@ -733,6 +728,9 @@ ARDOUR::get_jack_command_line_string (JackCommandLineOptions& options, string& c
 	} else {
 		args.push_back ("-r");
 	}
+#else
+	args.push_back ("-r");
+#endif
 
 	if (options.unlock_gui_libs) {
 		args.push_back ("-u");
@@ -893,8 +891,12 @@ ARDOUR::get_jack_command_line_string (JackCommandLineOptions& options, string& c
 	ostringstream oss;
 
 	for (vector<string>::const_iterator i = args.begin(); i != args.end();) {
-		if (i->find_first_of(' ') != string::npos) {
-			oss << "\"" << *i << "\"";
+		if ((i != args.begin()) && (i->find_first_of(' ') != string::npos)) {
+			// Be aware that (in Windows at least) Jack can't start if we supply a server path
+			// surrounded in quote marks (maybe Jack already does something similar imternally??)
+			// Fortunately, if it exists in our '.jackdrc' file, the server path will always be
+			// its very first entry - so we skip quoting that entry if it did contain spaces.
+			oss << quote_string (*i);
 		} else {
 			oss << *i;
 		}

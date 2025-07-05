@@ -1,27 +1,27 @@
 /*
-    Copyright (C) 2011 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/table.h>
-#include <gtkmm/label.h>
-#include <gtkmm/stock.h>
 #include "transpose_dialog.h"
+
+#include <ytkmm/table.h>
+#include <ytkmm/label.h>
+#include <ytkmm/stock.h>
+
 #include "pbd/i18n.h"
 
 using namespace Gtk;
@@ -38,12 +38,12 @@ TransposeDialog::TransposeDialog ()
 	t->set_col_spacings (6);
 
 	int r = 0;
-	Label* l = manage (new Label (_("Octaves:"), ALIGN_LEFT, ALIGN_CENTER, false));
+	Label* l = manage (new Label (_("Octaves:"), ALIGN_START, ALIGN_CENTER, false));
 	t->attach (*l, 0, 1, r, r + 1, FILL, EXPAND, 0, 0);
 	t->attach (_octaves_spinner, 1, 2, r, r + 1, FILL, EXPAND & FILL, 0, 0);
 	++r;
 
-	l = manage (new Label (_("Semitones:"), ALIGN_LEFT, ALIGN_CENTER, false));
+	l = manage (new Label (_("Semitones:"), ALIGN_START, ALIGN_CENTER, false));
 	t->attach (*l, 0, 1, r, r + 1, FILL, EXPAND, 0, 0);
 	t->attach (_semitones_spinner, 1, 2, r, r + 1, FILL, EXPAND & FILL, 0, 0);
 	++r;

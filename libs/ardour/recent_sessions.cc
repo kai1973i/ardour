@@ -1,21 +1,25 @@
 /*
-    Copyright (C) 2004 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2006-2012 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2008-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2015 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstring>
 #include <cerrno>
@@ -26,6 +30,7 @@
 #include <glibmm/miscutils.h>
 
 #include "pbd/error.h"
+#include "pbd/file_utils.h"
 
 #include "ardour/rc_configuration.h"
 #include "ardour/filesystem_paths.h"
@@ -227,12 +232,14 @@ ARDOUR::store_recent_sessions (string name, string path)
 		return -1;
 	}
 
+	path = canonical_path (path);
+
 	pair<string,string> newpair;
 
 	newpair.first = name;
 	newpair.second = path;
 
-	rs.erase(remove(rs.begin(), rs.end(), newpair), rs.end());
+	rs.erase (remove_if (rs.begin(), rs.end(), [path](pair<string,string> const& p) { return p.second == path; }), rs.end());
 
 	rs.push_front (newpair);
 

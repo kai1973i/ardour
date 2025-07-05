@@ -1,21 +1,22 @@
 /*
-    Copyright (C) 2014 John Emmas
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2014-2017 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2015-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2016 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "bundle_env.h"
 #include "pbd/i18n.h"
@@ -79,7 +80,7 @@ get_module_folder ()
 std::string ret;
 
 	// Gives the top-level Ardour installation folder (on Windows)
-	// Typically, this will be somehwere like "C:\Program Files"
+	// Typically, this will be somewhere like "C:\Program Files"
 
 	gchar* pExeRoot = g_win32_get_package_installation_directory_of_module (0);
 
@@ -266,7 +267,7 @@ string pango_modules_file;
 		pango_modules_file += PANGO_CONF_LOCATION;
 #if 0
 // JE - handy for non-English locale testing (Greek, in this case)
-		Glib::ustring pango_modules_path = Glib::locale_to_utf8("C:\\Program Files\\Mixbus3\\etc\\ÄÇÌÇÔÑÇÓ\\pango.modules");
+		Glib::ustring pango_modules_path = Glib::locale_to_utf8("C:\\Program Files\\Mixbus3\\etc\\Ã„Ã‡ÃŒÃ‡Ã”Ã‘Ã‡Ã“\\pango.modules");
 /**/
 #else
 		Glib::ustring pango_modules_path = pango_modules_file;
@@ -483,22 +484,29 @@ fixup_bundle_environment (int argc, char* argv[], string & localedir)
 
 void load_custom_fonts()
 {
-	std::string ardour_mono_file;
+	FcConfig* config = FcInitLoadConfigAndFonts();
 
-	if (!find_file (ardour_data_search_path(), "ArdourMono.ttf", ardour_mono_file)) {
+	std::string font_file;
+
+	if (!find_file (ardour_data_search_path(), "ArdourMono.ttf", font_file)) {
 		cerr << _("Cannot find ArdourMono TrueType font") << endl;
+	} else {
+		FcBool ret = FcConfigAppFontAddFile(config, reinterpret_cast<const FcChar8*>(font_file.c_str()));
+		if (ret == FcFalse) {
+			cerr << _("Cannot load ArdourMono TrueType font.") << endl;
+		}
 	}
 
-	FcConfig *config = FcInitLoadConfigAndFonts();
-	FcBool ret = FcConfigAppFontAddFile(config, reinterpret_cast<const FcChar8*>(ardour_mono_file.c_str()));
-
-	if (ret == FcFalse) {
-		cerr << _("Cannot load ArdourMono TrueType font.") << endl;
+	if (!find_file (ardour_data_search_path(), "ArdourSans.ttf", font_file)) {
+		cerr << _("Cannot find ArdourSans TrueType font") << endl;
+	} else {
+		FcBool ret = FcConfigAppFontAddFile(config, reinterpret_cast<const FcChar8*>(font_file.c_str()));
+		if (ret == FcFalse) {
+			cerr << _("Cannot load ArdourSans TrueType font.") << endl;
+		}
 	}
 
-	ret = FcConfigSetCurrent(config);
-
-	if (ret == FcFalse) {
+	if (FcFalse == FcConfigSetCurrent(config)) {
 		cerr << _("Failed to set fontconfig configuration.") << endl;
 	}
 }

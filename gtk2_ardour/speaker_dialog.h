@@ -1,30 +1,30 @@
 /*
-    Copyright (C) 2011 Paul Davis
+ * Copyright (C) 2011-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2011 Carl Hetherington <carl@carlh.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_gtk_speaker_dialog_h__
-#define __ardour_gtk_speaker_dialog_h__
-
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/box.h>
-#include <gtkmm/adjustment.h>
-#include <gtkmm/aspectframe.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/box.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/aspectframe.h>
 
 #include "ardour/speakers.h"
 
@@ -35,11 +35,11 @@ class SpeakerDialog  : public ArdourWindow
 public:
 	SpeakerDialog ();
 
-	boost::shared_ptr<ARDOUR::Speakers> get_speakers() const;
-	void set_speakers (boost::shared_ptr<ARDOUR::Speakers>);
+	std::shared_ptr<ARDOUR::Speakers> get_speakers() const;
+	void set_speakers (std::shared_ptr<ARDOUR::Speakers>);
 
 private:
-	boost::weak_ptr<ARDOUR::Speakers> _speakers;
+	std::weak_ptr<ARDOUR::Speakers> _speakers;
 	Gtk::HBox        hbox;
 	Gtk::VBox        side_vbox;
 	Gtk::AspectFrame aspect_frame;
@@ -82,4 +82,3 @@ private:
 	void speaker_position_changed ();
 };
 
-#endif /* __ardour_gtk_speaker_dialog_h__ */

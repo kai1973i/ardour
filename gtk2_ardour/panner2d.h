@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 2002 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2005-2014 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2011 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __ardour_panner_2d_h__
 #define __ardour_panner_2d_h__
@@ -25,12 +28,12 @@
 #include <vector>
 
 #include <glibmm/refptr.h>
-#include <gtkmm/drawingarea.h>
-#include <gtkmm/window.h>
-#include <gtkmm/box.h>
-#include <gtkmm/button.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/adjustment.h>
+#include <ytkmm/drawingarea.h>
+#include <ytkmm/window.h>
+#include <ytkmm/box.h>
+#include <ytkmm/button.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/adjustment.h>
 
 #include "pbd/cartesian.h"
 
@@ -45,16 +48,12 @@ namespace Gtk {
 	class CheckMenuItem;
 }
 
-namespace Pango {
-	class Container;
-}
-
 class Panner2dWindow;
 
 class Panner2d : public Gtk::DrawingArea
 {
 	public:
-	Panner2d (boost::shared_ptr<ARDOUR::PannerShell>, int32_t height);
+	Panner2d (std::shared_ptr<ARDOUR::PannerShell>, int32_t height);
 	~Panner2d ();
 
 	void allow_target_motion (bool);
@@ -65,7 +64,7 @@ class Panner2d : public Gtk::DrawingArea
 	void reset (uint32_t n_inputs);
 	void set_send_drawing_mode (bool);
 
-	boost::shared_ptr<ARDOUR::PannerShell> get_panner_shell() const { return panner_shell; }
+	std::shared_ptr<ARDOUR::PannerShell> get_panner_shell() const { return panner_shell; }
 
 	void cart_to_gtk (PBD::CartesianVector&) const;
 	void gtk_to_cart (PBD::CartesianVector&) const;
@@ -113,6 +112,8 @@ class Panner2d : public Gtk::DrawingArea
 		uint32_t signal_fill;
 		uint32_t speaker_fill;
 		uint32_t text;
+		uint32_t send_bg;
+		uint32_t send_pan;
 	};
 
 	static ColorScheme colors;
@@ -120,7 +121,7 @@ class Panner2d : public Gtk::DrawingArea
 	static bool have_colors;
 	void color_handler ();
 
-	boost::shared_ptr<ARDOUR::PannerShell> panner_shell;
+	std::shared_ptr<ARDOUR::PannerShell> panner_shell;
 	Glib::RefPtr<Pango::Layout> layout;
 
 	typedef std::vector<Target*> Targets;
@@ -162,7 +163,7 @@ class Panner2d : public Gtk::DrawingArea
 class Panner2dWindow : public ArdourWindow
 {
 	public:
-	Panner2dWindow (boost::shared_ptr<ARDOUR::PannerShell>, int32_t height, uint32_t inputs);
+	Panner2dWindow (std::shared_ptr<ARDOUR::PannerShell>, int32_t height, uint32_t inputs);
 
 	void reset (uint32_t n_inputs);
 

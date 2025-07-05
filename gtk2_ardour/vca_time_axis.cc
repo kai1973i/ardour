@@ -1,23 +1,23 @@
 /*
-    Copyright (C) 2016 Paul Davis
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/menu.h>
+#include <ytkmm/menu.h>
 
 #include "pbd/string_convert.h"
 
@@ -56,27 +56,27 @@ VCATimeAxisView::VCATimeAxisView (PublicEditor& ed, Session* s, ArdourCanvas::Ca
 	controls_base_unselected_name = X_("ControlMasterBaseUnselected");
 
 	solo_button.set_name ("solo button");
-	set_tooltip (solo_button, _("Solo slaves"));
+	set_tooltip (solo_button, _("Solo assigned channels"));
 	solo_button.signal_button_release_event().connect (sigc::mem_fun (*this, &VCATimeAxisView::solo_release), false);
-	solo_button.unset_flags (Gtk::CAN_FOCUS);
+	solo_button.set_can_focus (false);
 
 	mute_button.set_name ("mute button");
 	mute_button.set_text (S_("Mute|M"));
-	set_tooltip (mute_button, _("Mute slaves"));
+	set_tooltip (mute_button, _("Mute assigned channels"));
 	mute_button.signal_button_release_event().connect (sigc::mem_fun (*this, &VCATimeAxisView::mute_release), false);
-	mute_button.unset_flags (Gtk::CAN_FOCUS);
+	mute_button.set_can_focus (false);
 
 	drop_button.set_name ("mute button");
 	drop_button.set_text (S_("VCA|D"));
-	set_tooltip (drop_button, _("Unassign all slaves"));
+	set_tooltip (drop_button, _("Unassign all channels"));
 	drop_button.signal_button_release_event().connect (sigc::mem_fun (*this, &VCATimeAxisView::drop_release), false);
-	drop_button.unset_flags (Gtk::CAN_FOCUS);
+	drop_button.set_can_focus (false);
 
 	automation_button.set_name ("route button");
 	automation_button.set_text (S_("RTAV|A"));
 	set_tooltip (automation_button, _("Automation"));
 	automation_button.signal_button_press_event().connect (sigc::mem_fun (*this, &VCATimeAxisView::automation_click), false);
-	automation_button.unset_flags (Gtk::CAN_FOCUS);
+	automation_button.set_can_focus (false);
 
 	mute_button.set_tweaks(ArdourButton::TrackHeader);
 	solo_button.set_tweaks(ArdourButton::TrackHeader);
@@ -113,13 +113,17 @@ VCATimeAxisView::VCATimeAxisView (PublicEditor& ed, Session* s, ArdourCanvas::Ca
 	controls_ebox.set_name (controls_base_unselected_name);
 	time_axis_frame.set_name (controls_base_unselected_name);
 
-	s->config.ParameterChanged.connect (*this, invalidator (*this), boost::bind (&VCATimeAxisView::parameter_changed, this, _1), gui_context());
-	Config->ParameterChanged.connect (*this, invalidator (*this), boost::bind (&VCATimeAxisView::parameter_changed, this, _1), gui_context());
+	s->MonitorBusAddedOrRemoved.connect (*this, invalidator (*this), std::bind (&VCATimeAxisView::set_button_names, this), gui_context());
+
+	s->config.ParameterChanged.connect (*this, invalidator (*this), std::bind (&VCATimeAxisView::parameter_changed, this, _1), gui_context());
+	Config->ParameterChanged.connect (*this, invalidator (*this), std::bind (&VCATimeAxisView::parameter_changed, this, _1), gui_context());
 	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &VCATimeAxisView::parameter_changed));
 }
 
 VCATimeAxisView::~VCATimeAxisView ()
 {
+	delete automation_action_menu;
+	CatchDeletion (this);
 }
 
 void
@@ -135,7 +139,7 @@ VCATimeAxisView::parameter_changed (std::string const & p)
 {
 	if (p == "track-name-number") {
 		update_track_number_visibility();
-	} else if (p == "use-monitor-bus" || p == "solo-control-is-listen-control" || p == "listen-position") {
+	} else if (p == "solo-control-is-listen-control" || p == "listen-position") {
 		set_button_names ();
 	}
 }
@@ -161,23 +165,23 @@ VCATimeAxisView::mute_release (GdkEventButton*)
 }
 
 void
-VCATimeAxisView::set_vca (boost::shared_ptr<VCA> v)
+VCATimeAxisView::set_vca (std::shared_ptr<VCA> v)
 {
 	StripableTimeAxisView::set_stripable (v);
 	_vca = v;
 
-	gain_meter.set_controls (boost::shared_ptr<Route>(),
-	                         boost::shared_ptr<PeakMeter>(),
-	                         boost::shared_ptr<Amp>(),
+	gain_meter.set_controls (v,
+	                         std::shared_ptr<PeakMeter>(),
+	                         std::shared_ptr<Amp>(),
 	                         _vca->gain_control());
 
 	// Mixer_UI::instance()->show_vca_change.connect (sigc::mem_fun (*this, &VCAMasterStrip::spill_change));
 
-	_vca->PropertyChanged.connect (vca_connections, invalidator (*this), boost::bind (&VCATimeAxisView::vca_property_changed, this, _1), gui_context());
+	_vca->PropertyChanged.connect (vca_connections, invalidator (*this), std::bind (&VCATimeAxisView::vca_property_changed, this, _1), gui_context());
 
-	_vca->solo_control()->Changed.connect (vca_connections, invalidator (*this), boost::bind (&VCATimeAxisView::update_solo_display, this), gui_context());
-	_vca->mute_control()->Changed.connect (vca_connections, invalidator (*this), boost::bind (&VCATimeAxisView::update_mute_display, this), gui_context());
-	_vca->DropReferences.connect (vca_connections, invalidator (*this), boost::bind (&VCATimeAxisView::self_delete, this), gui_context());
+	_vca->solo_control()->Changed.connect (vca_connections, invalidator (*this), std::bind (&VCATimeAxisView::update_solo_display, this), gui_context());
+	_vca->mute_control()->Changed.connect (vca_connections, invalidator (*this), std::bind (&VCATimeAxisView::update_mute_display, this), gui_context());
+	_vca->DropReferences.connect (vca_connections, invalidator (*this), std::bind (&VCATimeAxisView::self_delete, this), gui_context());
 
 	solo_button.set_controllable (_vca->solo_control());
 	mute_button.set_controllable (_vca->mute_control());
@@ -299,7 +303,7 @@ VCATimeAxisView::update_track_number_visibility ()
 
 		// see ArdourButton::on_size_request(), we should probably use a global size-group here instead.
 		// except the width of the number label is subtracted from the name-hbox, so we
-		// need to explictly calculate it anyway until the name-label & entry become ArdourWidgets.
+		// need to explicitly calculate it anyway until the name-label & entry become ArdourWidgets.
 
 		int tnw = (2 + std::max(2u, _session->track_number_decimals())) * number_label.char_pixel_width();
 		if (tnw & 1) --tnw;
@@ -337,7 +341,7 @@ VCATimeAxisView::presentation_info () const
 	return _vca->presentation_info();
 }
 
-boost::shared_ptr<Stripable>
+std::shared_ptr<Stripable>
 VCATimeAxisView::stripable () const
 {
 	return _vca;
@@ -346,13 +350,14 @@ VCATimeAxisView::stripable () const
 Gdk::Color
 VCATimeAxisView::color () const
 {
-	return ARDOUR_UI_UTILS::gdk_color_from_rgb (_vca->presentation_info().color ());
+	return Gtkmm2ext::gdk_color_from_rgb (_vca->presentation_info().color ());
 }
 
 void
-VCATimeAxisView::set_height (uint32_t h, TrackHeightMode m)
+VCATimeAxisView::set_height (uint32_t h, TrackHeightMode m, bool from_idle)
 {
-	TimeAxisView::set_height (h, m);
+	TimeAxisView::set_height (h, m, from_idle);
+
 	if (height >= preset_height (HeightNormal)) {
 		drop_button.show ();
 		automation_button.show ();
@@ -386,14 +391,14 @@ VCATimeAxisView::set_marked_for_display (bool yn)
 void
 VCATimeAxisView::create_gain_automation_child (const Evoral::Parameter& param, bool show)
 {
-	boost::shared_ptr<AutomationControl> c = _vca->gain_control();
+	std::shared_ptr<AutomationControl> c = _vca->gain_control();
 	if (!c) {
 		error << "VCA has no gain automation, unable to add automation track view." << endmsg;
 		return;
 	}
 
 	gain_track.reset (new AutomationTimeAxisView (_session,
-						      _vca, boost::shared_ptr<Automatable> (), c, param,
+						      _vca, std::shared_ptr<Automatable> (), c, param,
 						      _editor,
 						      *this,
 						      false,
@@ -406,14 +411,14 @@ VCATimeAxisView::create_gain_automation_child (const Evoral::Parameter& param, b
 void
 VCATimeAxisView::create_mute_automation_child (const Evoral::Parameter& param, bool show)
 {
-	boost::shared_ptr<AutomationControl> c = _vca->mute_control();
+	std::shared_ptr<AutomationControl> c = _vca->mute_control();
 	if (!c) {
 		error << "VCA has no mute automation, unable to add automation track view." << endmsg;
 		return;
 	}
 
 	mute_track.reset (new AutomationTimeAxisView (_session,
-						      _vca, boost::shared_ptr<Automatable> (), c, param,
+						      _vca, std::shared_ptr<Automatable> (), c, param,
 						      _editor,
 						      *this,
 						      false,
@@ -447,9 +452,7 @@ VCATimeAxisView::build_display_menu ()
 
 	MenuList& items = display_menu->items();
 	items.push_back (MenuElem (_("Color..."), sigc::mem_fun (*this, &VCATimeAxisView::choose_color)));
-	if (_size_menu) {
-		detach_menu (*_size_menu);
-	}
+
 	build_size_menu ();
 	items.push_back (MenuElem (_("Height"), *_size_menu));
 	items.push_back (SeparatorElem());
@@ -458,7 +461,7 @@ VCATimeAxisView::build_display_menu ()
 	items.push_back (MenuElem (_("Automation"), *automation_action_menu));
 
 	items.push_back (SeparatorElem());
-	items.push_back (MenuElem (_("Drop All Slaves"), sigc::mem_fun (*this, &VCATimeAxisView::drop_all_slaves)));
+	items.push_back (MenuElem (_("Drop All Assigned Channels"), sigc::mem_fun (*this, &VCATimeAxisView::drop_all_slaves)));
 	items.push_back (SeparatorElem());
 	items.push_back (MenuElem (_("Remove"), sigc::mem_fun(_editor, &PublicEditor::remove_tracks)));
 }
@@ -552,7 +555,7 @@ VCATimeAxisView::drop_all_slaves ()
 	_vca->Drop (); /* EMIT SIGNAL */
 
 	if (Mixer_UI::instance()->showing_spill_for (_vca)) {
-		Mixer_UI::instance()->show_spill (boost::shared_ptr<Stripable>());
+		Mixer_UI::instance()->show_spill (std::shared_ptr<Stripable>());
 	}
 }
 

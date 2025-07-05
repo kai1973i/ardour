@@ -1,25 +1,24 @@
 /*
-    Copyright (C) 2004 Paul Davis
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm.h>
-#include <gtk/gtk.h>
-#include <gdk/gdkquartz.h>
+#include <ytkmm/ytkmm.h>
+#include <ytk/ytk.h>
+#include <ydk/gdkquartz.h>
 
 #include "gui_thread.h"
 #include "ardour/plugin_insert.h"
@@ -59,16 +58,16 @@ struct ERect{
 @end
 
 VSTPluginUI*
-create_mac_vst_gui (boost::shared_ptr<PluginInsert> insert)
+create_mac_vst_gui (std::shared_ptr<PlugInsertBase> pib)
 {
 	/* PluginUIWindow::create_mac_vst_editor assures this cast works */
-	boost::shared_ptr<MacVSTPlugin> mvst =  boost::dynamic_pointer_cast<MacVSTPlugin> (insert->plugin());
-	return new MacVSTPluginUI (insert, mvst);
+	std::shared_ptr<MacVSTPlugin> mvst =  std::dynamic_pointer_cast<MacVSTPlugin> (pib->plugin());
+	return new MacVSTPluginUI (pib, mvst);
 }
 
 
-MacVSTPluginUI::MacVSTPluginUI (boost::shared_ptr<PluginInsert> pi, boost::shared_ptr<VSTPlugin> vst)
-	: VSTPluginUI (pi, vst)
+MacVSTPluginUI::MacVSTPluginUI (std::shared_ptr<PlugInsertBase> pib, std::shared_ptr<VSTPlugin> vst)
+	: VSTPluginUI (pib, vst)
 	, _ns_view (0)
 {
 	low_box.add_events (Gdk::VISIBILITY_NOTIFY_MASK | Gdk::EXPOSURE_MASK);
@@ -82,7 +81,7 @@ MacVSTPluginUI::MacVSTPluginUI (boost::shared_ptr<PluginInsert> pi, boost::share
 	pack_start (low_box, true, true);
 	low_box.show ();
 
-	vst->LoadPresetProgram.connect (_program_connection, invalidator (*this), boost::bind (&MacVSTPluginUI::set_program, this), gui_context());
+	vst->LoadPresetProgram.connect (_program_connection, invalidator (*this), std::bind (&MacVSTPluginUI::set_program, this), gui_context());
 
 	_ns_view = [[NSView new] retain];
 
@@ -96,12 +95,12 @@ MacVSTPluginUI::MacVSTPluginUI (boost::shared_ptr<PluginInsert> pi, boost::share
 		object:_ns_view];
 
 	NSArray* subviews = [_ns_view subviews];
-	assert ([subviews count] < 2);
 	for (unsigned long i = 0; i < [subviews count]; ++i) {
 		NSView* subview = [subviews objectAtIndex:i];
 		[[NSNotificationCenter defaultCenter] addObserver:_resize_notifier
 			selector:@selector(viewResized:) name:NSViewFrameDidChangeNotification
 			object:subview];
+		break; /* only watch first subview (if any) */
 	}
 }
 
@@ -223,6 +222,7 @@ MacVSTPluginUI::lower_box_size_allocate (Gtk::Allocation& allocation)
 	for (unsigned long i = 0; i < [subviews count]; ++i) {
 		NSView* subview = [subviews objectAtIndex:i];
 		[subview setFrame:NSMakeRect (0, 0, allocation.get_width (), allocation.get_height ())];
+		break; /* only resize first subview */
 	}
 }
 

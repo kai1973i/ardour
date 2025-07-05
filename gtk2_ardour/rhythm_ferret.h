@@ -1,40 +1,42 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __gtk2_ardour_rhythm_ferret_h__
 #define __gtk2_ardour_rhythm_ferret_h__
 
-#include <gtkmm/box.h>
-#include <gtkmm/scale.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/radiobutton.h>
-#include <gtkmm/radiobuttongroup.h>
-#include <gtkmm/frame.h>
-#include <gtkmm/image.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/button.h>
+#include <ytkmm/box.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/radiobutton.h>
+#include <ytkmm/radiobuttongroup.h>
+#include <ytkmm/frame.h>
+#include <ytkmm/image.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/button.h>
 
 #include "ardour_dialog.h"
 #include "region_selection.h"
 
 namespace ARDOUR {
-	class Readable;
+	class AudioReadable;
 }
 
 class Editor;
@@ -107,7 +109,7 @@ private:
 
 	void clear_transients ();
 	/** Regions that we have added transient marks to */
-	RegionSelection regions_with_transients;
+	ARDOUR::RegionList regions_with_transients;
 
 	AnalysisMode get_analysis_mode () const;
 	Action get_action() const;
@@ -115,8 +117,8 @@ private:
 	int get_note_onset_function ();
 
 	void run_analysis ();
-	int run_percussion_onset_analysis (boost::shared_ptr<ARDOUR::Readable> region, ARDOUR::sampleoffset_t offset, ARDOUR::AnalysisFeatureList& results);
-	int run_note_onset_analysis (boost::shared_ptr<ARDOUR::Readable> region, ARDOUR::sampleoffset_t offset, ARDOUR::AnalysisFeatureList& results);
+	int run_percussion_onset_analysis (std::shared_ptr<ARDOUR::AudioReadable> region, ARDOUR::sampleoffset_t offset, ARDOUR::AnalysisFeatureList& results);
+	int run_note_onset_analysis (std::shared_ptr<ARDOUR::AudioReadable> region, ARDOUR::sampleoffset_t offset, ARDOUR::AnalysisFeatureList& results);
 
 	void do_action ();
 	void do_split_action ();

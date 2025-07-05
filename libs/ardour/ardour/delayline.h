@@ -1,27 +1,24 @@
 /*
-    Copyright (C) 2006, 2013 Paul Davis
-    Copyright (C) 2013, 2014 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __ardour_delayline_h__
-#define __ardour_delayline_h__
-
-#include <boost/shared_ptr.hpp>
-#include <boost/shared_array.hpp>
+#include <memory>
 
 #include "ardour/types.h"
 #include "ardour/processor.h"
@@ -52,7 +49,7 @@ public:
 	void flush ();
 
 protected:
-	XMLNode& state ();
+	XMLNode& state () const;
 
 private:
 	void allocate_pending_buffers (samplecnt_t, ChanCount const&);
@@ -68,11 +65,11 @@ private:
 	sampleoffset_t _roff, _woff;
 	bool           _pending_flush;
 
-	typedef std::vector<boost::shared_array<Sample> > AudioDlyBuf;
-	typedef std::vector<boost::shared_array<MidiBuffer> > MidiDlyBuf;
+	typedef std::vector<std::shared_ptr<Sample[]>>   AudioDlyBuf;
+	typedef std::vector<std::shared_ptr<MidiBuffer>> MidiDlyBuf;
 
 	AudioDlyBuf _buf;
-	boost::shared_ptr<MidiBuffer> _midi_buf;
+	MidiDlyBuf  _midi_buf;
 
 #ifndef NDEBUG
 	Glib::Threads::Mutex _set_delay_mutex;
@@ -81,4 +78,3 @@ private:
 
 } // namespace ARDOUR
 
-#endif // __ardour_meter_h__

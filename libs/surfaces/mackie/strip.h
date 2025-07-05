@@ -1,10 +1,29 @@
+/*
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2012-2015 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
 #ifndef __ardour_mackie_control_protocol_strip_h__
 #define __ardour_mackie_control_protocol_strip_h__
 
 #include <string>
 #include <iostream>
 
-#include "evoral/Parameter.hpp"
+#include "evoral/Parameter.h"
 
 #include "pbd/property_basics.h"
 #include "pbd/ringbuffer.h"
@@ -25,9 +44,7 @@ namespace ARDOUR {
 	class ChannelCount;
 }
 
-namespace ArdourSurface {
-
-namespace Mackie {
+namespace ArdourSurface { namespace MACKIE_NAMESPACE {
 
 class Control;
 class Surface;
@@ -53,13 +70,13 @@ public:
 	Strip (Surface&, const std::string & name, int index, const std::map<Button::ID,StripButtonInfo>&);
 	~Strip();
 
-	boost::shared_ptr<ARDOUR::Stripable> stripable() const { return _stripable; }
+	std::shared_ptr<ARDOUR::Stripable> stripable() const { return _stripable; }
 
 	void add (Control & control);
 	int index() const { return _index; } // zero based
 	Surface* surface() const { return _surface; }
 
-	void set_stripable (boost::shared_ptr<ARDOUR::Stripable>, bool with_messages = true);
+	void set_stripable (std::shared_ptr<ARDOUR::Stripable>, bool with_messages = true);
 
 	// call all signal handlers manually
 	void notify_all ();
@@ -69,11 +86,17 @@ public:
 	void handle_fader_touch (Fader&, bool touch_on);
 	void handle_pot (Pot&, float delta);
 
-	void periodic (ARDOUR::microseconds_t now_usecs);
-	void redisplay (ARDOUR::microseconds_t now_usecs, bool force = true);
+	void periodic (PBD::microseconds_t now_usecs);
+	void redisplay (PBD::microseconds_t now_usecs, bool force = true);
 
-	MidiByteArray display (uint32_t line_number, const std::string&);
-	MidiByteArray blank_display (uint32_t line_number);
+	MidiByteArray display (uint32_t lcd_number, uint32_t line_number, const std::string&);
+	MidiByteArray blank_display (uint32_t lcd_number, uint32_t line_number);
+	
+	static std::string format_parameter_for_display(
+		ARDOUR::ParameterDescriptor const& desc, 
+		float val, 
+		std::shared_ptr<ARDOUR::Stripable> stripable_for_non_mixbus_azimuth_automation, 
+		bool& overwrite_screen_hold);
 
 	void zero ();
 
@@ -111,15 +134,16 @@ private:
 	bool     _controls_locked;
 	bool     _transport_is_rolling;
 	bool     _metering_active;
+	bool     _lcd2_available;
+	uint32_t _lcd2_label_pitch;				// number of label characters including the required space between strips
 	std::string pending_display[2];
 	std::string current_display[2];
-	uint64_t _block_screen_redisplay_until;
-	uint64_t return_to_vpot_mode_display_at;
-	boost::shared_ptr<ARDOUR::Stripable> _stripable;
+	std::string lcd2_pending_display[2];
+	std::string lcd2_current_display[2];
+	PBD::microseconds_t _block_screen_redisplay_until;
+	PBD::microseconds_t return_to_vpot_mode_display_at;
+	std::shared_ptr<ARDOUR::Stripable> _stripable;
 	PBD::ScopedConnectionList stripable_connections;
-	PBD::ScopedConnectionList subview_connections;
-	PBD::ScopedConnectionList send_connections;
-	int       eq_band;
 
 	ARDOUR::AutomationType  _pan_mode;
 
@@ -141,7 +165,7 @@ private:
 	void update_meter ();
 	std::string vpot_mode_string ();
 
-	boost::shared_ptr<ARDOUR::AutomationControl> mb_pan_controllable;
+	std::shared_ptr<ARDOUR::AutomationControl> mb_pan_controllable;
 
 	void return_to_vpot_mode_display ();
 	void next_pot_mode ();
@@ -159,18 +183,6 @@ private:
 	void reset_saved_values ();
 
 	bool is_midi_track () const;
-
-	void notify_eq_change (boost::weak_ptr<ARDOUR::AutomationControl>, bool force);
-	void setup_eq_vpot (boost::shared_ptr<ARDOUR::Stripable>);
-
-	void notify_dyn_change (boost::weak_ptr<ARDOUR::AutomationControl>, bool force, bool propagate_mode_change);
-	void setup_dyn_vpot (boost::shared_ptr<ARDOUR::Stripable>);
-
-	void notify_send_level_change (uint32_t band, bool force);
-	void setup_sends_vpot (boost::shared_ptr<ARDOUR::Stripable>);
-
-	void notify_trackview_change (ARDOUR::AutomationType, uint32_t band, bool force);
-	void setup_trackview_vpot (boost::shared_ptr<ARDOUR::Stripable>);
 };
 
 }

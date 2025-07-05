@@ -1,24 +1,25 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2018 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <assert.h>
-#include <gdkmm/cursor.h>
+#include <ydkmm/cursor.h>
 
 #include "widgets/pane.h"
 
@@ -100,13 +101,11 @@ Pane::on_size_request (GtkRequisition* req)
 	}
 
 	for (Children::iterator c = children.begin(); c != children.end(); ++c) {
-		GtkRequisition r;
-
-		if (!(*c)->w->is_visible ()) {
+		if (!(*c)->w->get_visible ()) {
 			continue;
 		}
 
-		(*c)->w->size_request (r);
+		GtkRequisition r = (*c)->w->size_request ();
 
 		if (horizontal) {
 			largest.height = max (largest.height, r.height);
@@ -160,7 +159,7 @@ Pane::handle_child_visibility ()
 void
 Pane::on_add (Widget* w)
 {
-	children.push_back (boost::shared_ptr<Child> (new Child (this, w, 0)));
+	children.push_back (std::shared_ptr<Child> (new Child (this, w, 0)));
 	Child* kid = children.back ().get();
 
 	w->set_parent (*this);
@@ -222,7 +221,7 @@ Pane::on_size_allocate (Gtk::Allocation& alloc)
 	reallocate (alloc);
 	Container::on_size_allocate (alloc);
 
-	/* minumum pane size constraints */
+	/* minimum pane size constraints */
 	Dividers::size_type div = 0;
 	for (Dividers::const_iterator d = dividers.begin(); d != dividers.end(); ++d, ++div) {
 		// XXX skip dividers that were just hidden in reallocate()
@@ -247,7 +246,7 @@ Pane::reallocate (Gtk::Allocation const & alloc)
 
 	if (children.size() == 1) {
 		/* only child gets the full allocation */
-		if (children.front()->w->is_visible ()) {
+		if (children.front()->w->get_visible ()) {
 			children.front()->w->size_allocate (alloc);
 		}
 		return;
@@ -268,7 +267,7 @@ Pane::reallocate (Gtk::Allocation const & alloc)
 	/* skip initial hidden children */
 
 	while (child != children.end()) {
-		if ((*child)->w->is_visible()) {
+		if ((*child)->w->get_visible()) {
 			break;
 		}
 		++child;
@@ -283,7 +282,7 @@ Pane::reallocate (Gtk::Allocation const & alloc)
 		/* Move on to next *visible* child */
 
 		while (++next != children.end()) {
-			if ((*next)->w->is_visible()) {
+			if ((*next)->w->get_visible()) {
 				break;
 			}
 		}
@@ -299,8 +298,7 @@ Pane::reallocate (Gtk::Allocation const & alloc)
 			fract = (*div)->fract;
 		}
 
-		Gtk::Requisition cr;
-		(*child)->w->size_request (cr);
+		Gtk::Requisition cr = (*child)->w->size_request ();
 
 		if (horizontal) {
 			child_alloc.set_width ((gint) floor (remaining * fract));
@@ -320,9 +318,15 @@ Pane::reallocate (Gtk::Allocation const & alloc)
 			} else {
 				child_alloc.set_height (max (child_alloc.get_height(), (*child)->minsize));
 			}
+		} else if (!check_fract && (*child)->w->get_visible ()) {
+			if (horizontal) {
+				child_alloc.set_width (max (child_alloc.get_width(), cr.width));
+			} else {
+				child_alloc.set_height (max (child_alloc.get_height(), cr.height));
+			}
 		}
 
-		if ((*child)->w->is_visible ()) {
+		if ((*child)->w->get_visible ()) {
 			(*child)->w->size_allocate (child_alloc);
 		}
 
@@ -373,12 +377,12 @@ Pane::on_expose_event (GdkEventExpose* ev)
 
 	for (child = children.begin(), div = dividers.begin(); child != children.end(); ++child) {
 
-		if ((*child)->w->is_visible()) {
+		if ((*child)->w->get_visible()) {
 			propagate_expose (*((*child)->w), ev);
 		}
 
 		if (div != dividers.end()) {
-			if ((*div)->is_visible()) {
+			if ((*div)->get_visible()) {
 				propagate_expose (**div, ev);
 			}
 			++div;
@@ -586,9 +590,9 @@ Pane::set_divider (Dividers::size_type div, float fract)
 }
 
 float
-Pane::get_divider (Dividers::size_type div)
+Pane::get_divider (Dividers::size_type div) const
 {
-	Dividers::iterator d = dividers.begin();
+	Dividers::const_iterator d = dividers.begin();
 
 	for (d = dividers.begin(); d != dividers.end() && div != 0; ++d, --div) {
 		/* relax */

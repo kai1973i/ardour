@@ -1,28 +1,31 @@
 /*
-    Copyright (C) 2010-2011 Paul Davis
+ * Copyright (C) 2011-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libardour_proxy_controllable_h__
-#define __libardour_proxy_controllable_h__
-
-#include <boost/function.hpp>
+#include <functional>
 
 #include "pbd/controllable.h"
+
+#include "ardour/dB.h"
+#include "ardour/libardour_visibility.h"
 
 namespace ARDOUR {
 
@@ -33,8 +36,8 @@ namespace ARDOUR {
 class LIBARDOUR_API ProxyControllable : public PBD::Controllable {
   public:
 	ProxyControllable (const std::string& name, PBD::Controllable::Flag flags,
-			   boost::function1<bool,double> setter,
-			   boost::function0<double> getter)
+			   std::function<bool (double)> setter,
+			   std::function<double ()> getter)
 		: PBD::Controllable (name, flags)
 		, _setter (setter)
 		, _getter (getter)
@@ -49,10 +52,9 @@ class LIBARDOUR_API ProxyControllable : public PBD::Controllable {
 	}
 
   private:
-	boost::function1<bool,double> _setter;
-	boost::function0<double> _getter;
+	std::function<bool (double)> _setter;
+	std::function<double ()>     _getter;
 };
 
 } // namespace
 
-#endif /* __libardour_proxy_controllable_h__ */

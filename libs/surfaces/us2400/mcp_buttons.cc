@@ -1,22 +1,20 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-	Copyright (C) 2012 Paul Davis
-	Copyright (C) 2017 Ben Loftis
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2017-2019 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <algorithm>
 
@@ -100,6 +98,10 @@ LedState
 US2400Protocol::left_press (Button &)
 {
 	if (_subview_mode != None) {
+		if (_sends_bank > 0) {
+			_sends_bank--;
+			redisplay_subview_mode();
+		}
 		return none;
 	}
 
@@ -128,6 +130,23 @@ LedState
 US2400Protocol::right_press (Button &)
 {
 	if (_subview_mode != None) {
+		std::shared_ptr<Stripable> s = first_selected_stripable();
+
+		if (s) {
+			bool hasNextSend = true;
+			int numSends = 0;
+			while (hasNextSend) {
+				if (s->send_name(numSends).length() < 1) {
+					hasNextSend = false;
+				} else {
+					numSends++;
+				}
+			}
+			if (numSends > (_sends_bank + 1) * 16) {
+				_sends_bank++;
+				redisplay_subview_mode();
+			}
+		}
 		return none;
 	}
 
@@ -460,7 +479,7 @@ US2400Protocol::marker_release (Button &)
 
 	samplepos_t where = session->audible_sample();
 
-	if (session->transport_stopped() && session->locations()->mark_at (where, session->sample_rate() / 100.0)) {
+	if (session->transport_stopped_or_stopping() && session->locations()->mark_at (timepos_t (where), timecnt_t (session->sample_rate() / 100.0))) {
 		return off;
 	}
 
@@ -489,7 +508,7 @@ US2400Protocol::stop_press (Button &)
 LedState
 US2400Protocol::stop_release (Button &)
 {
-	return session->transport_stopped();
+	return session->transport_stopped_or_stopping();
 }
 
 LedState
@@ -499,7 +518,7 @@ US2400Protocol::play_press (Button &)
 	   again, jump back to where we started last time
 	*/
 
-	transport_play (session->transport_speed() == 1.0);
+	transport_play (get_transport_speed() == 1.0);
 	return none;
 }
 
@@ -568,7 +587,7 @@ LedState
 US2400Protocol::loop_press (Button &)
 {
 	if (main_modifier_state() & MODIFIER_SHIFT) {
-		access_action ("Common/set-loop-from-edit-range");
+		access_action ("Editor/set-loop-from-edit-range");
 		return off;
 	} else {
 		bool was_on = session->get_play_loop();
@@ -589,7 +608,7 @@ US2400Protocol::enter_press (Button &)
 	if (main_modifier_state() & MODIFIER_SHIFT) {
 		access_action ("Transport/ToggleFollowEdits");
 	} else {
-		access_action ("Editor/select-all-tracks");
+		access_action ("Common/select-all-tracks");
 	}
 	return none;
 }
@@ -774,7 +793,7 @@ LedState
 US2400Protocol::mstr_press (Button &)
 {
 //	access_action("Mixer/select-none");
-	SetStripableSelection( session->master_out() );
+	set_stripable_selection( session->master_out() );
 	return on;
 }
 
@@ -823,7 +842,7 @@ US2400Protocol::cancel_release (Button &)
 LedState
 US2400Protocol::user_a_press (Button &)
 {
-	transport_play (session->transport_speed() == 1.0);
+	transport_play (get_transport_speed() == 1.0);
 	return off;
 }
 LedState
@@ -850,10 +869,10 @@ US2400Protocol::master_fader_touch_press (US2400::Button &)
 
 	Fader* master_fader = _master_surface->master_fader();
 
-	boost::shared_ptr<AutomationControl> ac = master_fader->control ();
+	std::shared_ptr<AutomationControl> ac = master_fader->control ();
 
 	master_fader->set_in_use (true);
-	master_fader->start_touch (transport_frame());
+	master_fader->start_touch (timepos_t (transport_sample()));
 
 	return none;
 }
@@ -865,7 +884,7 @@ US2400Protocol::master_fader_touch_release (US2400::Button &)
 	Fader* master_fader = _master_surface->master_fader();
 
 	master_fader->set_in_use (false);
-	master_fader->stop_touch (transport_frame());
+	master_fader->stop_touch (timepos_t (transport_sample()));
 
 	return none;
 }
@@ -1100,7 +1119,7 @@ US2400::LedState
 US2400Protocol::click_press (US2400::Button&)
 {
 	if (main_modifier_state() & MODIFIER_SHIFT) {
-		access_action ("Common/set-punch-from-edit-range");
+		access_action ("Editor/set-punch-from-edit-range");
 		return off;
 	} else {
 		bool state = !Config->get_clicking();

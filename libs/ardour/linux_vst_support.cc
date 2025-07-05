@@ -1,21 +1,21 @@
 /*
-    Copyright (C) 2012 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2012-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2021 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -108,7 +108,7 @@ static void* vstfx_load_vst_library(const char* path)
 	}
 
 	if (Glib::file_test (path, Glib::FILE_TEST_EXISTS)) {
-		PBD::error << string_compose (_("Could not open existing LXVST plugin: %1"), dlerror()) << endmsg;
+		PBD::error << string_compose (_("Could not load VST2 plugin '%1': %2"), path, dlerror ()) << endmsg;
 		return 0;
 	}
 
@@ -119,15 +119,17 @@ static void* vstfx_load_vst_library(const char* path)
 
 	/*Path not specified - not much more we can do*/
 
-	if (envdup == 0)
+	if (envdup == 0) {
 		return 0;
+	}
 
 	/*Copy the path into envdup*/
 
 	envdup = strdup (envdup);
 
-	if (envdup == 0)
+	if (envdup == 0) {
 		return 0;
+	}
 
 	len2 = strlen(path);
 
@@ -149,11 +151,11 @@ static void* vstfx_load_vst_library(const char* path)
 
 		/*Try and load the library*/
 
-		if ((dll = dlopen(full_path, RTLD_LOCAL | RTLD_LAZY)) != 0)
-		{
+		if ((dll = dlopen(full_path, RTLD_LOCAL | RTLD_LAZY)) != 0) {
 			/*Succeeded */
 			break;
 		}
+		PBD::error << string_compose (_("Could not load VST2 plugin '%1': %2"), full_path, dlerror ()) << endmsg;
 
 		/*Try again*/
 
@@ -227,6 +229,7 @@ vstfx_load (const char *path)
 
 	if (fhandle->main_entry == 0)
 	{
+		PBD::error << string_compose (_("Missing entry method in VST2 plugin '%1'"), path) << endmsg;
 		/*If it can't be found, unload the plugin and return a 0 handle*/
 
 		vstfx_unload (fhandle);
@@ -267,6 +270,7 @@ vstfx_unload (VSTHandle* fhandle)
 	if (fhandle->name)
 	{
 		free (fhandle->name);
+		fhandle->name = 0;
 	}
 
 	/*Don't need the plugin handle any more*/
@@ -339,30 +343,19 @@ void vstfx_close (VSTState* vstfx)
 		vstfx->plugin->dispatcher (vstfx->plugin, effClose, 0, 0, 0, 0);
 	}
 
-	if (vstfx->handle->plugincnt)
+	if (vstfx->handle->plugincnt) {
 			vstfx->handle->plugincnt--;
-
-	/*vstfx_unload will unload the dll if the instance count allows -
-	we need to do this because some plugins keep their own instance count
-	and (JUCE) manages the plugin UI in its own thread.  When the plugins
-	internal instance count reaches zero, JUCE stops the UI thread and won't
-	restart it until the next time the library is loaded.  If we don't unload
-	the lib JUCE will never restart*/
-
-
-	if (vstfx->handle->plugincnt)
-	{
-		return;
 	}
 
-	/*Valid plugin loaded - so we can unload it and 0 the pointer
-	to it.  We can't free the handle here because we don't know what else
-	might need it.  It should be / is freed when the plugin is deleted*/
+	/* vstfx_unload will unload the dll if the instance count allows -
+	 * we need to do this because some plugins keep their own instance count
+	 * and (JUCE) manages the plugin UI in its own thread.  When the plugins
+	 * internal instance count reaches zero, JUCE stops the UI thread and won't
+	 * restart it until the next time the library is loaded.  If we don't unload
+	 * the lib JUCE will never restart
+	 */
 
-	if (vstfx->handle->dll)
-	{
-		dlclose(vstfx->handle->dll); //dlclose keeps its own reference count
-		vstfx->handle->dll = 0;
-	}
+	vstfx_unload (vstfx->handle);
+
 	free(vstfx);
 }

@@ -1,31 +1,31 @@
 /*
-    Copyright (C) 2006 Paul Davis
-    Author: Hans Fugal
+ * Copyright (C) 2006-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2006 Hans Fugal <hans@fugal.net>
+ * Copyright (C) 2007-2009 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2016-2017 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __lib_pbd_memento_command_h__
-#define __lib_pbd_memento_command_h__
+#pragma once
 
 #include <iostream>
 
 #include "pbd/libpbd_visibility.h"
 #include "pbd/command.h"
-#include "pbd/stacktrace.h"
 #include "pbd/xml++.h"
 #include "pbd/demangle.h"
 
@@ -54,13 +54,11 @@ template <class obj_T>
 class LIBPBD_TEMPLATE_API MementoCommandBinder : public PBD::Destructible
 {
 public:
-	/** @return Stateful object to operate on */
-	virtual obj_T* get () const = 0;
+	virtual void set_state (XMLNode const &, int version) const = 0;
+	virtual XMLNode& get_state () const = 0;
 
 	/** @return Name of our type */
-	virtual std::string type_name () const {
-		return PBD::demangled_name (*get ());
-	}
+	virtual std::string type_name () const = 0;
 
 	/** Add our own state to an XMLNode */
 	virtual void add_state (XMLNode *) = 0;
@@ -74,11 +72,13 @@ public:
 	SimpleMementoCommandBinder (obj_T& o)
 		: _object (o)
 	{
-		_object.Destroyed.connect_same_thread (_object_death_connection, boost::bind (&SimpleMementoCommandBinder::object_died, this));
+		_object.Destroyed.connect_same_thread (_object_death_connection, std::bind (&SimpleMementoCommandBinder::object_died, this));
 	}
 
-	obj_T* get () const {
-		return &_object;
+	void set_state (XMLNode const & node , int version) const { _object.set_state (node, version); }
+	XMLNode& get_state () const { return _object.get_state(); }
+	std::string type_name() const {
+		return PBD::demangled_name (_object);
 	}
 
 	void add_state (XMLNode* node) {
@@ -100,47 +100,47 @@ private:
  * memento, and redo is restoring the after memento.
  */
 template <class obj_T>
-class LIBPBD_TEMPLATE_API MementoCommand : public Command
+class LIBPBD_TEMPLATE_API MementoCommand : public PBD::Command
 {
 public:
 	MementoCommand (obj_T& a_object, XMLNode* a_before, XMLNode* a_after)
 		: _binder (new SimpleMementoCommandBinder<obj_T> (a_object)), before (a_before), after (a_after)
 	{
 		/* The binder's object died, so we must die */
-		_binder->DropReferences.connect_same_thread (_binder_death_connection, boost::bind (&MementoCommand::binder_dying, this));
+		_binder->DropReferences.connect_same_thread (_binder_death_connection, std::bind (&MementoCommand::binder_dying, this));
 	}
 
 	MementoCommand (MementoCommandBinder<obj_T>* b, XMLNode* a_before, XMLNode* a_after)
 		: _binder (b), before (a_before), after (a_after)
 	{
 		/* The binder's object died, so we must die */
-		_binder->DropReferences.connect_same_thread (_binder_death_connection, boost::bind (&MementoCommand::binder_dying, this));
+		_binder->DropReferences.connect_same_thread (_binder_death_connection, std::bind (&MementoCommand::binder_dying, this));
 	}
 
 	~MementoCommand () {
-		drop_references ();
 		delete before;
 		delete after;
 		delete _binder;
 	}
 
 	void binder_dying () {
-		delete this;
+		/* delegate to UndoTransaction::command_death */
+		drop_references ();
 	}
 
 	void operator() () {
 		if (after) {
-			_binder->get()->set_state(*after, Stateful::current_state_version);
+			_binder->set_state(*after, Stateful::current_state_version);
 		}
 	}
 
 	void undo() {
 		if (before) {
-			_binder->get()->set_state(*before, Stateful::current_state_version);
+			_binder->set_state(*before, Stateful::current_state_version);
 		}
 	}
 
-	virtual XMLNode &get_state() {
+	virtual XMLNode &get_state() const {
 		std::string name;
 		if (before && after) {
 			name = "MementoCommand";
@@ -173,4 +173,3 @@ protected:
 	PBD::ScopedConnection _binder_death_connection;
 };
 
-#endif // __lib_pbd_memento_h__

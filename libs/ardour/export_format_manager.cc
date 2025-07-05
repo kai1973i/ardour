@@ -1,24 +1,27 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2008-2012 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2008-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2013-2014 Colin Fletcher <colin.m.fletcher@googlemail.com>
+ * Copyright (C) 2016-2018 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "ardour/export_format_manager.h"
+#include "ardour/filesystem_paths.h"
 
 #include "ardour/export_format_specification.h"
 #include "ardour/export_format_compatibility.h"
@@ -119,7 +122,7 @@ ExportFormatManager::init_formats ()
 	ExportFormatPtr f_ptr;
 	ExportFormatLinear * fl_ptr;
 
-	f_ptr.reset (fl_ptr = new ExportFormatLinear ("AIFF", ExportFormatBase::F_AIFF));
+	f_ptr.reset (fl_ptr = new ExportFormatTaggedLinear ("AIFF", ExportFormatBase::F_AIFF));
 	fl_ptr->add_sample_format (ExportFormatBase::SF_U8);
 	fl_ptr->add_sample_format (ExportFormatBase::SF_8);
 	fl_ptr->add_sample_format (ExportFormatBase::SF_16);
@@ -155,7 +158,7 @@ ExportFormatManager::init_formats ()
 	fl_ptr->set_extension ("sf");
 	add_format (f_ptr);
 
-	f_ptr.reset (fl_ptr = new ExportFormatLinear ("WAV", ExportFormatBase::F_WAV));
+	f_ptr.reset (fl_ptr = new ExportFormatTaggedLinear ("WAV", ExportFormatBase::F_WAV));
 	fl_ptr->add_sample_format (ExportFormatBase::SF_U8);
 	fl_ptr->add_sample_format (ExportFormatBase::SF_16);
 	fl_ptr->add_sample_format (ExportFormatBase::SF_24);
@@ -167,7 +170,7 @@ ExportFormatManager::init_formats ()
 	fl_ptr->set_extension ("wav");
 	add_format (f_ptr);
 
-	f_ptr.reset (fl_ptr = new ExportFormatLinear ("W64", ExportFormatBase::F_W64));
+	f_ptr.reset (fl_ptr = new ExportFormatTaggedLinear ("W64", ExportFormatBase::F_W64));
 	fl_ptr->add_sample_format (ExportFormatBase::SF_U8);
 	fl_ptr->add_sample_format (ExportFormatBase::SF_16);
 	fl_ptr->add_sample_format (ExportFormatBase::SF_24);
@@ -202,6 +205,11 @@ ExportFormatManager::init_formats ()
 	add_format (f_ptr);
 
 	try {
+		f_ptr.reset (new ExportFormatOggOpus ());
+		add_format (f_ptr);
+	} catch (ExportFormatIncompatible & e) {}
+
+	try {
 		f_ptr.reset (new ExportFormatOggVorbis ());
 		add_format (f_ptr);
 	} catch (ExportFormatIncompatible & e) {}
@@ -210,6 +218,17 @@ ExportFormatManager::init_formats ()
 		f_ptr.reset (new ExportFormatFLAC ());
 		add_format (f_ptr);
 	} catch (ExportFormatIncompatible & e) {}
+
+	std::string unused;
+	if (ArdourVideoToolPaths::transcoder_exe (unused, unused)) {
+		f_ptr.reset (new ExportFormatFFMPEG ("MP3", "mp3"));
+		add_format (f_ptr);
+	} else {
+		try {
+			f_ptr.reset (new ExportFormatMPEG ("MP3", "mp3"));
+			add_format (f_ptr);
+		} catch (ExportFormatIncompatible & e) {}
+	}
 }
 
 void
@@ -218,6 +237,7 @@ ExportFormatManager::init_sample_rates ()
 	add_sample_rate (SampleRatePtr (new SampleRateState (ExportFormatBase::SR_Session, _("Session rate"))));
 	add_sample_rate (SampleRatePtr (new SampleRateState (ExportFormatBase::SR_8,     string_compose ("%1%2%3 kHz", std::fixed, std::setprecision(0), 8))));
 	add_sample_rate (SampleRatePtr (new SampleRateState (ExportFormatBase::SR_22_05, string_compose ("%1%2%3 kHz", std::fixed, std::setprecision(2), 22.05))));
+	add_sample_rate (SampleRatePtr (new SampleRateState (ExportFormatBase::SR_24,    string_compose ("%1%2%3 kHz", std::fixed, std::setprecision(0), 24))));
 	add_sample_rate (SampleRatePtr (new SampleRateState (ExportFormatBase::SR_44_1,  string_compose ("%1%2%3 kHz", std::fixed, std::setprecision(1), 44.1))));
 	add_sample_rate (SampleRatePtr (new SampleRateState (ExportFormatBase::SR_48,    string_compose ("%1%2%3 kHz", std::fixed, std::setprecision(0), 48))));
 	add_sample_rate (SampleRatePtr (new SampleRateState (ExportFormatBase::SR_88_2,  string_compose ("%1%2%3 kHz", std::fixed, std::setprecision(1), 88.2))));
@@ -231,14 +251,14 @@ ExportFormatManager::add_compatibility (ExportFormatCompatibilityPtr ptr)
 {
 	compatibilities.push_back (ptr);
 	ptr->SelectChanged.connect_same_thread (*this,
-	                                        boost::bind (&ExportFormatManager::change_compatibility_selection,
+	                                        std::bind (&ExportFormatManager::change_compatibility_selection,
 	                                                     this, _1, WeakExportFormatCompatibilityPtr (ptr)));
 }
 
 void
 ExportFormatManager::add_quality (QualityPtr ptr)
 {
-	ptr->SelectChanged.connect_same_thread (*this, boost::bind (&ExportFormatManager::change_quality_selection, this, _1, WeakQualityPtr (ptr)));
+	ptr->SelectChanged.connect_same_thread (*this, std::bind (&ExportFormatManager::change_quality_selection, this, _1, WeakQualityPtr (ptr)));
 	qualities.push_back (ptr);
 }
 
@@ -246,23 +266,23 @@ void
 ExportFormatManager::add_format (ExportFormatPtr ptr)
 {
 	formats.push_back (ptr);
-	ptr->SelectChanged.connect_same_thread (*this, boost::bind (&ExportFormatManager::change_format_selection, this, _1, WeakExportFormatPtr (ptr)));
+	ptr->SelectChanged.connect_same_thread (*this, std::bind (&ExportFormatManager::change_format_selection, this, _1, WeakExportFormatPtr (ptr)));
 	universal_set = universal_set->get_union (*ptr);
 
 	/* Encoding options */
 
-	boost::shared_ptr<HasSampleFormat> hsf;
+	std::shared_ptr<HasSampleFormat> hsf;
 
-	if ((hsf = boost::dynamic_pointer_cast<HasSampleFormat> (ptr))) {
-		hsf->SampleFormatSelectChanged.connect_same_thread (*this, boost::bind (&ExportFormatManager::change_sample_format_selection, this, _1, _2));
-		hsf->DitherTypeSelectChanged.connect_same_thread (*this, boost::bind (&ExportFormatManager::change_dither_type_selection, this, _1, _2));
+	if ((hsf = std::dynamic_pointer_cast<HasSampleFormat> (ptr))) {
+		hsf->SampleFormatSelectChanged.connect_same_thread (*this, std::bind (&ExportFormatManager::change_sample_format_selection, this, _1, _2));
+		hsf->DitherTypeSelectChanged.connect_same_thread (*this, std::bind (&ExportFormatManager::change_dither_type_selection, this, _1, _2));
 	}
 }
 
 void
 ExportFormatManager::add_sample_rate (SampleRatePtr ptr)
 {
-	ptr->SelectChanged.connect_same_thread (*this, boost::bind (&ExportFormatManager::change_sample_rate_selection, this, _1, WeakSampleRatePtr (ptr)));
+	ptr->SelectChanged.connect_same_thread (*this, std::bind (&ExportFormatManager::change_sample_rate_selection, this, _1, WeakSampleRatePtr (ptr)));
 	sample_rates.push_back (ptr);
 }
 
@@ -277,6 +297,13 @@ void
 ExportFormatManager::select_src_quality (ExportFormatBase::SRCQuality value)
 {
 	current_selection->set_src_quality (value);
+	check_for_description_change ();
+}
+
+void
+ExportFormatManager::select_codec_quality (int value)
+{
+	current_selection->set_codec_quality (value);
 	check_for_description_change ();
 }
 
@@ -351,6 +378,13 @@ ExportFormatManager::select_normalize_loudness (bool value)
 }
 
 void
+ExportFormatManager::select_tp_limiter (bool value)
+{
+	current_selection->set_use_tp_limiter (value);
+	check_for_description_change ();
+}
+
+void
 ExportFormatManager::select_normalize_dbfs (float value)
 {
 	current_selection->set_normalize_dbfs (value);
@@ -368,6 +402,27 @@ void
 ExportFormatManager::select_normalize_dbtp (float value)
 {
 	current_selection->set_normalize_dbtp (value);
+	check_for_description_change ();
+}
+
+void
+ExportFormatManager::select_demo_noise_level (float value)
+{
+	current_selection->set_demo_noise_level (value);
+	check_for_description_change ();
+}
+
+void
+ExportFormatManager::select_demo_noise_duration (int value)
+{
+	current_selection->set_demo_noise_duration (value);
+	check_for_description_change ();
+}
+
+void
+ExportFormatManager::select_demo_noise_interval (int value)
+{
+	current_selection->set_demo_noise_interval (value);
 	check_for_description_change ();
 }
 
@@ -425,7 +480,7 @@ ExportFormatManager::change_format_selection (bool select, WeakExportFormatPtr c
 
 	if (select) {
 		select_format (ptr);
-	} else if (ptr->get_format_id() == current_selection->format_id()) {
+	} else if (current_selection->is_format (ptr)) {
 		ptr.reset();
 		select_format (ptr);
 	}
@@ -491,7 +546,7 @@ ExportFormatManager::select_compatibility (WeakExportFormatCompatibilityPtr cons
 
 	/* Unselect incompatible items */
 
-	boost::shared_ptr<ExportFormatBase> select_intersect;
+	std::shared_ptr<ExportFormatBase> select_intersect;
 
 	select_intersect = compat_intersect->get_intersection (*current_selection);
 	if (select_intersect->qualities_empty()) {
@@ -564,7 +619,7 @@ ExportFormatManager::select_format (ExportFormatPtr const & format)
 
 	if (format) {
 
-		/* Slect right quality for format */
+		/* Select right quality for format */
 
 		ExportFormatBase::Quality quality = format->get_quality();
 		for (QualityList::iterator it = qualities.begin (); it != qualities.end (); ++it) {
@@ -584,8 +639,8 @@ ExportFormatManager::select_format (ExportFormatPtr const & format)
 			format_to_select = format->default_sample_format();
 		}
 
-		boost::shared_ptr<HasSampleFormat> hsf;
-		if ((hsf = boost::dynamic_pointer_cast<HasSampleFormat> (format))) {
+		std::shared_ptr<HasSampleFormat> hsf;
+		if ((hsf = std::dynamic_pointer_cast<HasSampleFormat> (format))) {
 			SampleFormatList sample_formats = hsf->get_sample_formats();
 			for (SampleFormatList::iterator it = sample_formats.begin (); it != sample_formats.end (); ++it) {
 				if ((*it)->format == format_to_select) {
@@ -741,8 +796,8 @@ ExportFormatManager::selection_changed ()
 		}
 	}
 
-	boost::shared_ptr<HasSampleFormat> hsf;
-	if ((hsf = boost::dynamic_pointer_cast<HasSampleFormat> (get_selected_format()))) {
+	std::shared_ptr<HasSampleFormat> hsf;
+	if ((hsf = std::dynamic_pointer_cast<HasSampleFormat> (get_selected_format()))) {
 
 		SampleFormatList sf_list = hsf->get_sample_formats();
 		for (SampleFormatList::iterator it = sf_list.begin(); it != sf_list.end(); ++it) {
@@ -816,9 +871,9 @@ ExportFormatManager::get_selected_sample_rate ()
 ExportFormatManager::SampleFormatPtr
 ExportFormatManager::get_selected_sample_format ()
 {
-	boost::shared_ptr<HasSampleFormat> hsf;
+	std::shared_ptr<HasSampleFormat> hsf;
 
-	if ((hsf = boost::dynamic_pointer_cast<HasSampleFormat> (get_selected_format()))) {
+	if ((hsf = std::dynamic_pointer_cast<HasSampleFormat> (get_selected_format()))) {
 		return hsf->get_selected_sample_format ();
 	} else {
 		return SampleFormatPtr ();

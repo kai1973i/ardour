@@ -1,30 +1,32 @@
 /*
- * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017-2018 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "pbd/compose.h"
-#include "pbd/i18n.h"
 
+#include "gtkmm2ext/colors.h"
+
+#include "public_editor.h"
 #include "stripable_colorpicker.h"
 #include "ui_config.h"
-#include "utils.h"
+
+#include "pbd/i18n.h"
 
 using namespace Gtk;
-using namespace ARDOUR_UI_UTILS;
 
 bool StripableColorDialog::palette_initialized = false;
 Gtk::ColorSelection::SlotChangePaletteHook StripableColorDialog::gtk_palette_changed_hook;
@@ -46,7 +48,7 @@ StripableColorDialog::StripableColorDialog ()
 	 *
 	 *  top_hbox [ VBOX [ triangle || hbox [ sample-area || picker-button] ] || ... ]
 	 */
-	ColorSelection* cs = get_colorsel(); // IS-A VBOX
+	ColorSelection* cs = get_color_selection(); // IS-A VBOX
 	if (!cs) { return ; }
 	Gtk::HBox* top_hbox = dynamic_cast<Gtk::HBox*> (cs->children()[0].get_widget());
 	if (!top_hbox) { return ; }
@@ -81,7 +83,7 @@ StripableColorDialog::initialize_color_palette ()
 		return;
 	}
 	gtk_palette_changed_hook =
-		get_colorsel()->set_change_palette_hook (&StripableColorDialog::palette_changed_hook);
+		get_color_selection()->set_change_palette_hook (&StripableColorDialog::palette_changed_hook);
 
 	std::string cp = UIConfiguration::instance ().get_stripable_color_palette ();
 	if (!cp.empty()) {
@@ -108,21 +110,21 @@ StripableColorDialog::popup (const std::string& name, uint32_t color)
 	set_title (string_compose (_("Color Selection: %1"), name));
 	_initial_color = color;
 
-	get_colorsel()->set_has_opacity_control (false);
-	get_colorsel()->set_has_palette (true);
+	get_color_selection()->set_has_opacity_control (false);
+	get_color_selection()->set_has_palette (true);
 
-	Gdk::Color c = gdk_color_from_rgba (_initial_color);
+	Gdk::Color c = Gtkmm2ext::gdk_color_from_rgba (_initial_color);
 
-	get_colorsel()->set_previous_color (c);
-	get_colorsel()->set_current_color (c);
+	get_color_selection()->set_previous_color (c);
+	get_color_selection()->set_current_color (c);
 	_color_changed_connection.disconnect ();
-	_color_changed_connection = get_colorsel()->signal_color_changed().connect (sigc::mem_fun (*this, &StripableColorDialog::color_changed));
+	_color_changed_connection = get_color_selection()->signal_color_changed().connect (sigc::mem_fun (*this, &StripableColorDialog::color_changed));
 
 	present ();
 }
 
 void
-StripableColorDialog::popup (boost::shared_ptr<ARDOUR::Stripable> s)
+StripableColorDialog::popup (std::shared_ptr<ARDOUR::Stripable> s)
 {
 	if (s && s->active_color_picker()) {
 		s->active_color_picker()->present ();
@@ -142,11 +144,16 @@ StripableColorDialog::popup (boost::shared_ptr<ARDOUR::Stripable> s)
 void
 StripableColorDialog::finish_color_edit (int response)
 {
+	ARDOUR::RouteList rl = PublicEditor::instance().get_selection().tracks.routelist();
+
 	if (response == RESPONSE_OK) {
-		ColorChanged (gdk_color_to_rgba (get_colorsel()->get_current_color())); /* EMIT SIGNAL */
+		ColorChanged (Gtkmm2ext::gdk_color_to_rgba (get_color_selection()->get_current_color())); /* EMIT SIGNAL */
 	}
 	if (_stripable && response == RESPONSE_OK) {
-		_stripable->presentation_info().set_color (gdk_color_to_rgba (get_colorsel()->get_current_color()));
+		for (ARDOUR::RouteList::iterator i = rl.begin(); i != rl.end(); ++i) {
+			(*i)->presentation_info().set_color (Gtkmm2ext::gdk_color_to_rgba (get_color_selection()->get_current_color()));
+		}
+		_stripable->presentation_info().set_color (Gtkmm2ext::gdk_color_to_rgba (get_color_selection()->get_current_color()));
 	} else if (_stripable) {
 		_stripable->presentation_info().set_color (_initial_color);
 	}
@@ -157,7 +164,7 @@ void
 StripableColorDialog::color_changed ()
 {
 	if (_stripable) {
-		_stripable->presentation_info().set_color (gdk_color_to_rgba (get_colorsel()->get_current_color()));
+		_stripable->presentation_info().set_color (Gtkmm2ext::gdk_color_to_rgba (get_color_selection()->get_current_color()));
 	}
 }
 
@@ -170,7 +177,7 @@ ArdourColorButton::ArdourColorButton ()
 void
 ArdourColorButton::on_clicked ()
 {
-	_color_picker.popup ("", gdk_color_to_rgba (get_color ()));
+	_color_picker.popup ("", Gtkmm2ext::gdk_color_to_rgba (get_color ()));
 	_color_picker.get_window ()->set_transient_for (get_window ());
 }
 
@@ -178,7 +185,7 @@ void
 ArdourColorButton::color_selected (uint32_t color)
 {
 	Gdk::Color c;
-	set_color_from_rgba (c, color);
+	Gtkmm2ext::set_color_from_rgba (c, color);
 	set_color (c);
 	g_signal_emit_by_name (GTK_WIDGET(gobj()), "color-set", 0);
 }

@@ -34,7 +34,8 @@ table for details.
 
 Here is the best workflow for existing translations.
 
-1. Build Ardour  using './waf' command (this step is actually optional).
+1. Configure Ardour build with the './waf configure' command.
+1a. Build Ardour  using './waf' command (this step is actually optional).
 
 2a. If there is no existing translation for your language, run './waf i18n_pot'
 which will generate a POT (.pot) file for each of the directories shown
@@ -57,6 +58,22 @@ to install them.
 7. Restart Ardour to see what your translation looks like and whether it needs 
 fixes, e.g. has to be shorter.
 
+8. IMPORTANT NOTE: there are times when the English phrase to be translated is
+ambiguous without more context. What does "S" mean? In such cases, we use a
+different markup for translated strings which includes context. It will appear
+in the msgid in the .po/.pot file like this:
+
+    CONTEXT|ToBeTranslated
+
+So for example
+
+    Solo|S
+
+This should help you understand the the "S" here is a short form designed to refer to "Solo".
+
+In your translated text, you should remove the CONTEXT and the | symbol. 
+
+
 Note that as of Ardour 4 the translations are only installed when you run 
 './waf i18n' after './waf' and before 'sudo ./waf install'.
 
@@ -73,7 +90,7 @@ master branch. That should generate a file called something like
 
 3. Run 'bzip2 0001-Update-German-translation.patch' to compress the file.
 
-4. File a new bug report at http://tracker.ardour.org and attach the resulted 
+4. File a new bug report at https://tracker.ardour.org and attach the resulted
 compressed file and tell either rgareus (Robin Gareus) or las (Paul Davis) on 
 the project's IRC channel (#ardour at irc.freenode.net) about your patch.
 
@@ -114,7 +131,7 @@ Not every PO editor can calculate the equation for the plural forms in your
 language, but you can look it up in headers of PO files from some application
 such a GIMP or Inkscape. Here is an example for Russian:
 
-http://git.gnome.org/browse/gimp/plain/po/ru.po
+https://git.gnome.org/browse/gimp/plain/po/ru.po
 
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n"
 "%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2); 10<=4 && (n%100<10 || n"

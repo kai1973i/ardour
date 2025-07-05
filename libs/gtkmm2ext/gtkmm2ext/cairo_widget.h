@@ -1,44 +1,48 @@
 /*
-    Copyright (C) 2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2011-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014 Ben Loftis <ben@harrisonconsoles.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __gtk2_ardour_cairo_widget_h__
 #define __gtk2_ardour_cairo_widget_h__
 
 #include <cairomm/context.h>
 #include <cairomm/surface.h>
-#include <gtkmm/eventbox.h>
+#include <ytkmm/eventbox.h>
 
 #include "gtkmm2ext/visibility.h"
 #include "gtkmm2ext/cairo_canvas.h"
+#include "gtkmm2ext/cairo_theme.h"
+#include "gtkmm2ext/colors.h"
 #include "gtkmm2ext/widget_state.h"
 
 /** A parent class for widgets that are rendered using Cairo.
  */
 
-class LIBGTKMM2EXT_API CairoWidget : public Gtk::EventBox, public Gtkmm2ext::CairoCanvas
+class LIBGTKMM2EXT_API CairoWidget : public Gtk::EventBox, public Gtkmm2ext::CairoCanvas, public Gtkmm2ext::CairoTheme
 {
 public:
 	CairoWidget ();
 	virtual ~CairoWidget ();
 
 	void set_canvas_widget ();
-	void use_nsglview ();
+	void use_nsglview (bool retina = true);
+	void use_image_surface (bool yn = true);
 
 	/* swizzle Gtk::Widget methods for Canvas::Widget */
 	void queue_draw ();
@@ -84,13 +88,9 @@ public:
 
 	uint32_t background_color ();
 
-	static void set_flat_buttons (bool yn);
-	static bool flat_buttons() { return _flat_buttons; }
-
-	static void set_widget_prelight (bool yn);
-	static bool widget_prelight() { return _widget_prelight; }
 
 	static void set_source_rgb_a( cairo_t* cr, Gdk::Color, float a=1.0 );
+	static void set_source_rgb_a( cairo_t* cr, Gtkmm2ext::Color, float a=1.0 );
 
 	/* set_focus_handler() will cause all button-press events on any
 	   CairoWidget to invoke this slot/functor/function/method/callback.
@@ -130,21 +130,22 @@ protected:
 	Gtkmm2ext::ActiveState _active_state;
 	Gtkmm2ext::VisualState _visual_state;
 	bool                   _need_bg;
-
-	static bool	_flat_buttons;
-	static bool	_widget_prelight;
-	bool		_grabbed;
+	bool                   _grabbed;
 
 	static sigc::slot<void,Gtk::Widget*> focus_handler;
 
-  private:
+private:
+	void on_widget_name_changed ();
+
 	Cairo::RefPtr<Cairo::Surface> image_surface;
 	Glib::SignalProxyProperty _name_proxy;
 	sigc::connection _parent_style_change;
 	Widget * _current_parent;
 	bool _canvas_widget;
 	void* _nsglview;
+	bool _use_image_surface;
 	Gdk::Rectangle _allocation;
+	Glib::ustring _widget_name;
 
 };
 

@@ -1,20 +1,28 @@
 /*
-    Copyright (C) 2000 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2008-2012 Hans Baier <hansfbaier@googlemail.com>
+ * Copyright (C) 2008-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2013-2016 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2014-2017 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2015-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <cstdlib>
 #include <cmath>
@@ -25,8 +33,8 @@
 
 #include <sigc++/bind.h>
 
-#include <gtkmm/separator.h>
-#include <gtkmm/stock.h>
+#include <ytkmm/separator.h>
+#include <ytkmm/stock.h>
 
 #include "pbd/error.h"
 #include "pbd/ffs.h"
@@ -36,7 +44,9 @@
 #include "pbd/enumwriter.h"
 #include "pbd/memento_command.h"
 #include "pbd/stateful_diff_command.h"
+#include "pbd/unwind.h"
 
+#include "gtkmm2ext/colors.h"
 #include "gtkmm2ext/gtk_ui.h"
 #include "gtkmm2ext/utils.h"
 
@@ -63,8 +73,10 @@
 #include "ardour/source.h"
 #include "ardour/track.h"
 #include "ardour/types.h"
+#include "ardour/velocity_control.h"
 
-#include "automation_line.h"
+#include "ardour_message.h"
+#include "editor_automation_line.h"
 #include "automation_time_axis.h"
 #include "editor.h"
 #include "enums.h"
@@ -72,10 +84,10 @@
 #include "gui_thread.h"
 #include "keyboard.h"
 #include "midi_channel_selector.h"
-#include "midi_scroomer.h"
 #include "midi_streamview.h"
 #include "midi_region_view.h"
 #include "midi_time_axis.h"
+#include "midi_util.h"
 #include "patch_change_dialog.h"
 #include "patch_change_widget.h"
 #include "piano_roll_header.h"
@@ -87,7 +99,6 @@
 #include "rgb_macros.h"
 #include "selection.h"
 #include "step_editor.h"
-#include "utils.h"
 #include "note_base.h"
 
 #include "ardour/midi_track.h"
@@ -105,36 +116,61 @@ using namespace std;
 static const uint32_t MIDI_CONTROLS_BOX_MIN_HEIGHT = 160;
 static const uint32_t KEYBOARD_MIN_HEIGHT = 130;
 
+#define DEFAULT_MIDNAM_MODEL (X_("Generic"))
+
 MidiTimeAxisView::MidiTimeAxisView (PublicEditor& ed, Session* sess, ArdourCanvas::Canvas& canvas)
 	: SessionHandlePtr (sess)
 	, RouteTimeAxisView (ed, sess, canvas)
 	, _ignore_signals(false)
-	, _range_scroomer(0)
-	, _piano_roll_header(0)
-	, _note_mode(Sustained)
+	, _asked_all_automation(false)
+	, _piano_roll_header(nullptr)
 	, _note_mode_item(0)
-	, _percussion_mode_item(0)
+	, _percussion_mode_item(nullptr)
 	, _color_mode(MeterColors)
-	, _meter_color_mode_item(0)
-	, _channel_color_mode_item(0)
+	, _meter_color_mode_item(nullptr)
+	, _channel_color_mode_item(nullptr)
 	, _track_color_mode_item(0)
-	, _channel_selector (0)
-	, _step_edit_item (0)
-	, controller_menu (0)
-	, poly_pressure_menu (0)
-	, _step_editor (0)
+	, _channel_selector (nullptr)
+	, _step_edit_item (nullptr)
+	, controller_menu (nullptr)
+	, _step_editor (nullptr)
+	, velocity_menu_item (nullptr)
 {
 	_midnam_model_selector.disable_scrolling();
 	_midnam_custom_device_mode_selector.disable_scrolling();
+	_midnam_channel_selector.disable_scrolling();
+
+	UIConfiguration::instance().ParameterChanged.connect (sigc::mem_fun (*this, &MidiTimeAxisView::parameter_changed));
+
+	_editor.MouseModeChanged.connect_same_thread (mouse_mode_connection, sigc::mem_fun (*this, &MidiTimeAxisView::mouse_mode_changed));
 }
 
 void
-MidiTimeAxisView::set_note_highlight (uint8_t note) {
-	_piano_roll_header->set_note_highlight (note);
+MidiTimeAxisView::mouse_mode_changed ()
+{
+	_piano_roll_header->queue_resize ();
 }
 
 void
-MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
+MidiTimeAxisView::parameter_changed (string const & param)
+{
+	if (param == X_("note-name-display")) {
+		if (_piano_roll_header) {
+			_piano_roll_header->instrument_info_change ();
+		}
+	}
+}
+
+void
+MidiTimeAxisView::set_note_highlight (uint8_t note)
+{
+	if (_piano_roll_header) {
+		_piano_roll_header->set_note_highlight (note);
+	}
+}
+
+void
+MidiTimeAxisView::set_route (std::shared_ptr<Route> rt)
 {
 	_route = rt;
 
@@ -142,21 +178,17 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 
 	if (is_track ()) {
 		_piano_roll_header = new PianoRollHeader(*midi_view());
-		_range_scroomer = new MidiScroomer(midi_view()->note_range_adjustment);
-		_range_scroomer->DoubleClicked.connect (
-			sigc::bind (sigc::mem_fun(*this, &MidiTimeAxisView::set_note_range),
-			            MidiStreamView::ContentsRange, false));
 	}
 
 	/* This next call will result in our height being set up, so it must come after
-	   the creation of the piano roll / range scroomer as their visibility is set up
-	   when our height is.
-	*/
+	 * the creation of the piano roll / range scroomer as their visibility is set up
+	 * when our height is.
+	 */
 	RouteTimeAxisView::set_route (rt);
 
-	_view->apply_color (ARDOUR_UI_UTILS::gdk_color_to_rgba (color()), StreamView::RegionColor);
+	_view->apply_color (Gtkmm2ext::gdk_color_to_rgba (color()), StreamView::RegionColor);
 
-	subplugin_menu.set_name ("ArdourContextMenu");
+	_note_range_changed_connection.disconnect();
 
 	if (!gui_property ("note-range-min").empty ()) {
 		midi_view()->apply_note_range (atoi (gui_property ("note-range-min").c_str()),
@@ -164,13 +196,8 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 		                               true);
 	}
 
-	_view->ContentsHeightChanged.connect (
-		sigc::mem_fun (*this, &MidiTimeAxisView::contents_height_changed));
-
-	ignore_toggle = false;
-
 	if (is_midi_track()) {
-		_note_mode = midi_track()->note_mode();
+		midi_view()->set_note_mode (midi_track()->note_mode());
 	}
 
 	/* if set_state above didn't create a gain automation child, we need to make one */
@@ -183,8 +210,12 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 		create_automation_child (MuteAutomation, false);
 	}
 
+	if (automation_child (MidiVelocityAutomation) == 0) {
+		create_automation_child (MidiVelocityAutomation, false);
+	}
+
 	if (_route->panner_shell()) {
-		_route->panner_shell()->Changed.connect (*this, invalidator (*this), boost::bind (&MidiTimeAxisView::ensure_pan_views, this, false), gui_context());
+		_route->panner_shell()->Changed.connect (*this, invalidator (*this), std::bind (&MidiTimeAxisView::ensure_pan_views, this, false), gui_context());
 	}
 
 	/* map current state of the route */
@@ -202,17 +233,10 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 		_piano_roll_header->ToggleNoteSelection.connect (
 			sigc::mem_fun (*this, &MidiTimeAxisView::toggle_note_selection));
 
-		/* Update StreamView during scroomer drags.*/
-
-		_range_scroomer->DragStarting.connect (
-			sigc::mem_fun (*this, &MidiTimeAxisView::start_scroomer_update));
-		_range_scroomer->DragFinishing.connect (
-			sigc::mem_fun (*this, &MidiTimeAxisView::stop_scroomer_update));
-
 		/* Put the scroomer and the keyboard in a VBox with a padding
-		   label so that they can be reduced in height for stacked-view
-		   tracks.
-		*/
+		 * label so that they can be reduced in height for stacked-view
+		 * tracks.
+		 */
 
 		HSeparator* separator = manage (new HSeparator());
 		separator->set_name("TrackSeparator");
@@ -222,7 +246,6 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 		VBox* v = manage (new VBox);
 		HBox* h = manage (new HBox);
 		h->pack_end (*_piano_roll_header);
-		h->pack_end (*_range_scroomer);
 		v->pack_start (*separator, false, false);
 		v->pack_start (*h, true, true);
 		v->show ();
@@ -231,8 +254,13 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 		time_axis_hbox.pack_end(*v, false, false, 0);
 		midi_scroomer_size_group->add_widget (*v);
 
-		midi_view()->NoteRangeChanged.connect (
-			sigc::mem_fun(*this, &MidiTimeAxisView::update_range));
+		/* callback from StreamView scroomer drags, as well as
+		 * automatic changes of note-range (e.g. at rec-stop).
+		 * This callback is used to save the note-range-min/max
+		 * GUI Object property
+		 */
+		_note_range_changed_connection = midi_view()->NoteRangeChanged.connect (
+				sigc::mem_fun (*this, &MidiTimeAxisView::note_range_changed));
 
 		/* ask for notifications of any new RegionViews */
 		_view->RegionViewAdded.connect (
@@ -245,36 +273,19 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 		}
 	}
 
-	if (gui_property (X_("midnam-model-name")).empty()) {
-		set_gui_property (X_("midnam-model-name"), "Generic");
-	}
-
-	if (gui_property (X_("midnam-custom-device-mode")).empty()) {
-		boost::shared_ptr<MIDI::Name::MasterDeviceNames> device_names = get_device_names();
-		if (device_names) {
-			set_gui_property (X_("midnam-custom-device-mode"),
-			                  *device_names->custom_device_mode_names().begin());
-		}
-	}
-
 	ArdourWidgets::set_tooltip (_midnam_model_selector, _("External MIDI Device"));
 	ArdourWidgets::set_tooltip (_midnam_custom_device_mode_selector, _("External Device Mode"));
+	ArdourWidgets::set_tooltip (_midnam_channel_selector, _("MIDNAM Channel Display"));
 
 	_midi_controls_box.pack_start (_midnam_model_selector, false, false, 2);
 	_midi_controls_box.pack_start (_midnam_custom_device_mode_selector, false, false, 2);
+	_midi_controls_box.pack_start (_midnam_channel_selector, false, false, 2);
 
 	_midi_controls_box.set_homogeneous(false);
 	_midi_controls_box.set_border_width (2);
 
-	MIDI::Name::MidiPatchManager::instance().PatchesChanged.connect (*this, invalidator (*this),
-			boost::bind (&MidiTimeAxisView::setup_midnam_patches, this),
-			gui_context());
-
-	setup_midnam_patches ();
-	update_patch_selector ();
-
-	model_changed (gui_property(X_("midnam-model-name")));
-	custom_device_mode_changed (gui_property(X_("midnam-custom-device-mode")));
+	/* this directly calls use_midnam_info() if there are midnam's already */
+	MIDI::Name::MidiPatchManager::instance().maybe_use (*this, invalidator (*this), std::bind (&MidiTimeAxisView::use_midnam_info, this), gui_context());
 
 	controls_vbox.pack_start(_midi_controls_box, false, false);
 
@@ -290,9 +301,10 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 
 	const string note_mode = gui_property ("note-mode");
 	if (!note_mode.empty()) {
-		_note_mode = NoteMode (string_2_enum (note_mode, _note_mode));
+		NoteMode nm;
+		midi_view()->set_note_mode (NoteMode (string_2_enum (note_mode, nm)));
 		if (_percussion_mode_item) {
-			_percussion_mode_item->set_active (_note_mode == Percussive);
+			_percussion_mode_item->set_active (midi_view()->note_mode() == Percussive);
 		}
 	}
 
@@ -306,20 +318,37 @@ MidiTimeAxisView::set_route (boost::shared_ptr<Route> rt)
 		bool has_parameter;
 		Evoral::Parameter parameter (0, 0, 0);
 
-		bool const p = AutomationTimeAxisView::parse_state_id (
-			*i, route_id, has_parameter, parameter);
+		bool const p = AutomationTimeAxisView::parse_state_id (*i, route_id, has_parameter, parameter);
 		if (p && route_id == _route->id () && has_parameter) {
 			const std::string& visible = gui_object_state().get_string (*i, X_("visible"));
 			create_automation_child (parameter, string_to<bool> (visible));
 		}
 	}
+
+	//Menu_Helpers::MenuElem elem = Gtk::Menu_Helpers::MenuElem(_("Plugin Provided"),
+	//				sigc::bind(sigc::mem_fun(*this, &MidiTimeAxisView::model_changed),
+	//					model_name));
+
+	for (int i = 1; i < 17; i++){
+		std::string text = string_compose ("%1 %2", _("Channel "), i);
+		_midnam_channel_selector.append_text_item (text);
+	}
+	_midnam_channel_selector.StateChanged.connect (sigc::mem_fun (*this, &MidiTimeAxisView::_midnam_channel_changed));
+	if (gui_property (X_("midnam-channel")).empty()) {
+		std::string str = string_compose ("%1 1", _("Channel "));
+		set_gui_property (X_("midnam-channel"), str);
+		_midnam_channel_selector.set_active (str);
+	} else {
+		_midnam_channel_selector.set_active (gui_property (X_("midnam-channel")));
+	}
 }
 
 void
-MidiTimeAxisView::processors_changed (RouteProcessorChange c)
+MidiTimeAxisView::_midnam_channel_changed ()
 {
-	RouteTimeAxisView::processors_changed (c);
-	update_patch_selector ();
+	set_gui_property (X_("midnam-channel"), _midnam_channel_selector.get_text());
+	//std::cout << "midnam_changed(): " << _midnam_channel_selector.get_text() << std::endl;
+	_piano_roll_header->instrument_info_change ();
 }
 
 void
@@ -332,16 +361,20 @@ MidiTimeAxisView::first_idle ()
 
 MidiTimeAxisView::~MidiTimeAxisView ()
 {
+	delete _view;
+	_view = nullptr;
+
 	delete _channel_selector;
+	_channel_selector = nullptr;
 
 	delete _piano_roll_header;
-	_piano_roll_header = 0;
-
-	delete _range_scroomer;
-	_range_scroomer = 0;
+	_piano_roll_header = nullptr;
 
 	delete controller_menu;
+	controller_menu = nullptr;
+
 	delete _step_editor;
+	_step_editor = nullptr;
 }
 
 void
@@ -352,20 +385,77 @@ MidiTimeAxisView::check_step_edit ()
 }
 
 void
+MidiTimeAxisView::processors_changed (RouteProcessorChange c)
+{
+	RouteTimeAxisView::processors_changed (c);
+	maybe_trigger_model_change ();
+	update_patch_selector ();
+}
+
+void
+MidiTimeAxisView::use_midnam_info ()
+{
+	/* Rebuild controller menu */
+	_controller_menu_map.clear ();
+	delete controller_menu;
+	controller_menu = 0;
+
+	setup_midnam_patches ();
+
+	/* update names on any automation lane with MIDNAM names */
+	for (AutomationTracks::iterator i = _automation_tracks.begin(); i != _automation_tracks.end(); ++i) {
+		switch (i->first.type()) {
+			case MidiCCAutomation:
+				i->second->update_name_from_param ();
+				break;
+			default:
+				continue;
+		}
+	}
+}
+
+void
+MidiTimeAxisView::maybe_trigger_model_change ()
+{
+	if (_route->instrument_info().have_custom_plugin_info ()) {
+		/* ensure that "Plugin Provided" is at the top of the list */
+		if (_midnam_model_selector.items().empty () || _midnam_model_selector.items().begin()->get_label() != _("Plugin Provided")) {
+			/* setup_midnam_patches unconditionally calls model_changed() */
+			setup_midnam_patches ();
+		}
+	} else {
+		/* no plugin provided MIDNAM for this plugin */
+		if (!_midnam_model_selector.items().empty () && _midnam_model_selector.items().begin()->get_label() == _("Plugin Provided")) {
+			/* setup_midnam_patches unconditionally calls model_changed() */
+			setup_midnam_patches ();
+		}
+	}
+}
+
+void
 MidiTimeAxisView::setup_midnam_patches ()
 {
 	typedef MIDI::Name::MidiPatchManager PatchManager;
 	PatchManager& patch_manager = PatchManager::instance();
 
 	_midnam_model_selector.clear_items ();
-	for (PatchManager::DeviceNamesByMaker::const_iterator m = patch_manager.devices_by_manufacturer().begin();
-			m != patch_manager.devices_by_manufacturer().end(); ++m) {
+
+	if (_route->instrument_info().have_custom_plugin_info ()) {
+		Menu_Helpers::MenuElem elem = Gtk::Menu_Helpers::MenuElem(_("Plugin Provided"), sigc::bind(sigc::mem_fun(*this, &MidiTimeAxisView::model_changed), ""));
+		_midnam_model_selector.AddMenuElem(elem);
+	}
+
+	for (PatchManager::DeviceNamesByMaker::const_iterator m = patch_manager.devices_by_manufacturer().begin(); m != patch_manager.devices_by_manufacturer().end(); ++m) {
 		Menu*                   menu  = Gtk::manage(new Menu);
 		Menu_Helpers::MenuList& items = menu->items();
 
-		// Build manufacturer submenu
-		for (MIDI::Name::MIDINameDocument::MasterDeviceNamesList::const_iterator n = m->second.begin();
-				n != m->second.end(); ++n) {
+		/* Build manufacturer submenu */
+		for (MIDI::Name::MIDINameDocument::MasterDeviceNamesList::const_iterator n = m->second.begin(); n != m->second.end(); ++n) {
+
+			if (patch_manager.is_custom_model (n->first)) {
+				continue;
+			}
+
 			Menu_Helpers::MenuElem elem = Gtk::Menu_Helpers::MenuElem(
 					n->first.c_str(),
 					sigc::bind(sigc::mem_fun(*this, &MidiTimeAxisView::model_changed),
@@ -373,27 +463,40 @@ MidiTimeAxisView::setup_midnam_patches ()
 
 			items.push_back(elem);
 		}
+		if (items.empty ()) {
+			delete menu;
+			continue;
+		}
 
-		// Add manufacturer submenu to selector
+		/* Add manufacturer submenu to selector */
 		_midnam_model_selector.AddMenuElem(Menu_Helpers::MenuElem(m->first, *menu));
 	}
 
-	if (!get_device_names()) {
-		model_changed ("Generic");
+	if (patch_manager.all_models().empty()) {
+		_midnam_model_selector.hide ();
+		_midnam_custom_device_mode_selector.hide ();
+	} else {
+		_midnam_model_selector.show ();
+		if (_midnam_custom_device_mode_selector.items().size() > 1) {
+			_midnam_custom_device_mode_selector.show ();
+		}
 	}
-}
 
-void
-MidiTimeAxisView::start_scroomer_update ()
-{
-	_note_range_changed_connection.disconnect();
-	_note_range_changed_connection = midi_view()->NoteRangeChanged.connect (
-		sigc::mem_fun (*this, &MidiTimeAxisView::note_range_changed));
-}
-void
-MidiTimeAxisView::stop_scroomer_update ()
-{
-	_note_range_changed_connection.disconnect();
+	/* call _midnam_model_selector.set_text ()
+	 * and show/hide _midnam_custom_device_mode_selector
+	 */
+	std::string model = gui_property (X_("midnam-model-name"));
+	if (model.empty() && _route->instrument_info().have_custom_plugin_info ()) {
+		/* use plugin's MIDNAM */
+		model_changed ("");
+	} else if (model.empty() || ! MIDI::Name::MidiPatchManager::instance ().master_device_by_model (model)) {
+		/* invalid model, switch to use default */
+		model_changed ("");
+	} else {
+		model_changed (model);
+	}
+
+	_piano_roll_header->instrument_info_change ();
 }
 
 void
@@ -402,49 +505,117 @@ MidiTimeAxisView::update_patch_selector ()
 	typedef MIDI::Name::MidiPatchManager PatchManager;
 	PatchManager& patch_manager = PatchManager::instance();
 
-	bool pluginprovided = false;
 	if (_route) {
-		boost::shared_ptr<PluginInsert> pi = boost::dynamic_pointer_cast<PluginInsert> (_route->the_instrument ());
+		std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert> (_route->the_instrument ());
 		if (pi && pi->plugin ()->has_midnam ()) {
-			pluginprovided = true;
 			std::string model_name = pi->plugin ()->midnam_model ();
 			if (gui_property (X_("midnam-model-name")) != model_name) {
-				model_changed (model_name);
+				/* ensure that "Plugin Provided" is prefixed at the top of the list */
+				if (_midnam_model_selector.items().empty () || _midnam_model_selector.items().begin()->get_label() != _("Plugin Provided")) {
+					setup_midnam_patches ();
+				}
 			}
 		}
 	}
 
-	if (patch_manager.all_models().empty() || pluginprovided) {
+	if (patch_manager.all_models().empty()) {
 		_midnam_model_selector.hide ();
 		_midnam_custom_device_mode_selector.hide ();
+		_midnam_channel_selector.hide ();
 	} else {
 		_midnam_model_selector.show ();
-		_midnam_custom_device_mode_selector.show ();
+		_midnam_channel_selector.show ();
+		if (_midnam_custom_device_mode_selector.items().size() > 1) {
+			_midnam_custom_device_mode_selector.show ();
+		}
+	}
+	_piano_roll_header->instrument_info_change ();
+
+	/* call _midnam_model_selector.set_text ()
+	 * and show/hide _midnam_custom_device_mode_selector
+	 */
+	std::string model = gui_property (X_("midnam-model-name"));
+	if (model.empty() && _route->instrument_info().have_custom_plugin_info ()) {
+		/* use plugin's MIDNAM */
+		model_changed ("");
+	} else if (model.empty() || ! MIDI::Name::MidiPatchManager::instance ().master_device_by_model (model)) {
+		/* invalid model, switch to use default */
+		model_changed ("");
+	} else {
+		model_changed (model);
 	}
 }
 
-
 void
-MidiTimeAxisView::model_changed(const std::string& model)
+MidiTimeAxisView::model_changed (const std::string& m)
 {
-	set_gui_property (X_("midnam-model-name"), model);
+	typedef MIDI::Name::MidiPatchManager PatchManager;
+	PatchManager& patch_manager = PatchManager::instance();
 
-	const std::list<std::string> device_modes = MIDI::Name::MidiPatchManager::instance()
-		.custom_device_mode_names_by_model(model);
+	std::string model (m);
+	bool save_model = m != "";
 
-	_midnam_model_selector.set_text(model);
-	_midnam_custom_device_mode_selector.clear_items();
-
-	for (std::list<std::string>::const_iterator i = device_modes.begin();
-	     i != device_modes.end(); ++i) {
-		_midnam_custom_device_mode_selector.AddMenuElem(
-			Gtk::Menu_Helpers::MenuElem(
-				*i, sigc::bind(sigc::mem_fun(*this, &MidiTimeAxisView::custom_device_mode_changed),
-				               *i)));
+	if (model.empty() && !_route->instrument_info().have_custom_plugin_info ()) {
+		model = DEFAULT_MIDNAM_MODEL;
 	}
 
-	if (!device_modes.empty()) {
-		custom_device_mode_changed(device_modes.front());
+	std::list<std::string> device_modes = patch_manager.custom_device_mode_names_by_model (model);
+
+	if (device_modes.empty()) {
+		save_model = false;
+		if (_route->instrument_info().have_custom_plugin_info ()) {
+			model = "";
+		} else {
+			model = DEFAULT_MIDNAM_MODEL;
+		}
+		device_modes = patch_manager.custom_device_mode_names_by_model (model);
+	}
+
+	if (model == "") {
+		_midnam_model_selector.set_text (_("Plugin Provided"));
+	} else {
+		_midnam_model_selector.set_text (model);
+	}
+
+	if (save_model) {
+		set_gui_property (X_("midnam-model-name"), model);
+	} else {
+		remove_gui_property (X_("midnam-model-name"));
+	}
+
+	/* set new mode */
+	const std::string current_mode = gui_property (X_("midnam-custom-device-mode"));
+	std::string mode;
+	if (find (device_modes.begin(), device_modes.end(), current_mode) == device_modes.end()) {
+		if (device_modes.size() > 0) {
+			mode = device_modes.front();
+			if (save_model) {
+				custom_device_mode_changed (device_modes.front());
+			}
+		} else {
+			mode = "";
+		}
+	} else {
+		mode = current_mode;
+	}
+
+	/* set backend state */
+	_route->instrument_info().set_external_instrument (model, mode);
+
+	/* query effective model/mode -- may be plugin provided */
+	if (_effective_model == _route->instrument_info().model () && _effective_mode == _route->instrument_info().mode ()) {
+		/* no change */
+		return;
+	}
+
+	_effective_model = _route->instrument_info().model ();
+	_effective_mode  = _route->instrument_info().mode ();
+
+	/* update GUI */
+
+	_midnam_custom_device_mode_selector.clear_items();
+	for (std::list<std::string>::const_iterator i = device_modes.begin(); i != device_modes.end(); ++i) {
+		_midnam_custom_device_mode_selector.AddMenuElem (Gtk::Menu_Helpers::MenuElem(*i, sigc::bind(sigc::mem_fun(*this, &MidiTimeAxisView::custom_device_mode_changed), *i)));
 	}
 
 	if (device_modes.size() > 1) {
@@ -453,32 +624,36 @@ MidiTimeAxisView::model_changed(const std::string& model)
 		_midnam_custom_device_mode_selector.hide();
 	}
 
-	// now this is a real bad hack
-	if (device_modes.size() > 0) {
-		_route->instrument_info().set_external_instrument (model, device_modes.front());
-	} else {
-		_route->instrument_info().set_external_instrument (model, "");
-	}
+	/* set _midnam_custom_device_mode_selector */
+	custom_device_mode_changed (mode);
 
-	// Rebuild controller menu
+	/* Rebuild controller menu */
 	_controller_menu_map.clear ();
 	delete controller_menu;
 	controller_menu = 0;
-	build_automation_action_menu(false);
 
 	if (patch_change_dialog ()) {
 		patch_change_dialog ()->refresh ();
 	}
+
+	_piano_roll_header->instrument_info_change ();
 }
 
 void
 MidiTimeAxisView::custom_device_mode_changed(const std::string& mode)
 {
 	const std::string model = gui_property (X_("midnam-model-name"));
-
 	set_gui_property (X_("midnam-custom-device-mode"), mode);
-	_midnam_custom_device_mode_selector.set_text(mode);
+	_midnam_custom_device_mode_selector.set_text (mode);
+	if (model.empty () && !mode.empty ()) {
+		/* model.empty () && model.empty () -> plugin provided
+		 * otherwise at least a model must be set. */
+		return;
+	}
+	/* inform the backend, route owned instrument info */
 	_route->instrument_info().set_external_instrument (model, mode);
+
+	_piano_roll_header->instrument_info_change ();
 }
 
 MidiStreamView*
@@ -488,36 +663,74 @@ MidiTimeAxisView::midi_view()
 }
 
 void
-MidiTimeAxisView::set_height (uint32_t h, TrackHeightMode m)
+MidiTimeAxisView::update_midi_controls_visibility (uint32_t h)
 {
+	if (_route && !_route->active ()) {
+		h = 0;
+	}
+	if (h >= MIDI_CONTROLS_BOX_MIN_HEIGHT) {
+		_midi_controls_box.show ();
+	} else {
+		_midi_controls_box.hide();
+	}
+}
+
+void
+MidiTimeAxisView::set_height (uint32_t h, TrackHeightMode m, bool from_idle)
+{
+	update_midi_controls_visibility (h);
+
 	if (h >= MIDI_CONTROLS_BOX_MIN_HEIGHT) {
 		_midi_controls_box.show ();
 	} else {
 		_midi_controls_box.hide();
 	}
 
-	if (h >= KEYBOARD_MIN_HEIGHT) {
-		if (is_track() && _range_scroomer) {
-			_range_scroomer->show();
-		}
-		if (is_track() && _piano_roll_header) {
+	update_scroomer_visbility (h, layer_display ());
+
+	/* We need to do this after changing visibility of our stuff, as it will
+	 * eventually trigger a call to Editor::reset_controls_layout_width(),
+	 * which needs to know if we have just shown or hidden a scroomer /
+	 * piano roll.
+	 */
+	RouteTimeAxisView::set_height (h, m, from_idle);
+}
+
+void
+MidiTimeAxisView::update_scroomer_visbility (uint32_t h, LayerDisplay d)
+{
+	if (!is_track ()) {
+		return;
+	}
+	if (h >= KEYBOARD_MIN_HEIGHT && d == Overlaid) {
+		if (_piano_roll_header) {
 			_piano_roll_header->show();
 		}
 	} else {
-		if (is_track() && _range_scroomer) {
-			_range_scroomer->hide();
-		}
-		if (is_track() && _piano_roll_header) {
+		if (_piano_roll_header) {
 			_piano_roll_header->hide();
 		}
 	}
+}
 
-	/* We need to do this after changing visibility of our stuff, as it will
-	   eventually trigger a call to Editor::reset_controls_layout_width(),
-	   which needs to know if we have just shown or hidden a scroomer /
-	   piano roll.
-	*/
-	RouteTimeAxisView::set_height (h, m);
+void
+MidiTimeAxisView::set_layer_display (LayerDisplay d)
+{
+	LayerDisplay prev_layer_display = layer_display ();
+	RouteTimeAxisView::set_layer_display (d);
+	LayerDisplay curr_layer_display = layer_display ();
+
+	if (curr_layer_display == prev_layer_display) {
+		return;
+	}
+
+	uint32_t h = current_height ();
+	update_scroomer_visbility (h, curr_layer_display);
+
+	/* If visibility changed, trigger a call to Editor::reset_controls_layout_width()
+	 * by forcing a redraw via Editor::queue_redisplay_track_views ()
+	 */
+	_stripable->gui_changed ("visible_tracks", (void *) 0); /* EMIT SIGNAL */
 }
 
 void
@@ -534,12 +747,12 @@ MidiTimeAxisView::append_extra_display_menu_items ()
 
 	range_items.push_back (
 		MenuElem (_("Show Full Range"),
-		          sigc::bind (sigc::mem_fun(*this, &MidiTimeAxisView::set_note_range),
+		          sigc::bind (sigc::mem_fun(*this, &MidiTimeAxisView::set_visibility_note_range),
 		                      MidiStreamView::FullRange, true)));
 
 	range_items.push_back (
 		MenuElem (_("Fit Contents"),
-		          sigc::bind (sigc::mem_fun(*this, &MidiTimeAxisView::set_note_range),
+		          sigc::bind (sigc::mem_fun(*this, &MidiTimeAxisView::set_visibility_note_range),
 		                      MidiStreamView::ContentsRange, true)));
 
 	items.push_back (MenuElem (_("Note Range"), *range_menu));
@@ -550,12 +763,20 @@ MidiTimeAxisView::append_extra_display_menu_items ()
 	items.push_back (MenuElem (_("Patch Selector..."),
 				sigc::mem_fun(*this, &RouteUI::select_midi_patch)));
 
-	color_mode_menu = build_color_mode_menu();
-	if (color_mode_menu) {
-		items.push_back (MenuElem (_("Color Mode"), *color_mode_menu));
-	}
+	items.push_back (CheckMenuElem (_("Restore Patch")));
+	Gtk::CheckMenuItem* cmi = dynamic_cast<Gtk::CheckMenuItem *> (&items.back());
+	cmi->set_active (midi_track ()->restore_pgm_on_load ());
+	cmi->signal_activate().connect (sigc::mem_fun (*this, &MidiTimeAxisView::toggle_restore_pgm_on_load));
+
+	items.push_back (MenuElem (_("Color Mode"), *build_color_mode_menu ()));
 
 	items.push_back (SeparatorElem ());
+}
+
+void
+MidiTimeAxisView::toggle_restore_pgm_on_load ()
+{
+	midi_track ()->set_restore_pgm_on_load (!midi_track ()->restore_pgm_on_load ());
 }
 
 void
@@ -582,11 +803,11 @@ MidiTimeAxisView::build_automation_action_menu (bool for_selection)
 	using namespace Menu_Helpers;
 
 	/* If we have a controller menu, we need to detach it before
-	   RouteTimeAxis::build_automation_action_menu destroys the
-	   menu it is attached to.  Otherwise GTK destroys
-	   controller_menu's gobj, meaning that it can't be reattached
-	   below.  See bug #3134.
-	*/
+	 * RouteTimeAxis::build_automation_action_menu destroys the
+	 * menu it is attached to.  Otherwise GTK destroys
+	 * controller_menu's gobj, meaning that it can't be reattached
+	 * below.  See bug #3134.
+	 */
 
 	if (controller_menu) {
 		detach_menu (*controller_menu);
@@ -599,44 +820,38 @@ MidiTimeAxisView::build_automation_action_menu (bool for_selection)
 
 	uint16_t selected_channels = midi_track()->get_playback_channel_mask();
 
-	if (selected_channels !=  0) {
+	automation_items.push_back (CheckMenuElem (_("Velocity"), sigc::bind (sigc::mem_fun (*this, &MidiTimeAxisView::toggle_automation_track), MidiVelocityAutomation)));
+	velocity_menu_item = dynamic_cast<Gtk::CheckMenuItem*> (&automation_items.back ());
+	velocity_menu_item->set_active (string_to<bool> (velocity_track->gui_property ("visible")));
+
+	if (selected_channels != 0) {
 
 		automation_items.push_back (SeparatorElem());
 
 		/* these 2 MIDI "command" types are semantically more like automation
-		   than note data, but they are not MIDI controllers. We give them
-		   special status in this menu, since they will not show up in the
-		   controller list and anyone who actually knows something about MIDI
-		   (!) would not expect to find them there.
-		*/
+		 * than note data, but they are not MIDI controllers. We give them
+		 * special status in this menu, since they will not show up in the
+		 * controller list and anyone who actually knows something about MIDI
+		 * (!) would not expect to find them there.
+		 */
 
-		add_channel_command_menu_item (
-			automation_items, _("Bender"), MidiPitchBenderAutomation, 0);
-		automation_items.back().set_sensitive (
-			!for_selection || _editor.get_selection().tracks.size() == 1);
-		add_channel_command_menu_item (
-			automation_items, _("Pressure"), MidiChannelPressureAutomation, 0);
-		automation_items.back().set_sensitive (
-			!for_selection || _editor.get_selection().tracks.size() == 1);
+		add_channel_command_menu_item (automation_items, _("Bender"), MidiPitchBenderAutomation, 0);
+		automation_items.back().set_sensitive (!for_selection || _editor.get_selection().tracks.size() == 1);
+
+		add_channel_command_menu_item (automation_items, _("Pressure"), MidiChannelPressureAutomation, 0);
+		automation_items.back().set_sensitive (!for_selection || _editor.get_selection().tracks.size() == 1);
 
 		/* now all MIDI controllers. Always offer the possibility that we will
-		   rebuild the controllers menu since it might need to be updated after
-		   a channel mode change or other change. Also detach it first in case
-		   it has been used anywhere else.
-		*/
-
+		 * rebuild the controllers menu since it might need to be updated after
+		 * a channel mode change or other change. Also detach it first in case
+		 * it has been used anywhere else.
+		 */
 		build_controller_menu ();
-
 		automation_items.push_back (MenuElem (_("Controllers"), *controller_menu));
 
-		if (!poly_pressure_menu) {
-			poly_pressure_menu = new Gtk::Menu;
-		}
+		add_channel_command_menu_item (automation_items, _("Polyphonic Pressure"), MidiNotePressureAutomation, 0);
+		automation_items.back().set_sensitive (!for_selection || _editor.get_selection().tracks.size() == 1);
 
-		automation_items.push_back (MenuElem  (_("Polyphonic Pressure"), *poly_pressure_menu));
-
-		automation_items.back().set_sensitive (
-			!for_selection || _editor.get_selection().tracks.size() == 1);
 	} else {
 		automation_items.push_back (
 			MenuElem (string_compose ("<i>%1</i>", _("No MIDI Channels selected"))));
@@ -671,7 +886,7 @@ MidiTimeAxisView::add_channel_command_menu_item (Menu_Helpers::MenuList& items,
 	using namespace Menu_Helpers;
 
 	/* count the number of selected channels because we will build a different menu
-	   structure if there is more than 1 selected.
+	 * structure if there is more than 1 selected.
 	 */
 
 	const uint16_t selected_channels = midi_track()->get_playback_channel_mask();
@@ -715,7 +930,7 @@ MidiTimeAxisView::add_channel_command_menu_item (Menu_Helpers::MenuList& items,
 					               sigc::bind (sigc::mem_fun (*this, &RouteTimeAxisView::toggle_automation_track),
 					                           fully_qualified_param)));
 
-				boost::shared_ptr<AutomationTimeAxisView> track = automation_child (fully_qualified_param);
+				std::shared_ptr<AutomationTimeAxisView> track = automation_child (fully_qualified_param);
 				bool visible = false;
 
 				if (track) {
@@ -747,7 +962,7 @@ MidiTimeAxisView::add_channel_command_menu_item (Menu_Helpers::MenuList& items,
 					               sigc::bind (sigc::mem_fun (*this, &RouteTimeAxisView::toggle_automation_track),
 					                           fully_qualified_param)));
 
-				boost::shared_ptr<AutomationTimeAxisView> track = automation_child (fully_qualified_param);
+				std::shared_ptr<AutomationTimeAxisView> track = automation_child (fully_qualified_param);
 				bool visible = false;
 
 				if (track) {
@@ -769,9 +984,9 @@ MidiTimeAxisView::add_channel_command_menu_item (Menu_Helpers::MenuList& items,
 
 /** Add a single menu item for a controller on one channel. */
 void
-MidiTimeAxisView::add_single_channel_controller_item(Menu_Helpers::MenuList& ctl_items,
-                                                     int                     ctl,
-                                                     const std::string&      name)
+MidiTimeAxisView::add_single_channel_controller_item (Menu_Helpers::MenuList& ctl_items,
+                                                      int                     ctl,
+                                                      const std::string&      name)
 {
 	using namespace Menu_Helpers;
 
@@ -788,8 +1003,7 @@ MidiTimeAxisView::add_single_channel_controller_item(Menu_Helpers::MenuList& ctl
 						fully_qualified_param)));
 			dynamic_cast<Label*> (ctl_items.back().get_child())->set_use_markup (true);
 
-			boost::shared_ptr<AutomationTimeAxisView> track = automation_child (
-				fully_qualified_param);
+			std::shared_ptr<AutomationTimeAxisView> track = automation_child (fully_qualified_param);
 
 			bool visible = false;
 			if (track) {
@@ -811,12 +1025,11 @@ MidiTimeAxisView::add_single_channel_controller_item(Menu_Helpers::MenuList& ctl
 /** Add a submenu with 1 item per channel for a controller on many channels. */
 void
 MidiTimeAxisView::add_multi_channel_controller_item(Menu_Helpers::MenuList& ctl_items,
+                                                    const uint16_t          channels,
                                                     int                     ctl,
                                                     const std::string&      name)
 {
 	using namespace Menu_Helpers;
-
-	const uint16_t selected_channels = midi_track()->get_playback_channel_mask();
 
 	Menu* chn_menu = manage (new Menu);
 	MenuList& chn_items (chn_menu->items());
@@ -834,7 +1047,7 @@ MidiTimeAxisView::add_multi_channel_controller_item(Menu_Helpers::MenuList& ctl_
 		                      true, param_without_channel)));
 
 	for (uint8_t chn = 0; chn < 16; chn++) {
-		if (selected_channels & (0x0001 << chn)) {
+		if (channels & (0x0001 << chn)) {
 
 			/* for each selected channel, add a menu item for this controller */
 
@@ -844,7 +1057,7 @@ MidiTimeAxisView::add_multi_channel_controller_item(Menu_Helpers::MenuList& ctl_
 				               sigc::bind (sigc::mem_fun (*this, &RouteTimeAxisView::toggle_automation_track),
 				                           fully_qualified_param)));
 
-			boost::shared_ptr<AutomationTimeAxisView> track = automation_child (
+			std::shared_ptr<AutomationTimeAxisView> track = automation_child (
 				fully_qualified_param);
 			bool visible = false;
 
@@ -866,36 +1079,6 @@ MidiTimeAxisView::add_multi_channel_controller_item(Menu_Helpers::MenuList& ctl_
 	dynamic_cast<Label*> (ctl_items.back().get_child())->set_use_markup (true);
 }
 
-boost::shared_ptr<MIDI::Name::CustomDeviceMode>
-MidiTimeAxisView::get_device_mode()
-{
-	using namespace MIDI::Name;
-
-	boost::shared_ptr<MasterDeviceNames> device_names = get_device_names();
-	if (!device_names) {
-		return boost::shared_ptr<MIDI::Name::CustomDeviceMode>();
-	}
-
-	return device_names->custom_device_mode_by_name(
-		gui_property (X_("midnam-custom-device-mode")));
-}
-
-boost::shared_ptr<MIDI::Name::MasterDeviceNames>
-MidiTimeAxisView::get_device_names()
-{
-	using namespace MIDI::Name;
-
-	const std::string model = gui_property (X_("midnam-model-name"));
-
-	boost::shared_ptr<MIDINameDocument> midnam = MidiPatchManager::instance()
-		.document_by_model(model);
-	if (midnam) {
-		return midnam->master_device_names(model);
-	} else {
-		return boost::shared_ptr<MasterDeviceNames>();
-	}
-}
-
 void
 MidiTimeAxisView::build_controller_menu ()
 {
@@ -907,102 +1090,11 @@ MidiTimeAxisView::build_controller_menu ()
 	}
 
 	controller_menu = new Menu; // explicitly managed by us
-	MenuList& items (controller_menu->items());
-
-	/* create several "top level" menu items for sets of controllers (16 at a
-	   time), and populate each one with a submenu for each controller+channel
-	   combination covering the currently selected channels for this track
-	*/
-
-	const uint16_t selected_channels = midi_track()->get_playback_channel_mask();
-
-	/* count the number of selected channels because we will build a different menu
-	   structure if there is more than 1 selected.
-	*/
-
-	int chn_cnt = 0;
-	for (uint8_t chn = 0; chn < 16; chn++) {
-		if (selected_channels & (0x0001 << chn)) {
-			if (++chn_cnt > 1) {
-				break;
-			}
-		}
-	}
-
-	using namespace MIDI::Name;
-	boost::shared_ptr<MasterDeviceNames> device_names = get_device_names();
-
-	if (device_names && !device_names->controls().empty()) {
-		/* Controllers names available in midnam file, generate fancy menu */
-		unsigned n_items  = 0;
-		unsigned n_groups = 0;
-
-		/* TODO: This is not correct, should look up the currently applicable ControlNameList
-		   and only build a menu for that one. */
-		for (MasterDeviceNames::ControlNameLists::const_iterator l = device_names->controls().begin();
-		     l != device_names->controls().end(); ++l) {
-			boost::shared_ptr<ControlNameList> name_list = l->second;
-			Menu*                              ctl_menu  = NULL;
-
-			for (ControlNameList::Controls::const_iterator c = name_list->controls().begin();
-			     c != name_list->controls().end();) {
-				const uint16_t ctl = c->second->number();
-				if (ctl != MIDI_CTL_MSB_BANK && ctl != MIDI_CTL_LSB_BANK) {
-					/* Skip bank select controllers since they're handled specially */
-					if (n_items == 0) {
-						/* Create a new submenu */
-						ctl_menu = manage (new Menu);
-					}
-
-					MenuList& ctl_items (ctl_menu->items());
-					if (chn_cnt > 1) {
-						add_multi_channel_controller_item(ctl_items, ctl, c->second->name());
-					} else {
-						add_single_channel_controller_item(ctl_items, ctl, c->second->name());
-					}
-				}
-
-				++c;
-				if (ctl_menu && (++n_items == 16 || c == name_list->controls().end())) {
-					/* Submenu has 16 items or we're done, add it to controller menu and reset */
-					items.push_back(
-						MenuElem(string_compose(_("Controllers %1-%2"),
-						                        (16 * n_groups), (16 * n_groups) + n_items - 1),
-						         *ctl_menu));
-					ctl_menu = NULL;
-					n_items  = 0;
-					++n_groups;
-				}
-			}
-		}
-	} else {
-		/* No controllers names, generate generic numeric menu */
-		for (int i = 0; i < 127; i += 16) {
-			Menu*     ctl_menu = manage (new Menu);
-			MenuList& ctl_items (ctl_menu->items());
-
-			for (int ctl = i; ctl < i+16; ++ctl) {
-				if (ctl == MIDI_CTL_MSB_BANK || ctl == MIDI_CTL_LSB_BANK) {
-					/* Skip bank select controllers since they're handled specially */
-					continue;
-				}
-
-				if (chn_cnt > 1) {
-					add_multi_channel_controller_item(
-						ctl_items, ctl, string_compose(_("Controller %1"), ctl));
-				} else {
-					add_single_channel_controller_item(
-						ctl_items, ctl, string_compose(_("Controller %1"), ctl));
-				}
-			}
-
-			/* Add submenu for this block of controllers to controller menu */
-			items.push_back (
-				MenuElem (string_compose (_("Controllers %1-%2"), i, i + 15),
-				          *ctl_menu));
-		}
-	}
+	::build_controller_menu (*controller_menu, _route->instrument_info(), midi_track()->get_playback_channel_mask(),
+	                         sigc::mem_fun (*this, &MidiTimeAxisView::add_single_channel_controller_item),
+	                         sigc::mem_fun (*this, &MidiTimeAxisView::add_multi_channel_controller_item));
 }
+
 
 Gtk::Menu*
 MidiTimeAxisView::build_note_mode_menu()
@@ -1019,14 +1111,14 @@ MidiTimeAxisView::build_note_mode_menu()
 		               sigc::bind (sigc::mem_fun (*this, &MidiTimeAxisView::set_note_mode),
 		                           Sustained, true)));
 	_note_mode_item = dynamic_cast<RadioMenuItem*>(&items.back());
-	_note_mode_item->set_active(_note_mode == Sustained);
+	_note_mode_item->set_active(midi_view()->note_mode() == Sustained);
 
 	items.push_back (
 		RadioMenuElem (mode_group, _("Percussive"),
 		               sigc::bind (sigc::mem_fun (*this, &MidiTimeAxisView::set_note_mode),
 		                           Percussive, true)));
 	_percussion_mode_item = dynamic_cast<RadioMenuItem*>(&items.back());
-	_percussion_mode_item->set_active(_note_mode == Percussive);
+	_percussion_mode_item->set_active(midi_view()->note_mode() == Percussive);
 
 	return mode_menu;
 }
@@ -1070,12 +1162,16 @@ MidiTimeAxisView::set_note_mode(NoteMode mode, bool apply_to_selection)
 {
 	if (apply_to_selection) {
 		_editor.get_selection().tracks.foreach_midi_time_axis (
-			boost::bind (&MidiTimeAxisView::set_note_mode, _1, mode, false));
+			std::bind (&MidiTimeAxisView::set_note_mode, _1, mode, false));
 	} else {
-		if (_note_mode != mode || midi_track()->note_mode() != mode) {
-			_note_mode = mode;
+		if (midi_view()->note_mode() != mode || midi_track()->note_mode() != mode) {
+			/* Need to set both view and track note mode, although
+			   in some way it seems that they ought to be coupled more
+			   strongly.
+			*/
+			midi_view()->set_note_mode (mode);
 			midi_track()->set_note_mode(mode);
-			set_gui_property ("note-mode", enum_2_string(_note_mode));
+			set_gui_property ("note-mode", enum_2_string(midi_view()->note_mode()));
 			_view->redisplay_track();
 		}
 	}
@@ -1086,7 +1182,7 @@ MidiTimeAxisView::set_color_mode (ColorMode mode, bool force, bool redisplay, bo
 {
 	if (apply_to_selection) {
 		_editor.get_selection().tracks.foreach_midi_time_axis (
-			boost::bind (&MidiTimeAxisView::set_color_mode, _1, mode, force, redisplay, false));
+			std::bind (&MidiTimeAxisView::set_color_mode, _1, mode, force, redisplay, false));
 	} else {
 		if (_color_mode == mode && !force) {
 			return;
@@ -1109,21 +1205,16 @@ MidiTimeAxisView::set_color_mode (ColorMode mode, bool force, bool redisplay, bo
 }
 
 void
-MidiTimeAxisView::set_note_range (MidiStreamView::VisibleNoteRange range, bool apply_to_selection)
+MidiTimeAxisView::set_visibility_note_range (MidiStreamView::VisibleNoteRange range, bool apply_to_selection)
 {
 	if (apply_to_selection) {
 		_editor.get_selection().tracks.foreach_midi_time_axis (
-			boost::bind (&MidiTimeAxisView::set_note_range, _1, range, false));
+			std::bind (&MidiTimeAxisView::set_visibility_note_range, _1, range, false));
 	} else {
 		if (!_ignore_signals) {
-			midi_view()->set_note_range(range);
+			midi_view()->set_note_visibility_range_style (range);
 		}
 	}
-}
-
-void
-MidiTimeAxisView::update_range()
-{
 }
 
 void
@@ -1131,10 +1222,24 @@ MidiTimeAxisView::show_all_automation (bool apply_to_selection)
 {
 	using namespace MIDI::Name;
 
+	if (!_asked_all_automation) {
+		ArdourMessageDialog md (_("Are you sure you want to\nshow all MIDI automation lanes?"), false, MESSAGE_QUESTION, BUTTONS_YES_NO);
+
+		md.set_title (_("Show All Automation"));
+
+		md.set_secondary_text (_("There are a total of 16 MIDI channels times 128 Control-Change parameters, not including other MIDI controls. Showing all will add more than 2000 automation lanes which is not generally useful. This will take some time and also slow down the GUI significantly."));
+		if (md.run () != RESPONSE_YES) {
+			return;
+		}
+	}
+
+	PBD::Unwinder<bool> uw (_asked_all_automation, true);
+
 	if (apply_to_selection) {
 		_editor.get_selection().tracks.foreach_midi_time_axis (
-			boost::bind (&MidiTimeAxisView::show_all_automation, _1, false));
+			std::bind (&MidiTimeAxisView::show_all_automation, _1, false));
 	} else {
+		no_redraw = true; // unset in RouteTimeAxisView::show_all_automation
 		if (midi_track()) {
 			// Show existing automation
 			const set<Evoral::Parameter> params = midi_track()->midi_playlist()->contained_automation();
@@ -1143,33 +1248,24 @@ MidiTimeAxisView::show_all_automation (bool apply_to_selection)
 				create_automation_child(*i, true);
 			}
 
-			// Show automation for all controllers named in midnam file
-			boost::shared_ptr<MasterDeviceNames> device_names = get_device_names();
-			if (gui_property (X_("midnam-model-name")) != "Generic" &&
-			     device_names && !device_names->controls().empty()) {
-				const std::string device_mode       = gui_property (X_("midnam-custom-device-mode"));
-				const uint16_t    selected_channels = midi_track()->get_playback_channel_mask();
+			/* Show automation for all controllers named in midnam file */
+			if (_route->instrument_info().master_controller_count () > 0) {
+
+				const uint16_t selected_channels = midi_track()->get_playback_channel_mask();
+
 				for (uint32_t chn = 0; chn < 16; ++chn) {
+
 					if ((selected_channels & (0x0001 << chn)) == 0) {
 						// Channel not in use
 						continue;
 					}
 
-					boost::shared_ptr<ChannelNameSet> chan_names = device_names->channel_name_set_by_channel(
-						device_mode, chn);
-					if (!chan_names) {
-						continue;
-					}
-
-					boost::shared_ptr<ControlNameList> control_names = device_names->control_name_list(
-						chan_names->control_list_name());
+					std::shared_ptr<ControlNameList> control_names = _route->instrument_info().control_name_list (chn);
 					if (!control_names) {
 						continue;
 					}
 
-					for (ControlNameList::Controls::const_iterator c = control_names->controls().begin();
-					     c != control_names->controls().end();
-					     ++c) {
+					for (ControlNameList::Controls::const_iterator c = control_names->controls().begin(); c != control_names->controls().end(); ++c) {
 						const uint16_t ctl = c->second->number();
 						if (ctl != MIDI_CTL_MSB_BANK && ctl != MIDI_CTL_LSB_BANK) {
 							/* Skip bank select controllers since they're handled specially */
@@ -1190,7 +1286,7 @@ MidiTimeAxisView::show_existing_automation (bool apply_to_selection)
 {
 	if (apply_to_selection) {
 		_editor.get_selection().tracks.foreach_midi_time_axis (
-			boost::bind (&MidiTimeAxisView::show_existing_automation, _1, false));
+			std::bind (&MidiTimeAxisView::show_existing_automation, _1, false));
 	} else {
 		if (midi_track()) {
 			const set<Evoral::Parameter> params = midi_track()->midi_playlist()->contained_automation();
@@ -1231,9 +1327,8 @@ MidiTimeAxisView::create_automation_child (const Evoral::Parameter& param, bool 
 		return;
 	}
 
-	boost::shared_ptr<AutomationTimeAxisView> track;
-	boost::shared_ptr<AutomationControl> control;
-
+	std::shared_ptr<AutomationTimeAxisView> track;
+	std::shared_ptr<AutomationControl> control;
 
 	switch (param.type()) {
 
@@ -1249,10 +1344,15 @@ MidiTimeAxisView::create_automation_child (const Evoral::Parameter& param, bool 
 		/* handled elsewhere */
 		break;
 
+	case MidiVelocityAutomation:
+		create_velocity_automation_child (param, show);
+		break;
+
 	case MidiCCAutomation:
 	case MidiPgmChangeAutomation:
 	case MidiPitchBenderAutomation:
 	case MidiChannelPressureAutomation:
+	case MidiNotePressureAutomation:
 	case MidiSystemExclusiveAutomation:
 		/* These controllers are region "automation" - they are owned
 		 * by regions (and their MidiModels), not by the track. As a
@@ -1267,18 +1367,20 @@ MidiTimeAxisView::create_automation_child (const Evoral::Parameter& param, bool 
 		track.reset (new AutomationTimeAxisView (
 			             _session,
 			             _route,
-			             control ? _route : boost::shared_ptr<Automatable> (),
+			             control ? _route : std::shared_ptr<Automatable> (),
 			             control,
 			             param,
 			             _editor,
 			             *this,
 			             true,
 			             parent_canvas,
+			             /* this calls MidiTrack::describe_parameter()
+			              * -> instrument_info().get_controller_name()
+			              */
 			             _route->describe_parameter(param)));
 
 		if (_view) {
-			_view->foreach_regionview (
-				sigc::mem_fun (*track.get(), &TimeAxisView::add_ghost));
+			_view->foreach_regionview (sigc::mem_fun (*track.get(), &TimeAxisView::add_ghost));
 		}
 
 		add_automation_child (param, track, show);
@@ -1303,8 +1405,18 @@ MidiTimeAxisView::create_automation_child (const Evoral::Parameter& param, bool 
 void
 MidiTimeAxisView::route_active_changed ()
 {
-	RouteUI::route_active_changed ();
+	RouteTimeAxisView::route_active_changed ();
 	update_control_names();
+	update_midi_controls_visibility (height);
+
+	if (!_route->active()) {
+		controls_table.hide();
+		inactive_table.show();
+		RouteTimeAxisView::hide_all_automation();
+	} else {
+		inactive_table.hide();
+		controls_table.show();
+	}
 }
 
 void
@@ -1343,6 +1455,12 @@ MidiTimeAxisView::set_note_selection (uint8_t note)
 	uint16_t chn_mask = midi_track()->get_playback_channel_mask();
 
 	_editor.begin_reversible_selection_op (X_("Set Note Selection"));
+
+	/* set_note_selection_region_view() will not work with multiple regions,
+	 * as each individual `foreach` call will clear prior selection.
+	 * Use clear_midi_notes() and add_note_selection_region_view() instead. */
+
+	_editor.get_selection().clear_midi_notes();
 
 	if (_view->num_selected_regionviews() == 0) {
 		_view->foreach_regionview (
@@ -1418,7 +1536,7 @@ MidiTimeAxisView::toggle_note_selection (uint8_t note)
 }
 
 void
-MidiTimeAxisView::get_per_region_note_selection (list<pair<PBD::ID, set<boost::shared_ptr<Evoral::Note<Temporal::Beats> > > > >& selection)
+MidiTimeAxisView::get_per_region_note_selection (list<pair<PBD::ID, set<std::shared_ptr<Evoral::Note<Temporal::Beats> > > > >& selection)
 {
 	_view->foreach_regionview (
 		sigc::bind (sigc::mem_fun (*this, &MidiTimeAxisView::get_per_region_note_selection_region_view), sigc::ref(selection)));
@@ -1449,12 +1567,12 @@ MidiTimeAxisView::toggle_note_selection_region_view (RegionView* rv, uint8_t not
 }
 
 void
-MidiTimeAxisView::get_per_region_note_selection_region_view (RegionView* rv, list<pair<PBD::ID, std::set<boost::shared_ptr<Evoral::Note<Temporal::Beats> > > > > &selection)
+MidiTimeAxisView::get_per_region_note_selection_region_view (RegionView* rv, list<pair<PBD::ID, std::set<std::shared_ptr<Evoral::Note<Temporal::Beats> > > > > &selection)
 {
 	Evoral::Sequence<Temporal::Beats>::Notes selected;
 	dynamic_cast<MidiRegionView*>(rv)->selection_as_notelist (selected, false);
 
-	std::set<boost::shared_ptr<Evoral::Note<Temporal::Beats> > > notes;
+	std::set<std::shared_ptr<Evoral::Note<Temporal::Beats> > > notes;
 
 	Evoral::Sequence<Temporal::Beats>::Notes::iterator sel_it;
 	for (sel_it = selected.begin(); sel_it != selected.end(); ++sel_it) {
@@ -1469,9 +1587,8 @@ MidiTimeAxisView::get_per_region_note_selection_region_view (RegionView* rv, lis
 void
 MidiTimeAxisView::set_channel_mode (ChannelMode, uint16_t)
 {
-	/* hide all automation tracks that use the wrong channel(s) and show all those that use
-	   the right ones.
-	*/
+	/* hide all automation tracks that use the wrong channel(s) and show all those thatcw
+	 * use the right ones. */
 
 	const uint16_t selected_channels = midi_track()->get_playback_channel_mask();
 	bool changed = false;
@@ -1482,7 +1599,7 @@ MidiTimeAxisView::set_channel_mode (ChannelMode, uint16_t)
 
 		for (uint32_t chn = 0; chn < 16; ++chn) {
 			Evoral::Parameter fully_qualified_param (MidiCCAutomation, chn, ctl);
-			boost::shared_ptr<AutomationTimeAxisView> track = automation_child (fully_qualified_param);
+			std::shared_ptr<AutomationTimeAxisView> track = automation_child (fully_qualified_param);
 
 			if (!track) {
 				continue;
@@ -1490,8 +1607,8 @@ MidiTimeAxisView::set_channel_mode (ChannelMode, uint16_t)
 
 			if ((selected_channels & (0x0001 << chn)) == 0) {
 				/* channel not in use. hiding it will trigger RouteTimeAxisView::automation_track_hidden()
-				   which will cause a redraw. We don't want one per channel, so block that with no_redraw.
-				*/
+				 * which will cause a redraw. We don't want one per channel, so block that with no_redraw.
+				 */
 				changed = track->set_marked_for_display (false) || changed;
 			} else {
 				changed = track->set_marked_for_display (true) || changed;
@@ -1521,6 +1638,10 @@ MidiTimeAxisView::automation_child_menu_item (Evoral::Parameter param)
 		return m;
 	}
 
+	if (param.type() == MidiVelocityAutomation) {
+		return velocity_menu_item;
+	}
+
 	ParameterMenuMap::iterator i = _controller_menu_map.find (param);
 	if (i != _controller_menu_map.end()) {
 		return i->second;
@@ -1534,37 +1655,59 @@ MidiTimeAxisView::automation_child_menu_item (Evoral::Parameter param)
 	return 0;
 }
 
-boost::shared_ptr<MidiRegion>
-MidiTimeAxisView::add_region (samplepos_t f, samplecnt_t length, bool commit)
+std::shared_ptr<MidiRegion>
+MidiTimeAxisView::add_region (timepos_t const & f, timecnt_t const & length, bool commit)
 {
 	Editor* real_editor = dynamic_cast<Editor*> (&_editor);
-	MusicSample pos (f, 0);
+	timepos_t pos (f);
 
 	if (commit) {
 		real_editor->begin_reversible_command (Operations::create_region);
 	}
 	playlist()->clear_changes ();
 
-	real_editor->snap_to (pos, RoundNearest);
+	real_editor->snap_to (pos, Temporal::RoundNearest);
 
-	boost::shared_ptr<Source> src = _session->create_midi_source_by_stealing_name (view()->trackview().track());
-	PropertyList plist;
+	std::shared_ptr<Source> src = _session->create_midi_source_by_stealing_name (view()->trackview().track());
 
-	plist.add (ARDOUR::Properties::start, 0);
-	plist.add (ARDOUR::Properties::length, length);
-	plist.add (ARDOUR::Properties::name, PBD::basename_nosuffix(src->name()));
+	const Temporal::timecnt_t start (Temporal::BeatTime); /* zero beats */
 
-	boost::shared_ptr<Region> region = (RegionFactory::create (src, plist));
-	/* sets beat position */
-	region->set_position (pos.sample, pos.division);
-	playlist()->add_region (region, pos.sample, 1.0, false, pos.division);
+	std::shared_ptr<Region> region;
+
+	/* Create the (empty) whole-file region that will show up in the source
+	 * list. This is NOT used in any playlists.
+	 */
+
+	{
+		PropertyList plist;
+
+		plist.add (ARDOUR::Properties::start, start);
+		plist.add (ARDOUR::Properties::length, length);
+		plist.add (ARDOUR::Properties::automatic, true);
+		plist.add (ARDOUR::Properties::whole_file, true);
+		plist.add (ARDOUR::Properties::name, PBD::basename_nosuffix(src->name()));
+		plist.add (ARDOUR::Properties::opaque, _session->config.get_draw_opaque_midi_regions());
+
+		region = (RegionFactory::create (src, plist));
+	}
+
+	/* Now create the region that we will actually use within the playlist */
+
+	{
+		PropertyList plist;
+		plist.add (ARDOUR::Properties::name, region->name());
+		region = RegionFactory::create (region, plist);
+	}
+
+	region->set_position (pos);
+	playlist()->add_region (region, pos, 1.0, false);
 	_session->add_command (new StatefulDiffCommand (playlist()));
 
 	if (commit) {
 		real_editor->commit_reversible_command ();
 	}
 
-	return boost::dynamic_pointer_cast<MidiRegion>(region);
+	return std::dynamic_pointer_cast<MidiRegion>(region);
 }
 
 void
@@ -1594,15 +1737,29 @@ MidiTimeAxisView::stop_step_editing ()
  *  of the channel selector.
  */
 uint8_t
-MidiTimeAxisView::get_channel_for_add () const
+MidiTimeAxisView::get_preferred_midi_channel () const
 {
+	if (_editor.draw_channel() != Editing::DRAW_CHAN_AUTO) {
+		return _editor.draw_channel();
+	}
+
+	if (_midnam_channel_selector.is_visible()) {
+		string chn = gui_property (X_("midnam-channel"));
+		if (!chn.empty()) {
+			int midnam_channel;
+			sscanf (chn.c_str(), "%*s %d", &midnam_channel);
+			midnam_channel--;
+			return midnam_channel;
+		}
+	}
+
 	uint16_t const chn_mask = midi_track()->get_playback_channel_mask();
 	int chn_cnt = 0;
 	uint8_t channel = 0;
 
 	/* pick the highest selected channel, unless all channels are selected,
-	   which is interpreted to mean channel 1 (zero)
-	*/
+	 * which is interpreted to mean channel 1 (zero)
+	 */
 
 	for (uint16_t i = 0; i < 16; ++i) {
 		if (chn_mask & (1<<i)) {
@@ -1625,19 +1782,44 @@ MidiTimeAxisView::note_range_changed ()
 	set_gui_property ("note-range-max", (int) midi_view()->highest_note ());
 }
 
-void
-MidiTimeAxisView::contents_height_changed ()
-{
-	_range_scroomer->queue_resize ();
-}
-
 bool
-MidiTimeAxisView::paste (samplepos_t pos, const Selection& selection, PasteContext& ctx, const int32_t sub_num)
+MidiTimeAxisView::paste (timepos_t const & pos, const Selection& selection, PasteContext& ctx)
 {
 	if (!_editor.internal_editing()) {
 		// Non-internal paste, paste regions like any other route
-		return RouteTimeAxisView::paste(pos, selection, ctx, sub_num);
+		return RouteTimeAxisView::paste (pos, selection, ctx);
 	}
 
-	return midi_view()->paste(pos, selection, ctx, sub_num);
+	return midi_view()->paste (pos, selection, ctx);
+}
+
+void
+MidiTimeAxisView::get_regions_with_selected_data (RegionSelection& rs)
+{
+	midi_view()->get_regions_with_selected_data (rs);
+}
+
+void
+MidiTimeAxisView::create_velocity_automation_child (Evoral::Parameter const &, bool show)
+{
+	std::shared_ptr<AutomationControl> c = midi_track()->velocity_control();
+
+	if (!c) {
+		error << "MidiTrack has no velocity automation, unable to add automation track view." << endmsg;
+		return;
+	}
+
+	velocity_track.reset (new AutomationTimeAxisView (_session,
+	                                                  _route, midi_track(), c, c->parameter(),
+	                                                  _editor,
+	                                                  *this,
+	                                                  false,
+	                                                  parent_canvas,
+	                                                  midi_track()->describe_parameter(c->parameter())));
+
+	if (_view) {
+		_view->foreach_regionview (sigc::mem_fun (*velocity_track.get(), &TimeAxisView::add_ghost));
+	}
+
+	add_automation_child (Evoral::Parameter(MidiVelocityAutomation), velocity_track, show);
 }

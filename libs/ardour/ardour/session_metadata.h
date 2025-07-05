@@ -1,24 +1,24 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008-2015 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2009 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#ifndef __ardour_session_metadata_h__
-#define __ardour_session_metadata_h__
+#pragma once
 
 #include <string>
 
@@ -132,9 +132,13 @@ class LIBARDOUR_API SessionMetadata : public PBD::StatefulDestructible
 	void set_organization (const std::string &);
 	void set_country (const std::string &);
 
+	/*** Export ***/
+	typedef std::map<std::string,std::string> MetaDataMap;
+	void av_export_tag (MetaDataMap&) const;
+
 	/*** Serialization ***/
-	XMLNode & get_state ();  //serializes stuff in the map, to be stored in session file
-	XMLNode & get_user_state ();  //serializes stuff in the user_map, to be stored in user's config file
+	XMLNode& get_state () const;  //serializes stuff in the map, to be stored in session file
+	XMLNode& get_user_state ();  //serializes stuff in the user_map, to be stored in user's config file
 	int set_state (const XMLNode &, int version_num);
 
   private:
@@ -146,7 +150,7 @@ class LIBARDOUR_API SessionMetadata : public PBD::StatefulDestructible
 	PropertyMap map;
 	PropertyMap user_map;
 
-	XMLNode * get_xml (const std::string & name);
+	XMLNode * get_xml (const std::string & name) const;
 
 	std::string get_value (const std::string & name) const;
 	uint32_t get_uint_value (const std::string & name) const;
@@ -157,4 +161,3 @@ class LIBARDOUR_API SessionMetadata : public PBD::StatefulDestructible
 
 } // namespace ARDOUR
 
-#endif // __ardour_session_metadata_h__

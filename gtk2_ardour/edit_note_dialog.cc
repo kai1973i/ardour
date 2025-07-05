@@ -1,34 +1,39 @@
 /*
-    Copyright (C) 2010 Paul Davis
+ * Copyright (C) 2010-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2010-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2011-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2017 Nick Mainsbridge <mainsbridge@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#include <gtkmm/stock.h>
-#include <gtkmm/table.h>
+#include <ytkmm/stock.h>
+#include <ytkmm/table.h>
 
 #include "gtkmm2ext/utils.h"
 
+#include "ardour/midi_region.h"
+
 #include "edit_note_dialog.h"
-#include "midi_region_view.h"
+#include "midi_view.h"
 #include "note_base.h"
 
 #include "pbd/i18n.h"
 
 using namespace std;
+using namespace Temporal;
 using namespace Gtk;
 using namespace Gtkmm2ext;
 
@@ -38,7 +43,7 @@ using namespace Gtkmm2ext;
  *    @param n Notes to edit.
  */
 
-EditNoteDialog::EditNoteDialog (MidiRegionView* rv, set<NoteBase*> n)
+EditNoteDialog::EditNoteDialog (MidiView* rv, set<NoteBase*> n)
 	: ArdourDialog (_("Note"))
 	, _region_view (rv)
 	, _events (n)
@@ -91,10 +96,13 @@ EditNoteDialog::EditNoteDialog (MidiRegionView* rv, set<NoteBase*> n)
 	table->attach (_time_all, 2, 3, r, r + 1);
 	++r;
 
-	_time_clock.set_session (_region_view->get_time_axis_view().session ());
+	// XXXX _time_clock.set_session (_region_view->get_time_axis_view().session ());
 	_time_clock.set_mode (AudioClock::BBT);
-	_time_clock.set (_region_view->source_relative_time_converter().to
-			 ((*_events.begin())->note()->time()) + (_region_view->region()->position() - _region_view->region()->start()), true);
+
+	/* Calculate absolute position of the event on time timeline */
+	timepos_t const pos = _region_view->midi_region()->source_position() + timecnt_t ((*_events.begin())->note()->time ());
+
+	_time_clock.set (pos, true);
 
 	l = manage (left_aligned_label (_("Length")));
 	table->attach (*l, 0, 1, r, r + 1);
@@ -102,12 +110,9 @@ EditNoteDialog::EditNoteDialog (MidiRegionView* rv, set<NoteBase*> n)
 	table->attach (_length_all, 2, 3, r, r + 1);
 	++r;
 
-	_length_clock.set_session (_region_view->get_time_axis_view().session ());
+	// XXXX _length_clock.set_session (_region_view->get_time_axis_view().session ());
 	_length_clock.set_mode (AudioClock::BBT);
-	_length_clock.set (
-		_region_view->region_relative_time_converter().to ((*_events.begin())->note()->end_time ()) + _region_view->region()->position(),
-		true,
-		_region_view->region_relative_time_converter().to ((*_events.begin())->note()->time ()) + _region_view->region()->position());
+	_length_clock.set_duration (timecnt_t ((*_events.begin())->note()->length()), true);
 
 	/* Set up `set all notes...' buttons' sensitivity */
 
@@ -197,39 +202,42 @@ EditNoteDialog::done (int r)
 		}
 	}
 
-	samplecnt_t const region_samples = _time_clock.current_time() - (_region_view->region()->position() - _region_view->region()->start());
-	Temporal::Beats const t = _region_view->source_relative_time_converter().from (region_samples);
+	/* convert current clock time into an offset from the start of the source */
+	timecnt_t const time_clock_source_relative = _region_view->midi_region()->source_position ().distance (_time_clock.last_when ());
+
+	/* convert that into a position in Beats - this will be the new note time (as an offset inside the source) */
+	Beats const new_note_time_source_relative_beats = time_clock_source_relative.beats ();
 
 	if (!_time_all.get_sensitive() || _time_all.get_active ()) {
 		for (set<NoteBase*>::iterator i = _events.begin(); i != _events.end(); ++i) {
-			if (t != (*i)->note()->time()) {
-				_region_view->change_note_time (*i, t);
+			if (new_note_time_source_relative_beats != (*i)->note()->time()) {
+				_region_view->change_note_time (*i, new_note_time_source_relative_beats);
 				had_change = true;
 			}
 		}
 	}
 
 	if (!_length_all.get_sensitive() || _length_all.get_active ()) {
+		Beats const new_note_length_beats = _length_clock.current_duration ().beats ();
 		for (set<NoteBase*>::iterator i = _events.begin(); i != _events.end(); ++i) {
-			samplepos_t const note_end_sample = region_samples + _length_clock.current_duration (_time_clock.current_time());
-			Temporal::Beats const d = _region_view->source_relative_time_converter().from (note_end_sample) - (*i)->note()->time();
-			if (d != (*i)->note()->length()) {
-				_region_view->change_note_length (*i, d);
+			if (new_note_length_beats != (*i)->note()->length()) {
+				_region_view->change_note_length (*i, new_note_length_beats);
 				had_change = true;
 			}
 		}
+
 	}
 
-	if (!had_change) {
-		_region_view->abort_command ();
+	if (had_change) {
+		_region_view->apply_note_diff ();
+	} else {
+		_region_view->abort_note_diff ();
 	}
-
-	_region_view->apply_diff ();
 
 	list<Evoral::event_id_t> notes;
 	for (set<NoteBase*>::iterator i = _events.begin(); i != _events.end(); ++i) {
 		notes.push_back ((*i)->note()->id());
 	}
 
-	_region_view->select_notes (notes);
+	_region_view->select_notes (notes, true);
 }

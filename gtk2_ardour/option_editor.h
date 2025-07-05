@@ -1,38 +1,44 @@
 /*
-    Copyright (C) 2009 Paul Davis
+ * Copyright (C) 2005-2009 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2005-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005 Karsten Wiese <fzuuzf@googlemail.com>
+ * Copyright (C) 2008-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2012-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013-2015 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+#include <ytkmm/checkbutton.h>
+#include <ytkmm/comboboxtext.h>
+#include <ytkmm/filechooserbutton.h>
+#include <ytkmm/label.h>
+#include <ytkmm/notebook.h>
+#include <ytkmm/scale.h>
+#include <ytkmm/spinbutton.h>
+#include <ytkmm/table.h>
+#include <ytkmm/treestore.h>
+#include <ytkmm/treeview.h>
+#include <ytkmm/window.h>
 
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+#include "pbd/configuration.h"
 
-#ifndef __gtk_ardour_option_editor_h__
-#define __gtk_ardour_option_editor_h__
-
-#include <gtkmm/checkbutton.h>
-#include <gtkmm/comboboxtext.h>
-#include <gtkmm/filechooserbutton.h>
-#include <gtkmm/label.h>
-#include <gtkmm/notebook.h>
-#include <gtkmm/scale.h>
-#include <gtkmm/spinbutton.h>
-#include <gtkmm/table.h>
-#include <gtkmm/treestore.h>
-#include <gtkmm/treeview.h>
-#include <gtkmm/window.h>
-
-#include "widgets/slider_controller.h"
-
+#include "actions.h"
 #include "ardour_window.h"
 #include "audio_clock.h"
 #include "ardour/types.h"
@@ -53,8 +59,9 @@
  *  options dialog.
  */
 
-namespace PBD {
-	class Configuration;
+namespace ArdourWidgets {
+	class Frame;
+	class HSliderController;
 }
 
 class OptionEditorPage;
@@ -63,6 +70,7 @@ class OptionEditorPage;
 class OptionEditorComponent
 {
 public:
+	OptionEditorComponent() : _frame (0), _metadata (0) {}
 	virtual ~OptionEditorComponent() {}
 
 	/** Called when a configuration parameter's value has changed.
@@ -83,10 +91,18 @@ public:
 
 	virtual Gtk::Widget& tip_widget() = 0;
 
+	virtual PBD::Configuration::Metadata const * get_metadata() const;
+	void set_metadata (PBD::Configuration::Metadata const &);
+
+	void highlight ();
+	void end_highlight ();
+
 protected:
 	void maybe_add_note (OptionEditorPage *, int);
 
 	std::string _note;
+	ArdourWidgets::Frame* _frame;
+	PBD::Configuration::Metadata const * _metadata;
 };
 
 /** A component which provides a subheading within the dialog */
@@ -187,6 +203,32 @@ protected:
 	std::string _name;
 };
 
+/** Just a Gtk Checkbutton, masquerading as an option component */
+class CheckOption : public OptionEditorComponent , public Gtkmm2ext::Activatable, public sigc::trackable
+{
+public:
+	CheckOption (std::string const &, std::string const &, Glib::RefPtr<Gtk::Action> act );
+	void set_state_from_config () {}
+	void parameter_changed (std::string const &) {}
+	void add_to_page (OptionEditorPage*);
+
+	void set_sensitive (bool yn) {
+		_button->set_sensitive (yn);
+	}
+
+	Gtk::Widget& tip_widget() { return *_button; }
+
+protected:
+	void action_toggled ();
+	void action_sensitivity_changed () {}
+	void action_visibility_changed () {}
+
+	virtual void toggled ();
+
+	Gtk::CheckButton*      _button; ///< UI button
+	Gtk::Label*            _label; ///< label for button, so we can use markup
+};
+
 /** Component which provides the UI to handle a boolean option using a GTK CheckButton */
 class BoolOption : public Option
 {
@@ -245,6 +287,7 @@ public:
 	void add_to_page (OptionEditorPage*);
 	void set_sensitive (bool);
 	void set_invalid_chars (std::string i) { _invalid = i; }
+	void set_valid_chars (std::string i) { _valid = i; }
 
 	Gtk::Widget& tip_widget() { return *_entry; }
 
@@ -258,6 +301,7 @@ private:
 	Gtk::Label* _label; ///< UI label
 	Gtk::Entry* _entry; ///< UI entry
 	std::string _invalid;
+	std::string _valid;
 };
 
 
@@ -314,12 +358,26 @@ public:
 	void add (T e, std::string const & o)
 	{
 		_options.push_back (e);
-		_combo->append_text (o);
+		_combo->append (o);
+		/* Remove excess space.
+		 * gtk_combo_box_size_requet() does the following:
+		 * {
+		 *   gtk_widget_size_request (GTK_BIN (widget)->child, &bin_req);
+		 *   gtk_combo_box_remeasure (combo_box);
+		 *   bin_req.width = MAX (bin_req.width, priv->width);
+		 * }
+		 *
+		 * - gtk_combo_box_remeasure() measures the extents of all children
+		 *   correctly using gtk_cell_view_get_size_of_row() and sets priv->width.
+		 * - The direct child (current active item as entry) is however too large.
+		 *   Likely because Ardour's clearlooks.rc.in does not correctly set this up).
+		 */
+		_combo->get_child()->set_size_request (20, -1);
 	}
 
 	void clear ()
 	{
-		_combo->clear_items();
+		_combo->remove_all();
 		_options.clear ();
 	}
 
@@ -376,7 +434,7 @@ protected:
 	sigc::slot<bool, float> _set;
 	Gtk::Adjustment _adj;
 	Gtk::HScale _hscale;
-	Gtk::Label _label;
+	Gtk::Label* _label;
 	double _mult;
 	bool _log;
 };
@@ -541,7 +599,7 @@ public:
 	void set_state_from_config ();
 	void add_to_page (OptionEditorPage *);
 
-	Gtk::Widget& tip_widget() { return *_db_slider; }
+	Gtk::Widget& tip_widget();
 
 private:
 	void db_changed ();
@@ -551,11 +609,26 @@ private:
 	Gtk::Adjustment _db_adjustment;
 	ArdourWidgets::HSliderController* _db_slider;
 	Gtk::Entry _db_display;
-	Gtk::Label _label;
+	Gtk::Label* _label;
 	Gtk::HBox _box;
 	Gtk::VBox _fader_centering_box;
 	sigc::slot<ARDOUR::gain_t> _get;
 	sigc::slot<bool, ARDOUR::gain_t> _set;
+};
+
+class WidgetOption : public Option
+{
+  public:
+	WidgetOption (std::string const & i, std::string const & n, Gtk::Widget& w);
+
+	void add_to_page (OptionEditorPage*);
+	void parameter_changed (std::string const &) {}
+	void set_state_from_config () {}
+
+	Gtk::Widget& tip_widget() { return *_widget; }
+
+  private:
+	Gtk::Widget* _widget;
 };
 
 class ClockOption : public Option
@@ -571,7 +644,7 @@ public:
 
 private:
 	void save_clock_time ();
-	Gtk::Label _label;
+	Gtk::Label* _label;
 	AudioClock _clock;
 	sigc::slot<std::string> _get;
 	sigc::slot<bool, std::string> _set;
@@ -594,6 +667,7 @@ private:
 	sigc::slot<std::string> _get; ///< slot to get the configuration variable's value
 	sigc::slot<bool, std::string> _set;  ///< slot to set the configuration variable's value
 	Gtk::FileChooserButton _file_chooser;
+	sigc::connection _changed_connection;
 };
 
 /** Class to represent a single page in an OptionEditor's notebook.
@@ -640,7 +714,9 @@ public:
 	void add_option (std::string const &, OptionEditorComponent *);
 	void add_page (std::string const &, Gtk::Widget& page_widget);
 
+	std::string current_page (); /* ought to be const but .. hard */
 	void set_current_page (std::string const &);
+	std::map<std::string, OptionEditorPage*>& pages() { return _pages; }
 
 protected:
 	virtual void parameter_changed (std::string const &);
@@ -664,6 +740,35 @@ protected:
 	OptionColumns option_columns;
 	Glib::RefPtr<Gtk::TreeStore> option_tree;
 
+	/* searching */
+
+	Gtk::Entry  search_entry;
+	Gtk::Label  search_label;
+	Gtk::Button search_button;
+	Gtk::HBox   search_packer;
+	struct SearchResult {
+		SearchResult (std::string const & p, OptionEditorComponent& c) : page_title (p), component (c) {}
+
+		std::string page_title;
+		OptionEditorComponent& component;
+	};
+	typedef std::vector<SearchResult> SearchResults;
+	SearchResults* search_results;
+	typedef std::vector<std::string> SearchTargets;
+	SearchTargets search_targets;
+	SearchResults::iterator search_iterator;
+	OptionEditorComponent* search_current_highlight;
+	std::string last_search_string;
+	int search_not_found_count;
+	sigc::connection not_found_timeout;
+
+	void search ();
+	void search_highlight (std::string const & page_title, OptionEditorComponent&);
+	bool not_found_callback ();
+	bool search_key_press (GdkEventKey*);
+	bool search_key_focus (GdkEventFocus*);
+	void not_found ();
+
 private:
 	PBD::ScopedConnection config_connection;
 	Gtk::Notebook _notebook;
@@ -680,9 +785,10 @@ private:
 class OptionEditorContainer : public OptionEditor, public Gtk::VBox
 {
 public:
-	OptionEditorContainer (PBD::Configuration *, std::string const &);
+	OptionEditorContainer (PBD::Configuration *);
 	~OptionEditorContainer() {}
-private:
+
+	Gtk::VBox treeview_packer;
 	Gtk::HBox hpacker;
 };
 
@@ -692,9 +798,8 @@ class OptionEditorWindow : public OptionEditor, public ArdourWindow
 public:
 	OptionEditorWindow (PBD::Configuration *, std::string const &);
 	~OptionEditorWindow() {}
-private:
-	Gtk::VBox container;
+protected:
+	Gtk::VBox vpacker;
 	Gtk::HBox hpacker;
 };
 
-#endif /* __gtk_ardour_option_editor_h__ */

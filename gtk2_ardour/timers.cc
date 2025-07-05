@@ -1,24 +1,27 @@
 /*
-    Copyright (C) 2014 Tim Mayberry
+ * Copyright (C) 2014 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2015 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+#include <atomic>
 
 #include "timers.h"
 
+#include "pbd/atomic.h"
 #include "pbd/timer.h"
 #include "pbd/debug.h"
 #include "pbd/compose.h"
@@ -87,8 +90,8 @@ public:
 		, rapid(100)
 		, super_rapid(40)
 		, fps(40)
-		, _suspend_counter(0)
 	{
+	_suspend_counter.store (0);
 #ifndef NDEBUG
 		second.connect (sigc::mem_fun (*this, &UITimers::on_second_timer));
 #endif
@@ -100,12 +103,12 @@ public:
 	StandardTimer   super_rapid;
 	StandardTimer   fps;
 
-	gint            _suspend_counter;
+	std::atomic<int> _suspend_counter;
 
 #ifndef NDEBUG
-	std::vector<uint64_t> rapid_eps_count;
-	std::vector<uint64_t> super_rapid_eps_count;
-	std::vector<uint64_t> fps_eps_count;
+	std::vector<int64_t> rapid_eps_count;
+	std::vector<int64_t> super_rapid_eps_count;
+	std::vector<int64_t> fps_eps_count;
 
 private:
 
@@ -204,6 +207,9 @@ set_fps_interval (unsigned int interval)
 	get_timers().fps.set_interval (interval);
 }
 
+unsigned int fps_interval()  { return get_timers().fps.get_interval(); }
+unsigned int rapid_interval()  { return get_timers().rapid.get_interval(); }
+
 sigc::connection
 fps_connect(const sigc::slot<void>& slot)
 {
@@ -212,7 +218,7 @@ fps_connect(const sigc::slot<void>& slot)
 
 TimerSuspender::TimerSuspender ()
 {
-	if (g_atomic_int_add(&get_timers()._suspend_counter, 1) == 0) {
+	if (get_timers()._suspend_counter.fetch_add (1) == 0) {
 		get_timers().rapid.suspend();
 		get_timers().super_rapid.suspend();
 		get_timers().fps.suspend();
@@ -221,7 +227,7 @@ TimerSuspender::TimerSuspender ()
 
 TimerSuspender::~TimerSuspender ()
 {
-	if (g_atomic_int_dec_and_test (&get_timers()._suspend_counter)) {
+	if (PBD::atomic_dec_and_test (get_timers()._suspend_counter)) {
 		get_timers().rapid.resume();
 		get_timers().super_rapid.resume();
 		get_timers().fps.resume();

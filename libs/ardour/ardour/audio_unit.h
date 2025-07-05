@@ -1,34 +1,34 @@
 /*
-    Copyright (C) 2006 Paul Davis
-    Written by Taybin Rutkin
+ * Copyright (C) 2006-2014 David Robillard <d@drobilla.net>
+ * Copyright (C) 2007-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2010 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+#pragma once
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_audio_unit_h__
-#define __ardour_audio_unit_h__
-
-#include <stdint.h>
-#include <boost/shared_ptr.hpp>
-
+#include <atomic>
+#include <cstdint>
 #include <list>
+#include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
-#include <map>
 
 #include "ardour/plugin.h"
 
@@ -36,7 +36,6 @@
 #include <AudioUnit/AudioUnitProperties.h>
 #include "AUParamInfo.h"
 
-#include <boost/shared_ptr.hpp>
 
 class CAComponent;
 class CAAudioUnit;
@@ -60,7 +59,7 @@ struct LIBARDOUR_API AUParameterDescriptor : public ParameterDescriptor {
 class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 {
   public:
-	AUPlugin (AudioEngine& engine, Session& session, boost::shared_ptr<CAComponent> comp);
+	AUPlugin (AudioEngine& engine, Session& session, std::shared_ptr<CAComponent> comp);
 	AUPlugin (const AUPlugin& other);
 	virtual ~AUPlugin ();
 
@@ -70,8 +69,7 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 	const char * maker () const { return _info->creator.c_str(); }
 	uint32_t parameter_count () const;
 	float default_value (uint32_t port);
-	samplecnt_t signal_latency() const;
-	void set_parameter (uint32_t which, float val);
+	void set_parameter (uint32_t which, float val, sampleoffset_t);
 	float get_parameter (uint32_t which) const;
 
 	PluginOutputConfiguration possible_output () const { return _output_configs; }
@@ -82,16 +80,16 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 	void deactivate ();
 	void flush ();
 	int set_block_size (pframes_t nframes);
+	void set_non_realtime (bool);
 
 	int connect_and_run (BufferSet& bufs,
 			samplepos_t start, samplepos_t end, double speed,
-			ChanMapping in, ChanMapping out,
+			ChanMapping const& in, ChanMapping const& out,
 			pframes_t nframes, samplecnt_t offset);
 	std::set<Evoral::Parameter> automatable() const;
 	std::string describe_parameter (Evoral::Parameter);
 	IOPortDescription describe_io_port (DataType dt, bool input, uint32_t id) const;
 	std::string state_node_name () const { return "audiounit"; }
-	void print_parameter (uint32_t, char*, uint32_t len) const;
 
 	bool parameter_is_audio (uint32_t) const;
 	bool parameter_is_control (uint32_t) const;
@@ -107,18 +105,19 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 
 	bool has_editor () const;
 
-	bool can_support_io_configuration (const ChanCount& in, ChanCount& out, ChanCount* imprecise);
+	bool match_variable_io (ChanCount& in, ChanCount& aux_in, ChanCount& out);
+	bool reconfigure_io (ChanCount in, ChanCount aux_in, ChanCount out);
+
 	ChanCount output_streams() const;
 	ChanCount input_streams() const;
-	bool configure_io (ChanCount in, ChanCount out);
 	bool requires_fixed_size_buffers() const;
 
 	void set_fixed_size_buffers (bool yn) {
 		_requires_fixed_size_buffers = yn;
 	}
 
-	boost::shared_ptr<CAAudioUnit> get_au () { return unit; }
-	boost::shared_ptr<CAComponent> get_comp () const { return comp; }
+	std::shared_ptr<CAAudioUnit> get_au () { return unit; }
+	std::shared_ptr<CAComponent> get_comp () const { return comp; }
 
 	OSStatus render_callback(AudioUnitRenderActionFlags *ioActionFlags,
 	                         const AudioTimeStamp       *inTimeStamp,
@@ -143,15 +142,14 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 					       Float64*  outCycleStartBeat,
 					       Float64*  outCycleEndBeat);
 
-	static std::string maybe_fix_broken_au_id (const std::string&);
-
-        /* this MUST be called from thread in which you want to receive notifications
-	   about parameter changes.
-	*/
+	/* this MUST be called from thread in which you want to receive notifications
+	 * about parameter changes.
+	 */
 	int create_parameter_listener (AUEventListenerProc callback, void *arg, float interval_secs);
-        /* these can be called from any thread but SHOULD be called from the same thread
-	   that will receive parameter change notifications.
-	*/
+
+	/* these can be called from any thread but SHOULD be called from the same thread
+	 * that will receive parameter change notifications.
+	 */
 	int listen_to_parameter (uint32_t param_id);
 	int end_listen_to_parameter (uint32_t param_id);
 
@@ -161,17 +159,19 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 	void do_remove_preset (std::string);
 
   private:
+	samplecnt_t plugin_latency() const;
 	void find_presets ();
 
-	boost::shared_ptr<CAComponent> comp;
-	boost::shared_ptr<CAAudioUnit> unit;
+	std::shared_ptr<CAComponent> comp;
+	std::shared_ptr<CAAudioUnit> unit;
 
 	bool initialized;
+	bool process_offline;
 	int32_t input_channels;
 	int32_t output_channels;
 	std::vector<std::pair<int,int> > io_configs;
 	samplecnt_t _last_nframes;
-	mutable volatile guint _current_latency;
+	mutable std::atomic<unsigned int> _current_latency;
 	bool _requires_fixed_size_buffers;
 	AudioBufferList* buffers;
 	bool _has_midi_input;
@@ -202,6 +202,7 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 	uint32_t configured_output_busses;
 
 	uint32_t *bus_inputs;
+	uint32_t *bus_inused;
 	uint32_t *bus_outputs;
 	std::vector <std::string> _bus_name_in;
 	std::vector <std::string> _bus_name_out;
@@ -216,9 +217,8 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 	samplecnt_t input_offset;
 	samplecnt_t *cb_offsets;
 	BufferSet* input_buffers;
-	ChanMapping * input_map;
+	ChanMapping const * input_map;
 	samplecnt_t samples_processed;
-	uint32_t   audio_input_cnt;
 
 	std::vector<AUParameterDescriptor> descriptors;
 	AUEventListenerRef _parameter_listener;
@@ -228,23 +228,18 @@ class LIBARDOUR_API AUPlugin : public ARDOUR::Plugin
 	void discover_factory_presets ();
 
 	samplepos_t transport_sample;
-	float      transport_speed;
-	float      last_transport_speed;
+	float       transport_speed;
+	float       last_transport_speed;
+	pframes_t   preset_holdoff;
 
 	static void _parameter_change_listener (void* /*arg*/, void* /*src*/, const AudioUnitEvent* event, UInt64 host_time, Float32 new_value);
 	void parameter_change_listener (void* /*arg*/, void* /*src*/, const AudioUnitEvent* event, UInt64 host_time, Float32 new_value);
 };
 
-typedef boost::shared_ptr<AUPlugin> AUPluginPtr;
-
-struct LIBARDOUR_API AUPluginCachedInfo {
-	std::vector<std::pair<int,int> > io_configs;
-};
-
 class LIBARDOUR_API AUPluginInfo : public PluginInfo {
-  public:
-	 AUPluginInfo (boost::shared_ptr<CAComponentDescription>);
-	~AUPluginInfo ();
+public:
+	 AUPluginInfo (std::shared_ptr<CAComponentDescription>);
+	~AUPluginInfo () {}
 
 	PluginPtr load (Session& session);
 
@@ -259,44 +254,20 @@ class LIBARDOUR_API AUPluginInfo : public PluginInfo {
 	bool is_instrument () const;
 	bool is_utility () const;
 
-	AUPluginCachedInfo cache;
-
 	bool reconfigurable_io() const { return true; }
+	uint32_t max_configurable_outputs () const { return max_outputs; }
 
-	static void clear_cache ();
-	static PluginInfoList* discover (bool scan_only);
-	static bool au_get_crashlog (std::string &msg);
-	static std::string stringify_descriptor (const CAComponentDescription&);
-
-	static int load_cached_info ();
-
-  private:
-	boost::shared_ptr<CAComponentDescription> descriptor;
 	UInt32 version;
-	static FILE * _crashlog_fd;
-	static bool _scan_only;
+	uint32_t max_outputs;
+	std::vector<std::pair<int,int> > io_configs;
 
-	static void au_start_crashlog (void);
-	static void au_remove_crashlog (void);
-	static void au_crashlog (std::string);
+	static std::string convert_old_unique_id (std::string const&);
 
-	static void discover_music (PluginInfoList&);
-	static void discover_fx (PluginInfoList&);
-	static void discover_generators (PluginInfoList&);
-	static void discover_instruments (PluginInfoList&);
-	static void discover_by_description (PluginInfoList&, CAComponentDescription&);
-	static Glib::ustring au_cache_path ();
-
-	typedef std::map<std::string,AUPluginCachedInfo> CachedInfoMap;
-	static CachedInfoMap cached_info;
-
-	static int cached_io_configuration (const std::string&, UInt32, CAComponent&, AUPluginCachedInfo&, const std::string& name);
-	static void add_cached_info (const std::string&, AUPluginCachedInfo&);
-	static void save_cached_info ();
+private:
+	std::shared_ptr<CAComponentDescription> descriptor;
 };
 
-typedef boost::shared_ptr<AUPluginInfo> AUPluginInfoPtr;
+typedef std::shared_ptr<AUPluginInfo> AUPluginInfoPtr;
 
 } // namespace ARDOUR
 
-#endif // __ardour_audio_unit_h__

@@ -1,24 +1,27 @@
 /*
-    Copyright (C) 1999 Paul Davis
+ * Copyright (C) 2000-2018 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2005-2006 Taybin Rutkin <taybin@taybin.com>
+ * Copyright (C) 2007-2015 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2008-2013 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_utils_h__
-#define __ardour_utils_h__
+#pragma once
 
 #ifdef WAF_BUILD
 #include "libardour-config.h"
@@ -27,8 +30,6 @@
 #include <iostream>
 #include <string>
 #include <cmath>
-
-#include "boost/shared_ptr.hpp"
 
 #if __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
@@ -66,6 +67,7 @@ static inline float f_max(float x, float a) {
 
 LIBARDOUR_API std::string bump_name_once(const std::string& s, char delimiter);
 LIBARDOUR_API std::string bump_name_number(const std::string& s);
+LIBARDOUR_API std::string bump_name_abc(const std::string& s);
 
 LIBARDOUR_API int cmp_nocase (const std::string& s, const std::string& s2);
 LIBARDOUR_API int cmp_nocase_utf8 (const std::string& s1, const std::string& s2);
@@ -75,11 +77,11 @@ LIBARDOUR_API bool path_is_paired (std::string path, std::string& pair_base);
 
 LIBARDOUR_API void compute_equal_power_fades (ARDOUR::samplecnt_t nframes, float* in, float* out);
 
-LIBARDOUR_API const char* sync_source_to_string (ARDOUR::SyncSource src, bool sh = false);
-LIBARDOUR_API ARDOUR::SyncSource string_to_sync_source (std::string str);
-
 LIBARDOUR_API const char* edit_mode_to_string (ARDOUR::EditMode);
 LIBARDOUR_API ARDOUR::EditMode string_to_edit_mode (std::string);
+
+LIBARDOUR_API const char* ripple_mode_to_string (ARDOUR::RippleMode);
+LIBARDOUR_API ARDOUR::RippleMode string_to_ripple_mode (std::string);
 
 LIBARDOUR_API double gain_to_slider_position_with_max (double g, double max_gain = 2.0);
 LIBARDOUR_API double slider_position_to_gain_with_max (double g, double max_gain = 2.0);
@@ -105,14 +107,15 @@ LIBARDOUR_API const char* native_header_format_extension (ARDOUR::HeaderFormat, 
 LIBARDOUR_API bool matching_unsuffixed_filename_exists_in (const std::string& dir, const std::string& name);
 
 LIBARDOUR_API uint32_t how_many_dsp_threads ();
+LIBARDOUR_API uint32_t how_many_io_threads ();
 
 LIBARDOUR_API std::string compute_sha1_of_file (std::string path);
 
-template<typename T> boost::shared_ptr<ControlList> route_list_to_control_list (boost::shared_ptr<RouteList> rl, boost::shared_ptr<T> (Stripable::*get_control)() const) {
-	boost::shared_ptr<ControlList> cl (new ControlList);
+template<typename T> std::shared_ptr<AutomationControlList> route_list_to_control_list (std::shared_ptr<RouteList const> rl, std::shared_ptr<T> (Stripable::*get_control)() const) {
+	std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
 	if (!rl) { return cl; }
-	for (RouteList::const_iterator r = rl->begin(); r != rl->end(); ++r) {
-		boost::shared_ptr<AutomationControl> ac = ((*r).get()->*get_control)();
+	for (auto const& r : *rl) {
+		std::shared_ptr<AutomationControl> ac = (r.get()->*get_control)();
 		if (ac) {
 			cl->push_back (ac);
 		}
@@ -120,10 +123,22 @@ template<typename T> boost::shared_ptr<ControlList> route_list_to_control_list (
 	return cl;
 }
 
-template<typename T> boost::shared_ptr<ControlList> stripable_list_to_control_list (StripableList& sl, boost::shared_ptr<T> (Stripable::*get_control)() const) {
-	boost::shared_ptr<ControlList> cl (new ControlList);
-	for (StripableList::const_iterator s = sl.begin(); s != sl.end(); ++s) {
-		boost::shared_ptr<AutomationControl> ac = ((*s).get()->*get_control)();
+template<typename T> std::shared_ptr<AutomationControlList> stripable_list_to_control_list (StripableList& sl, std::shared_ptr<T> (Stripable::*get_control)() const) {
+	std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
+	for (auto const & s : sl) {
+		std::shared_ptr<AutomationControl> ac = (s.get()->*get_control)();
+		if (ac) {
+			cl->push_back (ac);
+		}
+	}
+	return cl;
+}
+
+template<typename T> std::shared_ptr<AutomationControlList> stripable_list_to_control_list (std::shared_ptr<StripableList const> sl, std::shared_ptr<T> (Stripable::*get_control)() const) {
+	std::shared_ptr<AutomationControlList> cl (new AutomationControlList);
+	if (!sl) { return cl; }
+	for (auto const & s : *sl) {
+		std::shared_ptr<AutomationControl> ac = (s.get()->*get_control)();
 		if (ac) {
 			cl->push_back (ac);
 		}
@@ -137,4 +152,3 @@ LIBARDOUR_API std::string CFStringRefToStdString(CFStringRef stringRef);
 
 } //namespave
 
-#endif /* __ardour_utils_h__ */

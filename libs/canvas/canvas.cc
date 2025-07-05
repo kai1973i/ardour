@@ -1,26 +1,28 @@
 /*
-    Copyright (C) 2011 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2014-2015 Ben Loftis <ben@harrisonconsoles.com>
+ * Copyright (C) 2014-2015 David Robillard <d@drobilla.net>
+ * Copyright (C) 2014-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015-2017 Tim Mayberry <mojofunk@gmail.com>
+ * Copyright (C) 2015 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#if !defined USE_CAIRO_IMAGE_SURFACE && !defined NDEBUG
-#define OPTIONAL_CAIRO_IMAGE_SURFACE
-#endif
+//#define CANVAS_PROFILE
 
 /** @file  canvas/canvas.cc
  *  @brief Implementation of the main canvas classes.
@@ -28,14 +30,13 @@
 
 #include <list>
 #include <cassert>
-#include <gtkmm/adjustment.h>
-#include <gtkmm/label.h>
-#include <gtkmm/window.h>
+#include <ytkmm/adjustment.h>
+#include <ytkmm/label.h>
+#include <ytkmm/window.h>
 
 #include "gtkmm2ext/persistent_tooltip.h"
 
 #include "pbd/compose.h"
-#include "pbd/stacktrace.h"
 
 #include "canvas/canvas.h"
 #include "gtkmm2ext/colors.h"
@@ -44,7 +45,7 @@
 #include "canvas/scroll_group.h"
 
 #ifdef __APPLE__
-#include <gdk/gdk.h>
+#include <ydk/gdk.h>
 #include "gtkmm2ext/nsglview.h"
 #endif
 
@@ -56,10 +57,34 @@ uint32_t Canvas::tooltip_timeout_msecs = 750;
 /** Construct a new Canvas */
 Canvas::Canvas ()
 	: _root (this)
+	, _queue_draw_frozen (0)
 	, _bg_color (Gtkmm2ext::rgba_to_color (0, 1.0, 0.0, 1.0))
+	, _debug_render (false)
 	, _last_render_start_timestamp(0)
+	, _use_intermediate_surface (false)
 {
+#ifdef __APPLE__
+	_use_intermediate_surface = true;
+#else
+	_use_intermediate_surface = NULL != g_getenv("ARDOUR_INTERMEDIATE_SURFACE");
+#endif
+
+	if (g_getenv ("ARDOUR_ITEM_CAIRO_SAVE_RESTORE")) {
+		item_save_restore = true;
+	} else {
+		item_save_restore = false;
+	}
+
 	set_epoch ();
+}
+
+void
+Canvas::use_intermediate_surface (bool yn)
+{
+	if (_use_intermediate_surface == yn) {
+		return;
+	}
+	_use_intermediate_surface = yn;
 }
 
 void
@@ -94,6 +119,13 @@ Canvas::zoomed ()
 	pick_current_item (0); // no current mouse position
 }
 
+#ifndef NDEBUG
+#ifdef CANVAS_DEBUG
+#undef CANVAS_DEBUG
+#define CANVAS_DEBUG
+#endif
+#endif
+
 /** Render an area of the canvas.
  *  @param area Area in window coordinates.
  *  @param context Cairo context to render to.
@@ -101,16 +133,20 @@ Canvas::zoomed ()
 void
 Canvas::render (Rect const & area, Cairo::RefPtr<Cairo::Context> const & context) const
 {
+#ifdef CANVAS_PROFILE
+	const int64_t start = g_get_monotonic_time ();
+#endif
+
 	PreRender (); // emit signal
 
 	_last_render_start_timestamp = g_get_monotonic_time();
 
 #ifdef CANVAS_DEBUG
-	if (DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
+	if (_debug_render || DEBUG_ENABLED(PBD::DEBUG::CanvasRender)) {
 		cerr << this << " RENDER: " << area << endl;
-		//cerr << "CANVAS @ " << this << endl;
-		//dump (cerr);
-		//cerr << "-------------------------\n";
+		 cerr << "CANVAS @ " << this << endl;
+		 dump (cerr);
+		 cerr << "-------------------------\n";
 	}
 #endif
 
@@ -119,6 +155,7 @@ Canvas::render (Rect const & area, Cairo::RefPtr<Cairo::Context> const & context
 	Rect root_bbox = _root.bounding_box();
 	if (!root_bbox) {
 		/* the root has no bounding box, so there's nothing to render */
+		cerr << "no bbox\n";
 		return;
 	}
 
@@ -143,6 +180,12 @@ Canvas::render (Rect const & area, Cairo::RefPtr<Cairo::Context> const & context
 		}
 #endif
 	}
+
+#ifdef CANVAS_PROFILE
+	const int64_t end = g_get_monotonic_time ();
+	const int64_t elapsed = end - start;
+	std::cout << "GtkCanvas::render " << area << " " << (elapsed / 1000.f) << " ms\n";
+#endif
 
 }
 
@@ -212,6 +255,25 @@ Canvas::dump (ostream& o) const
 	_root.dump (o);
 }
 
+void
+Canvas::freeze_queue_draw ()
+{
+	_queue_draw_frozen++;
+}
+
+void
+Canvas::thaw_queue_draw ()
+{
+	if (_queue_draw_frozen) {
+		_queue_draw_frozen--;
+
+		if (_queue_draw_frozen == 0 && !frozen_area.empty()) {
+			request_redraw (frozen_area);
+			frozen_area = Rect();
+		}
+	}
+}
+
 /** Called when an item has been shown or hidden.
  *  @param item Item that has been shown or hidden.
  */
@@ -220,6 +282,11 @@ Canvas::item_shown_or_hidden (Item* item)
 {
 	Rect bbox = item->bounding_box ();
 	if (bbox) {
+		if (_queue_draw_frozen) {
+			frozen_area = frozen_area.extend (compute_draw_item_area (item, bbox));
+			return;
+		}
+
 		if (item->item_to_window (bbox).intersection (visible_area ())) {
 			queue_draw_item_area (item, bbox);
 		}
@@ -311,7 +378,9 @@ Canvas::window_to_canvas (Duple const & d) const
 			   only group.
 			*/
 			if (!best_group || sg->sensitivity() > best_group->sensitivity()) {
+
 				best_group = sg;
+
 				if (sg->sensitivity() == (ScrollGroup::ScrollsVertically | ScrollGroup::ScrollsHorizontally)) {
 					/* Can't do any better than this. */
 					break;
@@ -320,7 +389,7 @@ Canvas::window_to_canvas (Duple const & d) const
 		}
 	}
 
-	if (best_group) {
+	if (best_group && (!have_grab() || grab_can_translate ())) {
 		return d.translate (best_group->scroll_offset());
 	}
 
@@ -396,7 +465,48 @@ Canvas::item_moved (Item* item, Rect pre_change_parent_bounding_box)
 void
 Canvas::queue_draw_item_area (Item* item, Rect area)
 {
-	request_redraw (item->item_to_window (area));
+	request_redraw (compute_draw_item_area (item, area));
+}
+
+Rect
+Canvas::compute_draw_item_area (Item* item, Rect area)
+{
+	Rect r;
+
+	if ((area.width()) > 1.0 && (area.height() > 1.0)) {
+		/* item has a rectangular bounding box, which may fall
+		 * on non-integer locations. Expand it appropriately.
+		 */
+		r = item->item_to_window (area, false);
+		r.x0 = floor (r.x0);
+		r.y0 = floor (r.y0);
+		r.x1 = ceil (r.x1);
+		r.y1 = ceil (r.y1);
+		//std::cerr << "redraw box, adjust from " << area << " to " << r << std::endl;
+	} else if (area.width() > 1.0 && area.height() == 1.0) {
+		/* horizontal line, which may fall on non-integer
+		 * coordinates.
+		 */
+		r = item->item_to_window (area, false);
+		r.y0 = floor (r.y0);
+		r.y1 = ceil (r.y1);
+		//std::cerr << "redraw HLine, adjust from " << area << " to " << r << std::endl;
+	} else if (area.width() == 1.0 && area.height() > 1.0) {
+		/* vertical single pixel line, which may fall on non-integer
+		 * coordinates
+		 */
+		r = item->item_to_window (area, false);
+		r.x0 = floor (r.x0);
+		r.x1 = ceil (r.x1);
+		//std::cerr << "redraw VLine, adjust from " << area << " to " << r << std::endl;
+
+	} else {
+		/* impossible? one of width or height must be zero ... */
+		//std::cerr << "redraw IMPOSSIBLE of " << area  << std::endl;
+		r =  item->item_to_window (area, false);
+	}
+
+	return r;
 }
 
 void
@@ -431,25 +541,55 @@ GtkCanvas::GtkCanvas ()
 	, _new_current_item (0)
 	, _grabbed_item (0)
 	, _focused_item (0)
-	, _single_exposure (1)
+	, _single_exposure (true)
+	, _use_image_surface (false)
 	, current_tooltip_item (0)
 	, tooltip_window (0)
 	, _in_dtor (false)
+	, resize_queued (false)
+	, _ptr_grabbed (false)
 	, _nsglview (0)
 {
+#ifdef USE_CAIRO_IMAGE_SURFACE /* usually Windows builds */
+	_use_image_surface = true;
+#else
+	_use_image_surface = NULL != g_getenv("ARDOUR_IMAGE_SURFACE");
+#endif
+
 	/* these are the events we want to know about */
 	add_events (Gdk::BUTTON_PRESS_MASK | Gdk::BUTTON_RELEASE_MASK | Gdk::POINTER_MOTION_MASK |
-		    Gdk::SCROLL_MASK | Gdk::ENTER_NOTIFY_MASK | Gdk::LEAVE_NOTIFY_MASK |
-		    Gdk::KEY_PRESS_MASK | Gdk::KEY_RELEASE_MASK);
+	            Gdk::SCROLL_MASK | Gdk::ENTER_NOTIFY_MASK | Gdk::LEAVE_NOTIFY_MASK |
+	            Gdk::TOUCH_BEGIN_MASK | Gdk::TOUCH_UPDATE_MASK | Gdk::TOUCH_END_MASK |
+	            Gdk::KEY_PRESS_MASK | Gdk::KEY_RELEASE_MASK);
+}
+
+GtkCanvas::~GtkCanvas ()
+{
+	_in_dtor = true;
+#ifdef __APPLE__
+	if (_nsglview) {
+		Gtkmm2ext::nsglview_destroy (_nsglview);
+	}
+#endif
 }
 
 void
-GtkCanvas::use_nsglview ()
+GtkCanvas::set_single_exposure (bool yn)
+{
+	if (g_getenv ("ARDOUR_CANVAS_SINGLE_EXPOSE_ALWAYS")) {
+		yn = true;
+	}
+
+	_single_exposure = yn;
+}
+
+void
+GtkCanvas::use_nsglview (bool retina)
 {
 	assert (!_nsglview);
-	assert (!is_realized());
+	assert (!get_realized());
 #ifdef ARDOUR_CANVAS_NSVIEW_TAG // patched gdkquartz.h
-	_nsglview = Gtkmm2ext::nsglview_create (this);
+	_nsglview = Gtkmm2ext::nsglview_create (this, retina);
 #endif
 }
 
@@ -473,8 +613,8 @@ GtkCanvas::pick_current_item (int state)
 	pick_current_item (Duple (x, y), state);
 }
 
-/** Given @param point (a position in window coordinates)
- *  and mouse state @param state, check to see if _current_item
+/** Given @p point (a position in window coordinates)
+ *  and mouse state @p state, check to see if _current_item
  *  (which will be used to deliver events) should change.
  */
 void
@@ -488,76 +628,77 @@ GtkCanvas::pick_current_item (Duple const & point, int state)
 
 	/* find the items at the given window position */
 
-	vector<Item const *> items;
-	_root.add_items_at_point (point, items);
-
-	DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("%1 covers %2 items\n", point, items.size()));
-
-#ifndef NDEBUG
-	if (DEBUG_ENABLED(PBD::DEBUG::CanvasEnterLeave)) {
-		for (vector<Item const*>::const_iterator it = items.begin(); it != items.end(); ++it) {
-#ifdef CANVAS_DEBUG
-			std::cerr << "\tItem " << (*it)->whatami() << '/' << (*it)->name << " ignore events ? " << (*it)->ignore_events() << " vis ? " << (*it)->visible() << std::endl;
-#else
-			std::cerr << "\tItem " << (*it)->whatami() << '/' << " ignore events ? " << (*it)->ignore_events() << " vis ? " << (*it)->visible() << std::endl;
-#endif
-		}
-	}
-#endif
-
-	/* put all items at point that are event-sensitive and visible and NOT
-	   groups into within_items. Note that items is sorted from bottom to
-	   top, but we're going to reverse that for within_items so that its
-	   first item is the upper-most item that can be chosen as _current_item.
-	*/
-
-	vector<Item const *>::const_iterator i;
 	list<Item const *> within_items;
-
-	for (i = items.begin(); i != items.end(); ++i) {
-
-		Item const * possible_item = *i;
-
-		/* We ignore invisible items, containers and items that ignore events */
-
-		if (!possible_item->visible() || possible_item->ignore_events() || dynamic_cast<ArdourCanvas::Container const *>(possible_item) != 0) {
-			continue;
-		}
-		within_items.push_front (possible_item);
-	}
+	get_items_enclosing (point, within_items);
 
 	DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("after filtering insensitive + containers, we have  %1 items\n", within_items.size()));
 
 	if (within_items.empty()) {
 
-		/* no items at point, just send leave event below */
+		/* no items at point, do not send a LEAVE event in this case */
 		_new_current_item = 0;
 
 	} else {
 
 		if (within_items.front() == _current_item) {
 			/* uppermost item at point is already _current_item */
-			DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("CURRENT ITEM %1/%2\n", _new_current_item->whatami(), _current_item->name));
+			DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("CURRENT ITEM remains %1/%2\n", _current_item->whatami(), _current_item->name));
 			return;
 		}
 
 		_new_current_item = const_cast<Item*> (within_items.front());
-	}
 
-	if (_new_current_item != _current_item) {
-		deliver_enter_leave (point, state);
+		if (_new_current_item != _current_item) {
+			deliver_enter_leave (point, state);
+		}
 	}
 
 	if (_current_item) {
-		DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("CURRENT ITEM %1/%2\n", _new_current_item->whatami(), _current_item->name));
+		DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("CURRENT ITEM %1/%2\n", _current_item->whatami(), _current_item->name));
 	} else {
 		DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, "--- no current item\n");
 	}
 
 }
 
+
+/** Given @p point (a position in window coordinates)
+ *  return a list of items in order top to bottom.
+ */
+void
+GtkCanvas::get_items_enclosing (Duple const & point, list<Item const *> &enclosing_items)
+{
+	/* find the items at the given window position */
+	vector<Item const*> items;
+	_root.add_items_at_point (point, items);
+
+	DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("%1 covers %2 items\n", point, items.size()));
+
+#ifndef NDEBUG
+	if (DEBUG_ENABLED(PBD::DEBUG::CanvasEnterLeave)) {
+		for (auto const& item : items) {
+			std::cerr << "\tItem " << item->whoami() << " ignore events ? " << item->ignore_events() << " vis ? " << item->visible() << std::endl;
+		}
+	}
+#endif
+
+	/* put all items at point that are event-sensitive and visible and NOT
+	 * groups into enclosing_items. Note that items is sorted from bottom to
+	 * top, but we're going to reverse that for enclosing_items so that its
+	 * first item is the upper-most item that can be chosen as _current_item.
+	 */
+
+	for (auto const& possible_item : items) {
+		/* We ignore invisible items, containers and items that ignore events */
+		if (!possible_item->visible() || possible_item->ignore_events() || dynamic_cast<ArdourCanvas::Container const *>(possible_item) != 0) {
+			continue;
+		}
+		enclosing_items.push_front (possible_item);
+	}
+}
+
 /** Deliver a series of enter & leave events based on the pointer position being at window
- * coordinate @param point, and pointer @param state (modifier keys, etc)
+ * coordinate @p point, and pointer @p state (modifier keys, etc)
  */
 void
 GtkCanvas::deliver_enter_leave (Duple const & point, int state)
@@ -580,7 +721,7 @@ GtkCanvas::deliver_enter_leave (Duple const & point, int state)
 	enter_event.state = state;
 
 	/* Events delivered to canvas items are expected to be in canvas
-	 * coordinates but @param point is in window coordinates.
+	 * coordinates but @p point is in window coordinates.
 	 */
 
 	Duple c = window_to_canvas (point);
@@ -603,7 +744,7 @@ GtkCanvas::deliver_enter_leave (Duple const & point, int state)
 		if (_current_item) {
 
 			/* no current item, so also send virtual leave events to the
-			 * entire heirarchy for the current item
+			 * entire hierarchy for the current item
 			 */
 
 			for (i = _current_item->parent(); i ; i = i->parent()) {
@@ -616,7 +757,7 @@ GtkCanvas::deliver_enter_leave (Duple const & point, int state)
 		enter_detail = GDK_NOTIFY_UNKNOWN;
 
 		/* no current item, so also send virtual enter events to the
-		 * entire heirarchy for the new item
+		 * entire hierarchy for the new item
 		 */
 
 		for (i = _new_current_item->parent(); i ; i = i->parent()) {
@@ -629,7 +770,7 @@ GtkCanvas::deliver_enter_leave (Duple const & point, int state)
 		 * inferior ("child") of _new_current_item")
 		 *
 		 * Deliver "virtual" leave notifications to all items in the
-		 * heirarchy between current and new_current.
+		 * hierarchy between current and new_current.
 		 */
 
 		for (i = _current_item->parent(); i && i != _new_current_item; i = i->parent()) {
@@ -644,7 +785,7 @@ GtkCanvas::deliver_enter_leave (Duple const & point, int state)
 		 * an inferior ("child") of _current_item")
 		 *
 		 * Deliver "virtual" enter notifications to all items in the
-		 * heirarchy between current and new_current.
+		 * hierarchy between current and new_current.
 		 */
 
 		for (i = _new_current_item->parent(); i && i != _current_item; i = i->parent()) {
@@ -685,6 +826,10 @@ GtkCanvas::deliver_enter_leave (Duple const & point, int state)
 		DEBUG_TRACE (PBD::DEBUG::CanvasEnterLeave, string_compose ("LEAVE %1/%2\n", _current_item->whatami(), _current_item->name));
 	}
 
+	if (_current_item == current_tooltip_item) {
+		hide_tooltip ();
+	}
+
 	leave_event.detail = GDK_NOTIFY_VIRTUAL;
 	enter_event.detail = GDK_NOTIFY_VIRTUAL;
 
@@ -723,8 +868,26 @@ bool
 GtkCanvas::deliver_event (GdkEvent* event)
 {
 	/* Point in in canvas coordinate space */
-
 	const Item* event_item;
+
+	/* touch events require a separate path with no pre-light, and a 'grab' for each finger (i.e. sequence) */
+	if (event->type == GDK_TOUCH_BEGIN || event->type == GDK_TOUCH_UPDATE || event->type == GDK_TOUCH_END ) {
+		int touchp = event->touch.sequence;
+		std::map<int, Item*>::iterator ei = _touched_item.find (touchp);
+		if (ei == _touched_item.end ()) {
+			return false;
+		}
+		event_item = ei->second;
+		if (event_item && !event_item->ignore_events () && event_item->Event (event)) {
+			/* this item has just handled the event */
+			DEBUG_TRACE (
+				PBD::DEBUG::CanvasEvents,
+				string_compose ("canvas touch event handled by %1 %2\n", event_item->whatami(), event_item->name.empty() ? "[unknown]" : event_item->name)
+				);
+			return true;
+		}
+		return false;
+	}
 
 	if (_grabbed_item) {
 		/* we have a grabbed item, so everything gets sent there */
@@ -747,19 +910,23 @@ GtkCanvas::deliver_event (GdkEvent* event)
 
 		Item* parent = item->parent ();
 
-		if (!item->ignore_events () &&
-		    item->Event (event)) {
-			/* this item has just handled the event */
-			DEBUG_TRACE (
-				PBD::DEBUG::CanvasEvents,
-				string_compose ("canvas event handled by %1 %2\n", item->whatami(), item->name.empty() ? "[unknown]" : item->name)
-				);
+#ifndef NDEBUG
+		/* the item may have be deleted as part of the
+		 * handler, we cannot use it in DEBUG_TRACE() calls.
+		 */
+		std::string w = item->whatami();
+		std::string n = item->name;
+#endif
+		if (!item->ignore_events () && item->Event (event)) {
 
+#ifndef NDEBUG
+			DEBUG_TRACE (PBD::DEBUG::CanvasEvents, string_compose ("canvas event handled by %1 %2\n", w, n.empty() ? "[unknown]" : n));
+#endif
 			return true;
 		}
-
-		DEBUG_TRACE (PBD::DEBUG::CanvasEvents, string_compose ("canvas event %3 left unhandled by %1 %2\n", item->whatami(), item->name.empty() ? "[unknown]" : item->name, event_type_string (event->type)));
-
+#ifndef NDEBUG
+		DEBUG_TRACE (PBD::DEBUG::CanvasEvents, string_compose ("canvas event %3 left unhandled by %1 %2\n", w, n.empty() ? "[unknown]" : n, event_type_string (event->type)));
+#endif
 		if ((item = parent) == 0) {
 			break;
 		}
@@ -829,24 +996,20 @@ GtkCanvas::on_realize ()
 		Gtkmm2ext::nsglview_overlay (_nsglview, get_window()->gobj());
 	}
 #endif
+
+	_root.set_fill (false);
+	_root.set_outline (false);
 }
 
 void
 GtkCanvas::on_size_allocate (Gtk::Allocation& a)
 {
 	EventBox::on_size_allocate (a);
-#ifdef OPTIONAL_CAIRO_IMAGE_SURFACE
-	if (getenv("ARDOUR_IMAGE_SURFACE")) {
-#endif
-#if defined USE_CAIRO_IMAGE_SURFACE || defined OPTIONAL_CAIRO_IMAGE_SURFACE
-	/* allocate an image surface as large as the canvas itself */
 
-	canvas_image.clear ();
-	canvas_image = Cairo::ImageSurface::create (Cairo::FORMAT_ARGB32, a.get_width(), a.get_height());
-#endif
-#ifdef OPTIONAL_CAIRO_IMAGE_SURFACE
+	if (_use_image_surface) {
+		_canvas_image.clear ();
+		_canvas_image = Cairo::ImageSurface::create (Cairo::FORMAT_ARGB32, a.get_width(), a.get_height());
 	}
-#endif
 
 #ifdef __APPLE__
 	if (_nsglview) {
@@ -859,6 +1022,15 @@ GtkCanvas::on_size_allocate (Gtk::Allocation& a)
 	}
 #endif
 
+	/* call to ensure that entire canvas is marked in the invalidation region */
+	queue_draw ();
+
+	/* x, y in a are relative to the parent. When passing this down to the
+	   root group, this origin is effectively 0,0
+	*/
+
+	Rect r (0., 0., a.get_width(), a.get_height());
+	_root.size_allocate (r);
 }
 
 /** Handler for GDK expose events.
@@ -881,33 +1053,24 @@ GtkCanvas::on_expose_event (GdkEventExpose* ev)
 	const int64_t start = g_get_monotonic_time ();
 #endif
 
-#ifdef OPTIONAL_CAIRO_IMAGE_SURFACE
 	Cairo::RefPtr<Cairo::Context> draw_context;
-	Cairo::RefPtr<Cairo::Context> window_context;
-	if (getenv("ARDOUR_IMAGE_SURFACE")) {
-		if (!canvas_image) {
-			canvas_image = Cairo::ImageSurface::create (Cairo::FORMAT_ARGB32, get_width(), get_height());
+	if (_use_image_surface) {
+		if (!_canvas_image) {
+			_canvas_image = Cairo::ImageSurface::create (Cairo::FORMAT_ARGB32, get_width(), get_height());
 		}
-		draw_context = Cairo::Context::create (canvas_image);
-		window_context = get_window()->create_cairo_context ();
+		draw_context = Cairo::Context::create (_canvas_image);
 	} else {
 		draw_context = get_window()->create_cairo_context ();
 	}
-#elif defined USE_CAIRO_IMAGE_SURFACE
-	if (!canvas_image) {
-		canvas_image = Cairo::ImageSurface::create (Cairo::FORMAT_ARGB32, get_width(), get_height());
-	}
-	Cairo::RefPtr<Cairo::Context> draw_context = Cairo::Context::create (canvas_image);
-	Cairo::RefPtr<Cairo::Context> window_context = get_window()->create_cairo_context ();
-#else
-	Cairo::RefPtr<Cairo::Context> draw_context = get_window()->create_cairo_context ();
-#endif
 
 	draw_context->rectangle (ev->area.x, ev->area.y, ev->area.width, ev->area.height);
 	draw_context->clip();
 
-#ifdef __APPLE__
-	/* group calls cairo_quartz_surface_create() which
+	/* (this comment applies to macOS, but is other platforms
+	 * also benefit from using CPU-rendering on a image-surface
+	 * with a final bitblt).
+	 *
+	 * group calls cairo_quartz_surface_create() which
 	 * effectively uses a CGBitmapContext + image-surface
 	 *
 	 * This avoids expensive argb32_image_mark_image() during drawing.
@@ -919,16 +1082,17 @@ GtkCanvas::on_expose_event (GdkEventExpose* ev)
 	 *
 	 * Fixing this for good likely involves changes to GdkQuartzWindow, GdkQuartzView
 	 */
-	draw_context->push_group ();
-#endif
-
-	/* draw background color */
-	draw_context->rectangle (ev->area.x, ev->area.y, ev->area.width, ev->area.height);
-	Gtkmm2ext::set_source_rgba (draw_context, _bg_color);
-	draw_context->fill ();
+	if (_use_intermediate_surface && !_use_image_surface) {
+		draw_context->push_group ();
+	}
 
 	/* render canvas */
-	if ( _single_exposure ) {
+	if (_single_exposure) {
+
+		/* draw background color */
+		draw_context->rectangle (ev->area.x, ev->area.y, ev->area.width, ev->area.height);
+		Gtkmm2ext::set_source_rgba (draw_context, _bg_color);
+		draw_context->fill ();
 
 		Canvas::render (Rect (ev->area.x, ev->area.y, ev->area.x + ev->area.width, ev->area.y + ev->area.height), draw_context);
 
@@ -937,33 +1101,34 @@ GtkCanvas::on_expose_event (GdkEventExpose* ev)
 		gint nrects;
 
 		gdk_region_get_rectangles (ev->region, &rects, &nrects);
+
 		for (gint n = 0; n < nrects; ++n) {
 			draw_context->set_identity_matrix();  //reset the cairo matrix, just in case someone left it transformed after drawing ( cough )
+
+			/* draw background color */
+			draw_context->rectangle (rects[n].x, rects[n].y, rects[n].width, rects[n].height);
+			Gtkmm2ext::set_source_rgba (draw_context, _bg_color);
+			draw_context->fill ();
+
 			Canvas::render (Rect (rects[n].x, rects[n].y, rects[n].x + rects[n].width, rects[n].y + rects[n].height), draw_context);
 		}
+
 		g_free (rects);
 	}
 
-#ifdef __APPLE__
-	draw_context->pop_group_to_source ();
-	draw_context->paint ();
-#endif
-
-#ifdef OPTIONAL_CAIRO_IMAGE_SURFACE
-	if (getenv("ARDOUR_IMAGE_SURFACE")) {
-#endif
-#if defined USE_CAIRO_IMAGE_SURFACE || defined OPTIONAL_CAIRO_IMAGE_SURFACE
-		/* now blit our private surface back to the GDK one */
-
+	if (_use_image_surface) {
+		_canvas_image->flush ();
+		Cairo::RefPtr<Cairo::Context> window_context = get_window()->create_cairo_context ();
 		window_context->rectangle (ev->area.x, ev->area.y, ev->area.width, ev->area.height);
 		window_context->clip ();
-		window_context->set_source (canvas_image, 0, 0);
+		window_context->set_source (_canvas_image, 0, 0);
 		window_context->set_operator (Cairo::OPERATOR_SOURCE);
 		window_context->paint ();
-#endif
-#ifdef OPTIONAL_CAIRO_IMAGE_SURFACE
+	} else if (_use_intermediate_surface) {
+		draw_context->pop_group_to_source ();
+		draw_context->paint ();
 	}
-#endif
+
 
 #ifdef CANVAS_PROFILE
 	const int64_t end = g_get_monotonic_time ();
@@ -1005,6 +1170,23 @@ GtkCanvas::on_scroll_event (GdkEventScroll* ev)
 
 	DEBUG_TRACE (PBD::DEBUG::CanvasEvents, string_compose ("canvas scroll @ %1, %2 => %3\n", ev->x, ev->y, where));
 	return deliver_event (reinterpret_cast<GdkEvent*>(&copy));
+}
+
+void
+GtkCanvas::on_style_changed (const Glib::RefPtr<Gtk::Style>& style)
+{
+	EventBox::on_style_changed (style);
+	/* call to ensure that entire canvas is marked in the invalidation region */
+	queue_draw ();
+}
+
+bool
+GtkCanvas::on_visibility_notify_event (GdkEventVisibility* ev)
+{
+	bool ret = EventBox::on_visibility_notify_event (ev);
+	/* call to ensure that entire canvas is marked in the invalidation region */
+	queue_draw ();
+	return ret;
 }
 
 /** Handler for GDK key press events.
@@ -1051,6 +1233,14 @@ GtkCanvas::on_button_press_event (GdkEventButton* ev)
 	   for scroll if this GtkCanvas is in a GtkCanvasViewport.
 	*/
 
+	if (ev->button == 1 && ev->type == GDK_BUTTON_PRESS) {
+		gdk_pointer_grab (ev->window,false, GdkEventMask( Gdk::POINTER_MOTION_MASK | Gdk::BUTTON_PRESS_MASK |Gdk::BUTTON_RELEASE_MASK), NULL,NULL,ev->time);
+		_ptr_grabbed = true;
+	} else if (_ptr_grabbed) {
+		gdk_pointer_ungrab (GDK_CURRENT_TIME);
+		_ptr_grabbed = false;
+	}
+
 	DEBUG_TRACE (PBD::DEBUG::CanvasEvents, string_compose ("canvas button press %1 @ %2, %3 => %4\n", ev->button, ev->x, ev->y, where));
 	return deliver_event (reinterpret_cast<GdkEvent*>(&copy));
 }
@@ -1073,6 +1263,12 @@ GtkCanvas::on_button_release_event (GdkEventButton* ev)
 	copy.button.x = where.x;
 	copy.button.y = where.y;
 
+	if (_ptr_grabbed) {
+		gdk_pointer_ungrab (GDK_CURRENT_TIME);
+		_ptr_grabbed = false;
+	}
+
+
 	/* Coordinates in the event will be canvas coordinates, correctly adjusted
 	   for scroll if this GtkCanvas is in a GtkCanvasViewport.
 	*/
@@ -1090,7 +1286,6 @@ GtkCanvas::get_mouse_position (Duple& winpos) const
 	Glib::RefPtr<Gdk::Window> self = Glib::RefPtr<Gdk::Window>::cast_const (get_window ());
 
 	if (!self) {
-		std::cerr << " no self window\n";
 		winpos = Duple (0, 0);
 		return false;
 	}
@@ -1110,8 +1305,6 @@ GtkCanvas::get_mouse_position (Duple& winpos) const
 bool
 GtkCanvas::on_motion_notify_event (GdkEventMotion* ev)
 {
-	hide_tooltip ();
-
 	/* translate event coordinates from window to canvas */
 
 	GdkEvent copy = *((GdkEvent*)ev);
@@ -1137,6 +1330,67 @@ GtkCanvas::on_motion_notify_event (GdkEventMotion* ev)
 	*/
 
 	return deliver_event (reinterpret_cast<GdkEvent*> (&copy));
+}
+
+bool
+GtkCanvas::on_touch_begin_event (GdkEventTouch *ev)
+{
+std::cout << "GtkCanvas::on_touch_begin\n" << std::endl;
+
+	/* translate event coordinates from window to canvas */
+
+	GdkEvent copy = *((GdkEvent*)ev);
+	Duple winpos  = Duple (ev->x, ev->y);
+	Duple where   = window_to_canvas (winpos);
+
+	copy.touch.x = where.x;
+	copy.touch.y = where.y;
+
+	/* Coordinates in the event will be canvas coordinates, correctly adjusted
+	   for scroll if this GtkCanvas is in a GtkCanvasViewport.
+	*/
+
+	std::list<Item const*> within_items;
+	get_items_enclosing (winpos, within_items);
+
+	if (!within_items.empty()) {
+		_touched_item[ev->sequence] = const_cast<Item*> (within_items.front());
+	}
+
+	DEBUG_TRACE (PBD::DEBUG::CanvasEvents, string_compose ("canvas touch begin @ %1 x %2 => %3 items %4\n", ev->x, ev->y, where, within_items.size()));
+	return deliver_event (reinterpret_cast<GdkEvent*>(&copy));
+}
+
+bool
+GtkCanvas::on_touch_update_event (GdkEventTouch* ev)
+{
+	GdkEvent copy = *((GdkEvent*)ev);
+	Duple winpos  = Duple (ev->x, ev->y);
+	Duple where   = window_to_canvas (winpos);
+
+	copy.touch.x = where.x;
+	copy.touch.y = where.y;
+
+	DEBUG_TRACE (PBD::DEBUG::CanvasEvents, string_compose ("canvas touch update @ %1 x %2 => %3\n", ev->x, ev->y, where));
+	return deliver_event (reinterpret_cast<GdkEvent*>(&copy));
+}
+
+bool
+GtkCanvas::on_touch_end_event (GdkEventTouch *ev)
+{
+	GdkEvent copy = *((GdkEvent*)ev);
+	Duple winpos  = Duple (ev->x, ev->y);
+	Duple where   = window_to_canvas (winpos);
+
+	copy.touch.x = where.x;
+	copy.touch.y = where.y;
+
+	bool ret = deliver_event (reinterpret_cast<GdkEvent*>(&copy));
+
+	/* remove "GRAB" */
+	_touched_item.erase (ev->sequence);
+
+	return ret;
 }
 
 bool
@@ -1286,7 +1540,7 @@ void
 GtkCanvas::ungrab ()
 {
 	/* XXX: should this be doing gdk_pointer_ungrab? */
-	_grabbed_item = 0;
+	_grabbed_item = nullptr;
 }
 
 /** Set keyboard focus on an item, so that all keyboard events are sent to that item until the focus
@@ -1331,7 +1585,7 @@ GtkCanvas::start_tooltip_timeout (Item* item)
 {
 	stop_tooltip_timeout ();
 
-	if (item && Gtkmm2ext::PersistentTooltip::tooltips_enabled ()) {
+	if (item && !item->tooltip().empty() && Gtkmm2ext::PersistentTooltip::tooltips_enabled ()) {
 		current_tooltip_item = item;
 
 		/* wait for the first idle that happens after this is
@@ -1449,6 +1703,41 @@ GtkCanvas::get_pango_context ()
 	return Glib::wrap (gdk_pango_context_get());
 }
 
+void
+GtkCanvas::queue_resize ()
+{
+	if (!resize_queued) {
+		Glib::signal_idle().connect (sigc::mem_fun (*this, &GtkCanvas::resize_handler));
+		resize_queued = true;
+	}
+}
+
+bool
+GtkCanvas::resize_handler ()
+{
+	resize_queued = false;
+	_root.layout ();
+	return false;
+}
+
+bool
+GtkCanvas::grab_can_translate () const
+{
+	if (!_grabbed_item) {
+		/* weird, but correct! */
+		return true;
+	}
+
+	return _grabbed_item->scroll_translation ();
+}
+
+void
+GtkCanvas::render (Cairo::RefPtr<Cairo::Context> const & ctx, cairo_rectangle_t* r)
+{
+	ArdourCanvas::Rect rect (r->x, r->y, r->width + r->x, r->height + r->y);
+	Canvas::render (rect, ctx);
+}
+
 /** Create a GtkCanvaSViewport.
  *  @param hadj Adjustment to use for horizontal scrolling.
  *  @param vadj Adjustment to use for vertica scrolling.
@@ -1477,10 +1766,24 @@ GtkCanvasViewport::scrolled ()
 void
 GtkCanvasViewport::on_size_request (Gtk::Requisition* req)
 {
-	/* force the canvas to size itself */
-	// _canvas.root()->bounding_box();
+	Distance width;
+	Distance height;
 
-	req->width = 16;
-	req->height = 16;
+	_canvas.root()->size_request (width, height);
+	_canvas.request_size (Duple (width, height));
+
+	/* special case ArdourCanvas::COORD_MAX (really: no size constraint),
+	 * also limit to cairo constraints determined by coordinates of things
+	 * sent to pixman being in 16.16 format. */
+
+	if (width > 32767) {
+		width = 0;
+	}
+	if (height > 32767) {
+		height = 0;
+	}
+
+	req->width  = std::max<int>(1, width);
+	req->height = std::max<int>(1, height);
+
 }
-

@@ -1,27 +1,30 @@
 /*
-	Copyright (C) 2006,2007 John Anderson
-
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the Free Software
-	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2006-2007 John Anderson
+ * Copyright (C) 2007-2016 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 Len Ovens <len@ovenwerks.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <sstream>
 #include <cstring>
 #include <cerrno>
 
 #include <sigc++/sigc++.h>
-#include <boost/shared_array.hpp>
 
 #include "pbd/failed_constructor.h"
 
@@ -45,7 +48,7 @@ using namespace std;
 using namespace PBD;
 using namespace ARDOUR;
 using namespace ArdourSurface;
-using namespace Mackie;
+using namespace ArdourSurface::MACKIE_NAMESPACE;
 
 SurfacePort::SurfacePort (Surface& s)
 	: _surface (&s)
@@ -56,20 +59,24 @@ SurfacePort::SurfacePort (Surface& s)
 
 	} else {
 
-		string in_name;
-		string out_name;
+#ifdef UF8
+		string in_name = X_("SSL-UFx control in");
+		string out_name = X_("SSL-UFx control out");
+#else
+		string in_name = X_("mackie control in");
+		string out_name = X_("mackie control out");
+#endif
 
 		if (_surface->mcp().device_info().extenders() > 0) {
-			if (_surface->number() == _surface->mcp().device_info().master_position()) {
-				in_name = X_("mackie control in");
-				out_name = X_("mackie control out");
-			} else {
+			if (_surface->number() != _surface->mcp().device_info().master_position()) {
+#ifdef UF8
+				in_name = string_compose (X_("SSL-UFx control in ext %1"), (_surface->number() + 1));
+				out_name = string_compose (X_("SSL-UFx control out ext %1"), _surface->number() + 1);
+#else
 				in_name = string_compose (X_("mackie control in ext %1"), (_surface->number() + 1));
 				out_name = string_compose (X_("mackie control out ext %1"), _surface->number() + 1);
+#endif
 			}
-		} else {
-			in_name = X_("mackie control in");
-			out_name = X_("mackie control out");
 		}
 
 		_async_in  = AudioEngine::instance()->register_input_port (DataType::MIDI, in_name, true);
@@ -79,8 +86,8 @@ SurfacePort::SurfacePort (Surface& s)
 			throw failed_constructor();
 		}
 
-		_input_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(_async_in).get();
-		_output_port = boost::dynamic_pointer_cast<AsyncMIDIPort>(_async_out).get();
+		_input_port = std::dynamic_pointer_cast<AsyncMIDIPort>(_async_in).get();
+		_output_port = std::dynamic_pointer_cast<AsyncMIDIPort>(_async_out).get();
 	}
 }
 
@@ -108,7 +115,7 @@ SurfacePort::~SurfacePort()
 }
 
 XMLNode&
-SurfacePort::get_state ()
+SurfacePort::get_state () const
 {
 	XMLNode* node = new XMLNode (X_("Port"));
 
@@ -143,6 +150,7 @@ SurfacePort::set_state (const XMLNode& node, int version)
 	if ((child = node.child (X_("Input"))) != 0) {
 		XMLNode* portnode = child->child (Port::state_node_name.c_str());
 		if (portnode) {
+			portnode->remove_property ("name");
 			_async_in->set_state (*portnode, version);
 		}
 	}
@@ -150,6 +158,7 @@ SurfacePort::set_state (const XMLNode& node, int version)
 	if ((child = node.child (X_("Output"))) != 0) {
 		XMLNode* portnode = child->child (Port::state_node_name.c_str());
 		if (portnode) {
+			portnode->remove_property ("name");
 			_async_out->set_state (*portnode, version);
 		}
 	}
@@ -162,6 +171,7 @@ SurfacePort::reconnect ()
 {
 	_async_out->reconnect ();
 	_async_in->reconnect ();
+
 }
 
 std::string
@@ -191,7 +201,12 @@ SurfacePort::write (const MidiByteArray & mba)
 		return 0;
 	}
 
-	DEBUG_TRACE (DEBUG::MackieControl, string_compose ("port %1 write %2\n", output_port().name(), mba));
+#ifndef NDEBUG
+	/* skip meter output since it makes too much output for normal use */
+	if (mba[0] != 0xd0 && mba[0] != 0xd1) {
+		DEBUG_TRACE (DEBUG::MackieControl, string_compose ("port %1 write %2\n", output_port().name(), mba));
+	}
+#endif
 
 	if (mba[0] != 0xf0 && mba.size() > 3) {
 		std::cerr << "TOO LONG WRITE: " << mba << std::endl;
@@ -223,7 +238,7 @@ SurfacePort::write (const MidiByteArray & mba)
 }
 
 ostream &
-Mackie::operator <<  (ostream & os, const SurfacePort & port)
+MACKIE_NAMESPACE::operator << (ostream & os, const SurfacePort & port)
 {
 	os << "{ ";
 	os << "name: " << port.input_port().name() << " " << port.output_port().name();

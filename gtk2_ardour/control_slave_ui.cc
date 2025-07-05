@@ -1,24 +1,25 @@
 /*
-  Copyright (C) 2016 Paul Davis
-
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; if not, write to the Free Software
-  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <string>
 
-#include <gtkmm/menu.h>
+#include <ytkmm/menu.h>
 
 #include "pbd/string_convert.h"
 
@@ -51,7 +52,7 @@ ControlSlaveUI::ControlSlaveUI (Session* s)
 	Gtkmm2ext::UI::instance()->set_tip (*this, _("VCA Assign"));
 
 	initial_button.set_no_show_all (true);
-	initial_button.set_name (X_("vca assign"));
+	initial_button.set_name (X_("vca assign button"));
 	initial_button.set_text (_("-VCAs-"));
 	initial_button.show ();
 	initial_button.add_events (Gdk::BUTTON_PRESS_MASK|Gdk::BUTTON_RELEASE_MASK);
@@ -66,22 +67,22 @@ ControlSlaveUI::~ControlSlaveUI ()
 }
 
 void
-ControlSlaveUI::set_stripable (boost::shared_ptr<Stripable> s)
+ControlSlaveUI::set_stripable (std::shared_ptr<Stripable> s)
 {
 	connections.drop_connections ();
 
 	stripable = s;
 
 	if (stripable) {
-		boost::shared_ptr<GainControl> ac = stripable->gain_control();
+		std::shared_ptr<GainControl> ac = stripable->gain_control();
 		assert (ac);
 
 		ac->MasterStatusChange.connect (connections,
 		                                invalidator (*this),
-		                                boost::bind (&ControlSlaveUI::update_vca_display, this),
+		                                std::bind (&ControlSlaveUI::update_vca_display, this),
 		                                gui_context());
 
-		stripable->DropReferences.connect (connections, invalidator (*this), boost::bind (&ControlSlaveUI::set_stripable, this, boost::shared_ptr<Stripable>()), gui_context());
+		stripable->DropReferences.connect (connections, invalidator (*this), std::bind (&ControlSlaveUI::set_stripable, this, std::shared_ptr<Stripable>()), gui_context());
 	}
 
 	update_vca_display ();
@@ -102,7 +103,7 @@ ControlSlaveUI::update_vca_display ()
 
 	if (stripable) {
 		for (VCAList::iterator v = vcas.begin(); v != vcas.end(); ++v) {
-			if (stripable->gain_control()->slaved_to ((*v)->gain_control())) {
+			if (stripable->slaved_to (*v)) {
 				add_vca_button (*v);
 				any = true;
 			}
@@ -120,13 +121,13 @@ ControlSlaveUI::update_vca_display ()
 void
 ControlSlaveUI::vca_menu_toggle (Gtk::CheckMenuItem* menuitem, uint32_t n)
 {
-	boost::shared_ptr<VCA> vca = _session->vca_manager().vca_by_number (n);
+	std::shared_ptr<VCA> vca = _session->vca_manager().vca_by_number (n);
 
 	if (!vca) {
 		return;
 	}
 
-	boost::shared_ptr<Slavable> sl = boost::dynamic_pointer_cast<Slavable> (stripable);
+	std::shared_ptr<Slavable> sl = std::dynamic_pointer_cast<Slavable> (stripable);
 
 	if (!sl) {
 		return;
@@ -142,13 +143,13 @@ ControlSlaveUI::vca_menu_toggle (Gtk::CheckMenuItem* menuitem, uint32_t n)
 void
 ControlSlaveUI::unassign_all ()
 {
-	boost::shared_ptr<Slavable> sl = boost::dynamic_pointer_cast<Slavable> (stripable);
+	std::shared_ptr<Slavable> sl = std::dynamic_pointer_cast<Slavable> (stripable);
 
 	if (!sl) {
 		return;
 	}
 
-	sl->unassign (boost::shared_ptr<VCA>());
+	sl->unassign (std::shared_ptr<VCA>());
 }
 
 bool
@@ -181,7 +182,7 @@ ControlSlaveUI::vca_button_release (GdkEventButton* ev, uint32_t n)
 
 	if (vcas.empty()) {
 		/* the button should not have been visible under these conditions */
-		return true;
+		return false;
 	}
 
 	delete context_menu;
@@ -199,10 +200,7 @@ ControlSlaveUI::vca_button_release (GdkEventButton* ev, uint32_t n)
 		items.push_back (CheckMenuElem ((*v)->name()));
 		Gtk::CheckMenuItem* item = dynamic_cast<Gtk::CheckMenuItem*> (&items.back());
 
-		boost::shared_ptr<GainControl> gcs = stripable->gain_control();
-		boost::shared_ptr<GainControl> gcm = (*v)->gain_control();
-
-		if (gcs->slaved_to (gcm)) {
+		if (stripable->slaved_to (*v)) {
 			item->set_active (true);
 			slaved = true;
 		}
@@ -215,25 +213,26 @@ ControlSlaveUI::vca_button_release (GdkEventButton* ev, uint32_t n)
 	}
 
 	if (!items.empty()) {
-		context_menu->popup (1, ev->time);
+		context_menu->popup (ev->button, ev->time);
+		return false;
 	}
 
-	return true;
+	return false;
 }
 
 void
-ControlSlaveUI::add_vca_button (boost::shared_ptr<VCA> vca)
+ControlSlaveUI::add_vca_button (std::shared_ptr<VCA> vca)
 {
 	ArdourButton* vca_button = manage (new ArdourButton (ArdourButton::default_elements));
 
 	vca_button->set_no_show_all (true);
-	vca_button->set_name (X_("vca assign"));
+	vca_button->set_name (X_("vca assign button"));
 	vca_button->add_events (Gdk::BUTTON_PRESS_MASK|Gdk::BUTTON_RELEASE_MASK);
 	vca_button->signal_button_release_event().connect (sigc::bind (sigc::mem_fun (*this, &ControlSlaveUI::specific_vca_button_release), vca->number()), false);
 	vca_button->set_text (PBD::to_string (vca->number()));
 	vca_button->set_fixed_colors (vca->presentation_info().color(), vca->presentation_info().color ());
 
-	vca->presentation_info().PropertyChanged.connect (master_connections, invalidator (*this), boost::bind (&ControlSlaveUI::master_property_changed, this, _1), gui_context());
+	vca->presentation_info().PropertyChanged.connect (master_connections, invalidator (*this), std::bind (&ControlSlaveUI::master_property_changed, this, _1), gui_context());
 
 	pack_start (*vca_button);
 	vca_button->show ();

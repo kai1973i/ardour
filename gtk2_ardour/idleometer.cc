@@ -1,41 +1,31 @@
 /*
- * Copyright (C) 2076 Robin Gareus <robin@gareus.org>
- * Copyright (C) 2011 Paul Davis
+ * Copyright (C) 2017 Robin Gareus <robin@gareus.org>
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include <glib.h>
-#include <gtkmm/button.h>
-#include <gtkmm/table.h>
+#include <ytkmm/button.h>
+#include <ytkmm/table.h>
 
-#ifdef PLATFORM_WINDOWS
-#include <pbd/windows_timer_utils.h>
-#endif
+#include "pbd/microseconds.h"
 
 #include "temporal/time.h"
 
 #include "idleometer.h"
 #include "pbd/i18n.h"
-
-static int64_t _x_get_monotonic_usec() {
-#ifdef PLATFORM_WINDOWS
-	return PBD::get_microseconds();
-#endif
-	return g_get_monotonic_time();
-}
 
 using namespace Gtk;
 
@@ -57,30 +47,30 @@ IdleOMeter::IdleOMeter ()
 	get_vbox()->pack_start (*hbox, false, false);
 	get_vbox()->pack_start (*b, false, false);
 
-	_label_cur.set_alignment (ALIGN_RIGHT, ALIGN_CENTER);
-	_label_min.set_alignment (ALIGN_RIGHT, ALIGN_CENTER);
-	_label_max.set_alignment (ALIGN_RIGHT, ALIGN_CENTER);
-	_label_avg.set_alignment (ALIGN_RIGHT, ALIGN_CENTER);
-	_label_dev.set_alignment (ALIGN_RIGHT, ALIGN_CENTER);
+	_label_cur.set_alignment (ALIGN_END, ALIGN_CENTER);
+	_label_min.set_alignment (ALIGN_END, ALIGN_CENTER);
+	_label_max.set_alignment (ALIGN_END, ALIGN_CENTER);
+	_label_avg.set_alignment (ALIGN_END, ALIGN_CENTER);
+	_label_dev.set_alignment (ALIGN_END, ALIGN_CENTER);
 	_label_acq.set_alignment (ALIGN_CENTER, ALIGN_CENTER);
 
 	int row = 0;
-	t->attach (*manage (new Label (_("Current:"), ALIGN_RIGHT)), 0, 1, row, row + 1, FILL, SHRINK);
+	t->attach (*manage (new Label (_("Current:"), ALIGN_END)), 0, 1, row, row + 1, FILL, SHRINK);
 	t->attach (_label_cur, 1, 2, row, row + 1, FILL, SHRINK);
 	++row;
-	t->attach (*manage (new Label (_("Min:"),     ALIGN_RIGHT)), 0, 1, row, row + 1, FILL, SHRINK);
+	t->attach (*manage (new Label (_("Min:"),     ALIGN_END)), 0, 1, row, row + 1, FILL, SHRINK);
 	t->attach (_label_min, 1, 2, row, row + 1, FILL, SHRINK);
 	++row;
-	t->attach (*manage (new Label (_("Max:"),     ALIGN_RIGHT)), 0, 1, row, row + 1, FILL, SHRINK);
+	t->attach (*manage (new Label (_("Max:"),     ALIGN_END)), 0, 1, row, row + 1, FILL, SHRINK);
 	t->attach (_label_max, 1, 2, row, row + 1, FILL, SHRINK);
 	++row;
-	t->attach (*manage (new Label (_("Mean:"),    ALIGN_RIGHT)), 0, 1, row, row + 1, FILL, SHRINK);
+	t->attach (*manage (new Label (_("Mean:"),    ALIGN_END)), 0, 1, row, row + 1, FILL, SHRINK);
 	t->attach (_label_avg, 1, 2, row, row + 1, FILL, SHRINK);
 	++row;
-	t->attach (*manage (new Label (_("\u03c3:"),  ALIGN_RIGHT)), 0, 1, row, row + 1, FILL, SHRINK);
+	t->attach (*manage (new Label (_(u8"\u03c3:"),  ALIGN_END)), 0, 1, row, row + 1, FILL, SHRINK);
 	t->attach (_label_dev, 1, 2, row, row + 1, FILL, SHRINK);
 	++row;
-	t->attach (*manage (new Label (_("Elapsed:"),  ALIGN_RIGHT)), 0, 1, row, row + 1, FILL, SHRINK);
+	t->attach (*manage (new Label (_("Elapsed:"),  ALIGN_END)), 0, 1, row, row + 1, FILL, SHRINK);
 	t->attach (_label_acq, 1, 2, row, row + 1, FILL, SHRINK);
 }
 
@@ -92,7 +82,7 @@ IdleOMeter::~IdleOMeter ()
 bool
 IdleOMeter::idle ()
 {
-	const int64_t now = _x_get_monotonic_usec ();
+	const int64_t now = PBD::get_microseconds ();
 	const int64_t elapsed = now - _last;
 
 	_max = std::max (_max, elapsed);
@@ -142,7 +132,7 @@ IdleOMeter::idle ()
 void
 IdleOMeter::reset ()
 {
-	_last = _x_get_monotonic_usec ();
+	_last = PBD::get_microseconds ();
 	_last_display = _last;
 	_start = _last;
 	_max = 0;

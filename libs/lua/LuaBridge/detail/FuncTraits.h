@@ -204,6 +204,31 @@ struct FuncTraits <R (*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10), D>
   }
 };
 
+template <class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class D>
+struct FuncTraits <R (*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11), D>
+{
+  static bool const isMemberFunction = false;
+  typedef D DeclType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList<P11> > > > > > > > > > > Params;
+  static R call (D fp, TypeListValues <Params>& tvl)
+  {
+    return fp (tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
+
+template <class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class P12, class D>
+struct FuncTraits <R (*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12), D>
+{
+  static bool const isMemberFunction = false;
+  typedef D DeclType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList<P11, TypeList<P12> > > > > > > > > > > > Params;
+  static R call (D fp, TypeListValues <Params>& tvl)
+  {
+    return fp (tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
 
 /* Non-const member function pointers. */
 
@@ -372,6 +397,35 @@ struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10), D>
   }
 };
 
+template <class T, class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class D>
+struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11), D>
+{
+  static bool const isMemberFunction = true;
+  static bool const isConstMemberFunction = false;
+  typedef D DeclType;
+  typedef T ClassType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList<P11> > > > > > > > > > > Params;
+  static R call (T* obj, D fp, TypeListValues <Params>& tvl)
+  {
+    return (obj->*fp)(tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
+
+template <class T, class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class P12, class D>
+struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12), D>
+{
+  static bool const isMemberFunction = true;
+  static bool const isConstMemberFunction = false;
+  typedef D DeclType;
+  typedef T ClassType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList<P11, TypeList<P12> > > > > > > > > > > > Params;
+  static R call (T* obj, D fp, TypeListValues <Params>& tvl)
+  {
+    return (obj->*fp)(tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
 
 /* Const member function pointers. */
 
@@ -541,6 +595,21 @@ struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10) const, D>
   }
 };
 
+template <class T, class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class P12, class D>
+struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12) const, D>
+{
+  static bool const isMemberFunction = true;
+  static bool const isConstMemberFunction = true;
+  typedef D DeclType;
+  typedef T ClassType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList<P11, TypeList<P12> > > > > > > > > > > > Params;
+  static R call (T const* obj, D fp, TypeListValues <Params>& tvl)
+  {
+    return (obj->*fp)(tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
+
 
 #if defined (LUABRIDGE_THROWSPEC)
 
@@ -686,6 +755,19 @@ struct FuncTraits <R (*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10) LUABRIDGE_THR
   static R call (D fp, TypeListValues <Params>& tvl)
   {
     return fp (tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
+
+template <class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class P12, class D>
+struct FuncTraits <R (*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12) LUABRIDGE_THROWSPEC, D>
+{
+  static bool const isMemberFunction = false;
+  typedef D DeclType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList <P11, TypeList<P12> > > > > > > > > > > > Params;
+  static R call (D fp, TypeListValues <Params>& tvl)
+  {
+    return fp (tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
   }
 };
 
@@ -853,6 +935,21 @@ struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10) LUABRIDGE_
   static R call (T* obj, D fp, TypeListValues <Params>& tvl)
   {
     return (obj->*fp)(tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
+
+template <class T, class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class P12, class D>
+struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12) LUABRIDGE_THROWSPEC, D>
+{
+  static bool const isMemberFunction = true;
+  static bool const isConstMemberFunction = false;
+  typedef D DeclType;
+  typedef T ClassType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList<P11, TypeList<P12> > > > > > > > > > > > Params;
+  static R call (T* obj, D fp, TypeListValues <Params>& tvl)
+  {
+    return (obj->*fp)(tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
   }
 };
 
@@ -1025,5 +1122,19 @@ struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10) const LUAB
   }
 };
 
+template <class T, class R, class P1, class P2, class P3, class P4, class P5, class P6, class P7, class P8, class P9, class P10, class P11, class P12, class D>
+struct FuncTraits <R (T::*) (P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12) const LUABRIDGE_THROWSPEC, D>
+{
+  static bool const isMemberFunction = true;
+  static bool const isConstMemberFunction = true;
+  typedef D DeclType;
+  typedef T ClassType;
+  typedef R ReturnType;
+  typedef TypeList <P1, TypeList <P2, TypeList <P3, TypeList <P4, TypeList <P5, TypeList <P6, TypeList <P7, TypeList <P8, TypeList <P9, TypeList<P10, TypeList<P11, TypeList<P12> > > > > > > > > > > > Params;
+  static R call (T const* obj, D fp, TypeListValues <Params>& tvl)
+  {
+    return (obj->*fp)(tvl.hd, tvl.tl.hd, tvl.tl.tl.hd, tvl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd, tvl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.tl.hd);
+  }
+};
 
 #endif

@@ -1,22 +1,23 @@
 /*
-    Copyright (C) 2016 Paul Davis
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2017 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
-
-#include "evoral/ControlList.hpp"
+#include "evoral/ControlList.h"
 
 #include "ardour/mute_master.h"
 #include "ardour/session.h"
@@ -28,19 +29,19 @@ using namespace ARDOUR;
 using namespace std;
 
 
-MuteControl::MuteControl (Session& session, std::string const & name, Muteable& m)
+MuteControl::MuteControl (Session& session, std::string const & name, Muteable& m, Temporal::TimeDomainProvider const & tdp)
 	: SlavableAutomationControl (session, MuteAutomation, ParameterDescriptor (MuteAutomation),
-	                             boost::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (MuteAutomation))),
+	                             std::shared_ptr<AutomationList> (new AutomationList (Evoral::Parameter (MuteAutomation), tdp)),
 	                             name)
 	, _muteable (m)
 {
 	_list->set_interpolation (Evoral::ControlList::Discrete);
 	/* mute changes must be synchronized by the process cycle */
-	set_flags (Controllable::Flag (flags() | Controllable::RealTime));
+	set_flag (Controllable::RealTime);
 }
 
 void
-MuteControl::post_add_master (boost::shared_ptr<AutomationControl> m)
+MuteControl::post_add_master (std::shared_ptr<AutomationControl> m)
 {
 	if (m->get_value()) {
 
@@ -58,7 +59,7 @@ MuteControl::post_add_master (boost::shared_ptr<AutomationControl> m)
 }
 
 void
-MuteControl::pre_remove_master (boost::shared_ptr<AutomationControl> m)
+MuteControl::pre_remove_master (std::shared_ptr<AutomationControl> m)
 {
 	if (!m) {
 		/* null control ptr means we're removing all masters */
@@ -91,10 +92,10 @@ MuteControl::actually_set_value (double val, Controllable::GroupControlDispositi
 }
 
 bool
-MuteControl::handle_master_change (boost::shared_ptr<AutomationControl> m)
+MuteControl::handle_master_change (std::shared_ptr<AutomationControl> m)
 {
 	bool send_signal = false;
-	boost::shared_ptr<MuteControl> mc = boost::dynamic_pointer_cast<MuteControl> (m);
+	std::shared_ptr<MuteControl> mc = std::dynamic_pointer_cast<MuteControl> (m);
 	if (!mc) {
 		return false;
 	}
@@ -126,7 +127,7 @@ MuteControl::get_value () const
 		return muted_by_self() || muted_by_masters ();
 	}
 
-	if (_list && boost::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
+	if (_list && std::dynamic_pointer_cast<AutomationList>(_list)->automation_playback()) {
 		// Playing back automation, get the value from the list
 		return AutomationControl::get_value();
 	}
@@ -188,7 +189,7 @@ MuteControl::automation_run (samplepos_t start, pframes_t len)
 	bool mute  = false;
 
 	if (list() && automation_playback()) {
-		mute = list()->rt_safe_eval (start, valid) >= 0.5;
+		mute = list()->rt_safe_eval (timepos_t (start), valid) >= 0.5;
 	}
 
 	if (!valid) {
@@ -197,7 +198,7 @@ MuteControl::automation_run (samplepos_t start, pframes_t len)
 
 	if (muted_by_masters ()) {
 		/* already muted, no need to check further,
-		 * except we need to up update implicit/explict mute
+		 * except we need to up update implicit/explicit mute
 		 */
 		if (muted_by_self () != mute) {
 			set_value_unchecked (mute ? 1. : 0.);

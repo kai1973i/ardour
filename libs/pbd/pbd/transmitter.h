@@ -1,24 +1,22 @@
 /*
-    Copyright (C) 1998-99 Paul Barton-Davis
+ * Copyright (C) 1998-2016 Paul Davis <paul@linuxaudiosystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libmisc_transmitter_h__
-#define __libmisc_transmitter_h__
+#pragma once
 
 #include <sstream>
 #include <iostream>
@@ -32,6 +30,7 @@ class LIBPBD_API Transmitter : public std::stringstream
 {
   public:
 	enum Channel {
+		Debug,
 		Info,
 		Error,
 		Warning,
@@ -41,7 +40,7 @@ class LIBPBD_API Transmitter : public std::stringstream
 
 	Transmitter (Channel);
 
-	PBD::Signal2<void,Channel, const char *> &sender() {
+	PBD::Signal<void(Channel, const char *)> &sender() {
 		return *send;
 	}
 
@@ -53,12 +52,13 @@ class LIBPBD_API Transmitter : public std::stringstream
 
   private:
 	Channel channel;
-	PBD::Signal2<void, Channel, const char *> *send;
+	PBD::Signal<void(Channel, const char *)> *send;
 
-	PBD::Signal2<void, Channel, const char *> info;
-	PBD::Signal2<void, Channel, const char *> warning;
-	PBD::Signal2<void, Channel, const char *> error;
-	PBD::Signal2<void, Channel, const char *> fatal;
+	PBD::Signal<void(Channel, const char *)> debug;
+	PBD::Signal<void(Channel, const char *)> info;
+	PBD::Signal<void(Channel, const char *)> warning;
+	PBD::Signal<void(Channel, const char *)> error;
+	PBD::Signal<void(Channel, const char *)> fatal;
 };
 
 /* for EGCS 2.91.66, if this function is not compiled within the same
@@ -104,4 +104,3 @@ endmsg (std::ostream &ostr)
 
 extern "C" { LIBPBD_API void pbd_c_error (const char *); }
 
-#endif // __libmisc_transmitter_h__

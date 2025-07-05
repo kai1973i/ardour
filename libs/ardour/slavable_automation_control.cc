@@ -1,20 +1,22 @@
 /*
-    Copyright (C) 2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify it
-    under the terms of the GNU General Public License as published by the Free
-    Software Foundation; either version 2 of the License, or (at your option)
-    any later version.
-
-    This program is distributed in the hope that it will be useful, but WITHOUT
-    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-    FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
-    for more details.
-
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    675 Mass Ave, Cambridge, MA 02139, USA.
-*/
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2017-2018 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2017 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __libardour_slavable_automation_control_h__
 #define __libardour_slavable_automation_control_h__
@@ -23,14 +25,15 @@
 #include "pbd/error.h"
 #include "pbd/memento_command.h"
 #include "pbd/types_convert.h"
-#include "pbd/i18n.h"
 
-#include "evoral/Curve.hpp"
+#include "evoral/Curve.h"
 
 #include "ardour/audioengine.h"
 #include "ardour/runtime_functions.h"
 #include "ardour/slavable_automation_control.h"
 #include "ardour/session.h"
+
+#include "pbd/i18n.h"
 
 using namespace std;
 using namespace ARDOUR;
@@ -39,7 +42,7 @@ using namespace PBD;
 SlavableAutomationControl::SlavableAutomationControl(ARDOUR::Session& s,
                                                      const Evoral::Parameter&                  parameter,
                                                      const ParameterDescriptor&                desc,
-                                                     boost::shared_ptr<ARDOUR::AutomationList> l,
+                                                     std::shared_ptr<ARDOUR::AutomationList> l,
                                                      const std::string&                        name,
                                                      Controllable::Flag                        flags)
 	: AutomationControl (s, parameter, desc, l, name, flags)
@@ -83,7 +86,7 @@ SlavableAutomationControl::get_value_locked() const
 	/* read or write masters lock must be held */
 
 	if (_masters.empty()) {
-		return Control::get_double (false, _session.transport_sample());
+		return Control::get_double ();
 	}
 
 	if (_desc.toggled) {
@@ -91,30 +94,24 @@ SlavableAutomationControl::get_value_locked() const
 		 * enabled, this slave is enabled. So check our own value
 		 * first, because if we are enabled, we can return immediately.
 		 */
-		if (Control::get_double (false, _session.transport_sample())) {
+		if (Control::get_double ()) {
 			return _desc.upper;
 		}
 	}
 
-	return Control::get_double() * get_masters_value_locked ();
+	return Control::get_double () * get_masters_value_locked ();
 }
 
 /** Get the current effective `user' value based on automation state */
 double
 SlavableAutomationControl::get_value() const
 {
-	bool from_list = _list && boost::dynamic_pointer_cast<AutomationList>(_list)->automation_playback();
-
 	Glib::Threads::RWLock::ReaderLock lm (master_lock);
-	if (!from_list) {
-		if (!_masters.empty() && automation_write ()) {
-			/* writing automation takes the fader value as-is, factor out the master */
-			return Control::user_double ();
-		}
-		return get_value_locked ();
-	} else {
-		return Control::get_double (true, _session.transport_sample()) * get_masters_value_locked();
+	if (!_masters.empty() && automation_write ()) {
+		/* writing automation takes the fader value as-is, factor out the master */
+		return Control::get_double ();
 	}
+	return get_value_locked ();
 }
 
 bool
@@ -130,10 +127,10 @@ SlavableAutomationControl::get_masters_curve_locked (samplepos_t, samplepos_t, f
 }
 
 bool
-SlavableAutomationControl::masters_curve_multiply (samplepos_t start, samplepos_t end, float* vec, samplecnt_t veclen) const
+SlavableAutomationControl::masters_curve_multiply (timepos_t const & start, timepos_t const & end, float* vec, samplecnt_t veclen) const
 {
 	gain_t* scratch = _session.scratch_automation_buffer ();
-	bool from_list = _list && boost::dynamic_pointer_cast<AutomationList>(_list)->automation_playback();
+	bool from_list = _list && std::dynamic_pointer_cast<AutomationList>(_list)->automation_playback();
 	bool rv = from_list && list()->curve().rt_safe_get_vector (start, end, scratch, veclen);
 	if (rv) {
 		for (samplecnt_t i = 0; i < veclen; ++i) {
@@ -147,8 +144,8 @@ SlavableAutomationControl::masters_curve_multiply (samplepos_t start, samplepos_
 	}
 
 	for (Masters::const_iterator mr = _masters.begin(); mr != _masters.end(); ++mr) {
-		boost::shared_ptr<SlavableAutomationControl> sc
-			= boost::dynamic_pointer_cast<SlavableAutomationControl>(mr->second.master());
+		std::shared_ptr<SlavableAutomationControl> sc
+			= std::dynamic_pointer_cast<SlavableAutomationControl>(mr->second.master());
 		assert (sc);
 		rv |= sc->masters_curve_multiply (start, end, vec, veclen);
 		apply_gain_to_buffer (vec, veclen, mr->second.val_master_inv ());
@@ -184,7 +181,7 @@ SlavableAutomationControl::actually_set_value (double value, PBD::Controllable::
 }
 
 void
-SlavableAutomationControl::add_master (boost::shared_ptr<AutomationControl> m)
+SlavableAutomationControl::add_master (std::shared_ptr<AutomationControl> m)
 {
 	std::pair<Masters::iterator,bool> res;
 
@@ -192,16 +189,16 @@ SlavableAutomationControl::add_master (boost::shared_ptr<AutomationControl> m)
 		const double master_value = m->get_value();
 		Glib::Threads::RWLock::WriterLock lm (master_lock);
 
-		pair<PBD::ID,MasterRecord> newpair (m->id(), MasterRecord (boost::weak_ptr<AutomationControl> (m), get_value_locked(), master_value));
+		pair<PBD::ID,MasterRecord> newpair (m->id(), MasterRecord (std::weak_ptr<AutomationControl> (m), get_value_locked(), master_value));
 		res = _masters.insert (newpair);
 
 		if (res.second) {
 
-			/* note that we bind @param m as a weak_ptr<AutomationControl>, thus
+			/* note that we bind @p m as a weak_ptr<AutomationControl>, thus
 			   avoiding holding a reference to the control in the binding
 			   itself.
 			*/
-			m->DropReferences.connect_same_thread (res.first->second.dropped_connection, boost::bind (&SlavableAutomationControl::master_going_away, this, boost::weak_ptr<AutomationControl>(m)));
+			m->DropReferences.connect_same_thread (res.first->second.dropped_connection, std::bind (&SlavableAutomationControl::master_going_away, this, std::weak_ptr<AutomationControl>(m)));
 
 			/* Store the connection inside the MasterRecord, so
 			   that when we destroy it, the connection is destroyed
@@ -209,7 +206,7 @@ SlavableAutomationControl::add_master (boost::shared_ptr<AutomationControl> m)
 			   AutomationControl.
 
 			   Note that this also makes it safe to store a
-			   boost::shared_ptr<AutomationControl> in the functor,
+			   std::shared_ptr<AutomationControl> in the functor,
 			   since we know we will destroy the functor when the
 			   connection is destroyed, which happens when we
 			   disconnect from the master (for any reason).
@@ -219,7 +216,7 @@ SlavableAutomationControl::add_master (boost::shared_ptr<AutomationControl> m)
 			   because the change came from the master.
 			*/
 
-			m->Changed.connect_same_thread (res.first->second.changed_connection, boost::bind (&SlavableAutomationControl::master_changed, this, _1, _2, boost::weak_ptr<AutomationControl>(m)));
+			m->Changed.connect_same_thread (res.first->second.changed_connection, std::bind (&SlavableAutomationControl::master_changed, this, _1, _2, std::weak_ptr<AutomationControl>(m)));
 		}
 	}
 
@@ -251,7 +248,7 @@ SlavableAutomationControl::get_boolean_masters () const
 }
 
 void
-SlavableAutomationControl::update_boolean_masters_records (boost::shared_ptr<AutomationControl> m)
+SlavableAutomationControl::update_boolean_masters_records (std::shared_ptr<AutomationControl> m)
 {
 	if (_desc.toggled) {
 		/* We may modify a MasterRecord, but we not modify the master
@@ -286,9 +283,9 @@ SlavableAutomationControl::update_boolean_masters_records (boost::shared_ptr<Aut
 }
 
 void
-SlavableAutomationControl::master_changed (bool /*from_self*/, GroupControlDisposition gcd, boost::weak_ptr<AutomationControl> wm)
+SlavableAutomationControl::master_changed (bool /*from_self*/, GroupControlDisposition gcd, std::weak_ptr<AutomationControl> wm)
 {
-	boost::shared_ptr<AutomationControl> m = wm.lock ();
+	std::shared_ptr<AutomationControl> m = wm.lock ();
 	assert (m);
 	Glib::Threads::RWLock::ReaderLock lm (master_lock);
 	bool send_signal = handle_master_change (m);
@@ -301,9 +298,9 @@ SlavableAutomationControl::master_changed (bool /*from_self*/, GroupControlDispo
 }
 
 void
-SlavableAutomationControl::master_going_away (boost::weak_ptr<AutomationControl> wm)
+SlavableAutomationControl::master_going_away (std::weak_ptr<AutomationControl> wm)
 {
-	boost::shared_ptr<AutomationControl> m = wm.lock();
+	std::shared_ptr<AutomationControl> m = wm.lock();
 	if (m) {
 		remove_master (m);
 	}
@@ -326,7 +323,7 @@ SlavableAutomationControl::scale_automation_callback (double value, double ratio
 }
 
 void
-SlavableAutomationControl::remove_master (boost::shared_ptr<AutomationControl> m)
+SlavableAutomationControl::remove_master (std::shared_ptr<AutomationControl> m)
 {
 	if (_session.deletion_in_progress()) {
 		/* no reason to care about new values or sending signals */
@@ -335,13 +332,13 @@ SlavableAutomationControl::remove_master (boost::shared_ptr<AutomationControl> m
 
 	pre_remove_master (m);
 
-	const double old_val = AutomationControl::get_double();
+	const double old_val = AutomationControl::get_double ();
 
 	bool update_value = false;
 	double master_ratio = 0;
 	double list_ratio = toggled () ? 0 : 1;
 
-	boost::shared_ptr<AutomationControl> master;
+	std::shared_ptr<AutomationControl> master;
 
 	{
 		Glib::Threads::RWLock::WriterLock lm (master_lock);
@@ -365,24 +362,28 @@ SlavableAutomationControl::remove_master (boost::shared_ptr<AutomationControl> m
 		double new_val = old_val * master_ratio;
 
 		if (old_val != new_val) {
-			AutomationControl::set_double (new_val, Controllable::NoGroup);
+			timepos_t foo;
+			AutomationControl::set_double (new_val, foo, Controllable::NoGroup);
 		}
 
 		/* ..and update automation */
 		if (_list) {
 			XMLNode* before = &alist ()->get_state ();
 			if (master->automation_playback () && master->list()) {
-				_list->list_merge (*master->list().get(), boost::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, _2));
+				_list->list_merge (*master->list().get(), std::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, _2));
 				printf ("y-t %s  %f\n", name().c_str(), list_ratio);
-				_list->y_transform (boost::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, list_ratio));
+				_list->y_transform (std::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, list_ratio));
 			} else {
 				// do we need to freeze/thaw the list? probably no: iterators & positions don't change
-				_list->y_transform (boost::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, master_ratio));
+				_list->y_transform (std::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, master_ratio));
 			}
 			XMLNode* after = &alist ()->get_state ();
 			if (*before != *after) {
 				_session.begin_reversible_command (string_compose (_("Merge VCA automation into %1"), name ()));
 				_session.commit_reversible_command (alist()->memento_command (before, after));
+			} else {
+				delete before;
+				delete after;
 			}
 		}
 	}
@@ -402,15 +403,15 @@ SlavableAutomationControl::clear_masters ()
 		return;
 	}
 
-	const double old_val = AutomationControl::get_double();
+	const double old_val = AutomationControl::get_double ();
 
-	ControlList masters;
+	AutomationControlList masters;
 	bool update_value = false;
 	double master_ratio = 0;
 	double list_ratio = toggled () ? 0 : 1;
 
 	/* null ptr means "all masters */
-	pre_remove_master (boost::shared_ptr<AutomationControl>());
+	pre_remove_master (std::shared_ptr<AutomationControl>());
 
 	{
 		Glib::Threads::RWLock::WriterLock lm (master_lock);
@@ -419,7 +420,7 @@ SlavableAutomationControl::clear_masters ()
 		}
 
 		for (Masters::const_iterator mr = _masters.begin(); mr != _masters.end(); ++mr) {
-			boost::shared_ptr<AutomationControl> master = mr->second.master();
+			std::shared_ptr<AutomationControl> master = mr->second.master();
 			if (master->automation_playback () && master->list()) {
 				masters.push_back (mr->second.master());
 				list_ratio *= mr->second.val_master_inv ();
@@ -438,24 +439,28 @@ SlavableAutomationControl::clear_masters ()
 			double new_val = old_val * master_ratio;
 
 			if (old_val != new_val) {
-				AutomationControl::set_double (new_val, Controllable::NoGroup);
+				timepos_t foo;
+				AutomationControl::set_double (new_val, foo, Controllable::NoGroup);
 			}
 
 			/* ..and update automation */
 			if (_list) {
 				XMLNode* before = &alist ()->get_state ();
 				if (!masters.empty()) {
-					for (ControlList::const_iterator m = masters.begin(); m != masters.end(); ++m) {
-						_list->list_merge (*(*m)->list().get(), boost::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, _2));
+					for (AutomationControlList::const_iterator m = masters.begin(); m != masters.end(); ++m) {
+						_list->list_merge (*(*m)->list().get(), std::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, _2));
 					}
-					_list->y_transform (boost::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, list_ratio));
+					_list->y_transform (std::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, list_ratio));
 				} else {
-					_list->y_transform (boost::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, master_ratio));
+					_list->y_transform (std::bind (&SlavableAutomationControl::scale_automation_callback, this, _1, master_ratio));
 				}
 				XMLNode* after = &alist ()->get_state ();
 				if (*before != *after) {
 					_session.begin_reversible_command (string_compose (_("Merge VCA automation into %1"), name ()));
 					_session.commit_reversible_command (alist()->memento_command (before, after));
+				} else {
+					delete before;
+					delete after;
 				}
 			}
 	}
@@ -468,7 +473,7 @@ SlavableAutomationControl::clear_masters ()
 }
 
 bool
-SlavableAutomationControl::find_next_event_locked (double now, double end, Evoral::ControlEvent& next_event) const
+SlavableAutomationControl::find_next_event_locked (timepos_t const & now, timepos_t const & end, Evoral::ControlEvent& next_event) const
 {
 	if (_masters.empty()) {
 		return false;
@@ -480,17 +485,17 @@ SlavableAutomationControl::find_next_event_locked (double now, double end, Evora
 	 * (see also Automatable::find_next_event)
 	 */
 	for (Masters::const_iterator mr = _masters.begin(); mr != _masters.end(); ++mr) {
-		boost::shared_ptr<AutomationControl> ac (mr->second.master());
+		std::shared_ptr<AutomationControl> ac (mr->second.master());
 
-		boost::shared_ptr<SlavableAutomationControl> sc
-			= boost::dynamic_pointer_cast<SlavableAutomationControl>(ac);
+		std::shared_ptr<SlavableAutomationControl> sc
+			= std::dynamic_pointer_cast<SlavableAutomationControl>(ac);
 
 		if (sc && sc->find_next_event_locked (now, end, next_event)) {
 			rv = true;
 		}
 
 		Evoral::ControlList::const_iterator i;
-		boost::shared_ptr<const Evoral::ControlList> alist (ac->list());
+		std::shared_ptr<const Evoral::ControlList> alist (ac->list());
 		Evoral::ControlEvent cp (now, 0.0f);
 		if (!alist) {
 			continue;
@@ -515,7 +520,7 @@ SlavableAutomationControl::find_next_event_locked (double now, double end, Evora
 }
 
 bool
-SlavableAutomationControl::handle_master_change (boost::shared_ptr<AutomationControl>)
+SlavableAutomationControl::handle_master_change (std::shared_ptr<AutomationControl>)
 {
 	/* Derived classes can implement this for special cases (e.g. mute).
 	 * This method is called with a ReaderLock (master_lock) held.
@@ -534,7 +539,7 @@ SlavableAutomationControl::automation_run (samplepos_t start, pframes_t nframes)
 
 	assert (_list);
 	bool valid = false;
-	double val = _list->rt_safe_eval (start, valid);
+	double val = _list->rt_safe_eval (timepos_t (start), valid);
 	if (!valid) {
 		return;
 	}
@@ -555,20 +560,20 @@ SlavableAutomationControl::boolean_automation_run_locked (samplepos_t start, pfr
 		return false;
 	}
 	for (Masters::iterator mr = _masters.begin(); mr != _masters.end(); ++mr) {
-		boost::shared_ptr<AutomationControl> ac (mr->second.master());
+		std::shared_ptr<AutomationControl> ac (mr->second.master());
 		if (!ac->automation_playback ()) {
 			continue;
 		}
 		if (!ac->toggled ()) {
 			continue;
 		}
-		boost::shared_ptr<SlavableAutomationControl> sc = boost::dynamic_pointer_cast<MuteControl>(ac);
+		std::shared_ptr<SlavableAutomationControl> sc = std::dynamic_pointer_cast<MuteControl>(ac);
 		if (sc) {
 			rv |= sc->boolean_automation_run (start, len);
 		}
-		boost::shared_ptr<const Evoral::ControlList> alist (ac->list());
+		std::shared_ptr<const Evoral::ControlList> alist (ac->list());
 		bool valid = false;
-		const bool yn = alist->rt_safe_eval (start, valid) >= 0.5;
+		const bool yn = alist->rt_safe_eval (timepos_t (start), valid) >= 0.5;
 		if (!valid) {
 			continue;
 		}
@@ -597,7 +602,7 @@ SlavableAutomationControl::boolean_automation_run (samplepos_t start, pframes_t 
 }
 
 bool
-SlavableAutomationControl::slaved_to (boost::shared_ptr<AutomationControl> m) const
+SlavableAutomationControl::slaved_to (std::shared_ptr<AutomationControl> m) const
 {
 	Glib::Threads::RWLock::ReaderLock lm (master_lock);
 	return _masters.find (m->id()) != _masters.end();
@@ -608,6 +613,20 @@ SlavableAutomationControl::slaved () const
 {
 	Glib::Threads::RWLock::ReaderLock lm (master_lock);
 	return !_masters.empty();
+}
+
+std::set<std::shared_ptr<AutomationControl>>
+SlavableAutomationControl::masters () const
+{
+	std::set<std::shared_ptr<AutomationControl>> rv;
+	Glib::Threads::RWLock::ReaderLock lm (master_lock);
+	for (auto const& m : _masters) {
+		std::shared_ptr<AutomationControl> ac (m.second.master ());
+		if (ac) {
+			rv.insert (ac);
+		}
+	}
+	return rv;
 }
 
 int
@@ -651,7 +670,7 @@ SlavableAutomationControl::use_saved_master_ratios ()
 
 
 XMLNode&
-SlavableAutomationControl::get_state ()
+SlavableAutomationControl::get_state () const
 {
 	XMLNode& node (AutomationControl::get_state());
 
@@ -661,7 +680,7 @@ SlavableAutomationControl::get_state ()
 		Glib::Threads::RWLock::ReaderLock lm (master_lock);
 		if (!_masters.empty()) {
 			XMLNode* masters_node = new XMLNode (X_("masters"));
-			for (Masters::iterator mr = _masters.begin(); mr != _masters.end(); ++mr) {
+			for (Masters::const_iterator mr = _masters.begin(); mr != _masters.end(); ++mr) {
 				XMLNode* mnode = new XMLNode (X_("master"));
 				mnode->set_property (X_("id"), mr->second.master()->id());
 

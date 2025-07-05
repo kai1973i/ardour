@@ -1,22 +1,23 @@
 /*
-    Copyright (C) 2011 Paul Davis
-    Author: Carl Hetherington <cth@carlh.net>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2012 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2013-2014 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2015-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2015 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 /** @file  canvas/arrow.cc
  *  @brief Implementation of the Arrow canvas object.
@@ -78,7 +79,7 @@ Arrow::compute_bounding_box () const
 	                     _line->x1() + (head_width / 2.0) + outline_pad,
 	                     _line->y1());
 
-	_bounding_box_dirty = false;
+	set_bbox_clean ();
 }
 
 /** Set whether to show an arrow head at one end or other
@@ -100,7 +101,7 @@ Arrow::set_show_head (int which, bool show)
 		setup_polygon (which);
 	}
 
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -120,7 +121,7 @@ Arrow::set_head_outward (int which, bool outward)
 	_heads[which].outward = outward;
 
 	setup_polygon (which);
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -138,7 +139,7 @@ Arrow::set_head_height (int which, Distance height)
 	_heads[which].height = height;
 
 	setup_polygon (which);
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -156,7 +157,7 @@ Arrow::set_head_width (int which, Distance width)
 	_heads[which].width = width;
 
 	setup_polygon (which);
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 	end_change ();
 }
 
@@ -173,7 +174,7 @@ Arrow::set_outline_width (Distance width)
 	if (_heads[1].polygon) {
 		_heads[1].polygon->set_outline_width (width);
 	}
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 }
 
 /** Set the x position of our line.
@@ -189,7 +190,7 @@ Arrow::set_x (Coord x)
 			_heads[i].polygon->set_x_position (x - _heads[i].width / 2);
 		}
 	}
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 }
 
 /** Set the y position of end 0 of our line.
@@ -202,7 +203,7 @@ Arrow::set_y0 (Coord y0)
 	if (_heads[0].polygon) {
 		_heads[0].polygon->set_y_position (y0);
 	}
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 }
 
 /** Set the y position of end 1 of our line.
@@ -215,7 +216,7 @@ Arrow::set_y1 (Coord y1)
 	if (_heads[1].polygon) {
 		_heads[1].polygon->set_y_position (y1 - _heads[1].height);
 	}
-	_bounding_box_dirty = true;
+	set_bbox_dirty ();
 }
 
 /** @return x position of our line in pixels (in our coordinate system) */

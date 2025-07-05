@@ -1,29 +1,27 @@
 /*
-    Copyright (C) 2008 Paul Davis
-    Author: Sakari Bergen
+ * Copyright (C) 2008 Sakari Bergen <sakari.bergen@beatwaves.net>
+ * Copyright (C) 2009-2010 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2009-2012 David Robillard <d@drobilla.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __ardour_audio_playlist_importer_h__
-#define __ardour_audio_playlist_importer_h__
+#pragma once
 
 #include <list>
-
-#include <boost/shared_ptr.hpp>
+#include <memory>
 
 #include "pbd/xml++.h"
 #include "pbd/id.h"
@@ -41,7 +39,7 @@ class Session;
 class LIBARDOUR_API AudioPlaylistImportHandler : public ElementImportHandler
 {
   public:
-	typedef boost::shared_ptr<AudioPlaylistImporter> PlaylistPtr;
+	typedef std::shared_ptr<AudioPlaylistImporter> PlaylistPtr;
 	typedef std::list<PlaylistPtr> PlaylistList;
 
 	AudioPlaylistImportHandler (XMLTree const & source, Session & session, AudioRegionImportHandler & region_handler, const char * nodename = "Playlists");
@@ -83,7 +81,7 @@ class LIBARDOUR_API AudioPlaylistImporter : public ElementImporter
 	void _move ();
 
   private:
-	typedef std::list<boost::shared_ptr<AudioRegionImporter> > RegionList;
+	typedef std::list<std::shared_ptr<AudioRegionImporter> > RegionList;
 
 	void populate_region_list ();
 
@@ -97,4 +95,3 @@ class LIBARDOUR_API AudioPlaylistImporter : public ElementImporter
 
 } // namespace ARDOUR
 
-#endif

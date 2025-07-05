@@ -1,32 +1,37 @@
 /*
-    Copyright (C) 2009 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2016-2018 Len Ovens <len@ovenwerks.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #ifndef __osc_oscglobalobserver_h__
 #define __osc_oscglobalobserver_h__
 
+#include "osc.h"
+
+#include <memory>
 #include <string>
-#include <boost/shared_ptr.hpp>
+
 #include <sigc++/sigc++.h>
 #include <lo/lo.h>
 
 #include "pbd/controllable.h"
 #include "pbd/stateful.h"
+
+#include "ardour/route_group.h"
+#include "ardour/session.h"
 #include "ardour/types.h"
 
 class OSCGlobalObserver
@@ -59,6 +64,7 @@ class OSCGlobalObserver
 	float _last_monitor_gain;
 	lo_address addr;
 	std::string path;
+	std::string mark_text;
 	uint32_t gainmode;
 	std::bitset<32> feedback;
 	ARDOUR::Session* session;
@@ -87,10 +93,10 @@ class OSCGlobalObserver
 		}
 	};
 
-
-	void send_change_message (std::string path, boost::shared_ptr<PBD::Controllable> controllable);
-	void send_gain_message (std::string path, boost::shared_ptr<PBD::Controllable> controllable);
-	void send_trim_message (std::string path, boost::shared_ptr<PBD::Controllable> controllable);
+	void update_mixer_scene_state();
+	void send_change_message (std::string path, std::shared_ptr<PBD::Controllable> controllable);
+	void send_gain_message (std::string path, std::shared_ptr<PBD::Controllable> controllable);
+	void send_trim_message (std::string path, std::shared_ptr<PBD::Controllable> controllable);
 	void send_transport_state_changed (void);
 	void send_record_state_changed (void);
 	void solo_active (bool active);

@@ -11,6 +11,7 @@
 
 #include "pbd/debug.h"
 #include "ardour/ardour.h"
+#include "temporal/types.h"
 #include "test_ui.h"
 
 static const char* localedir = LOCALEDIR;
@@ -49,7 +50,9 @@ main(int argc, char* argv[])
 		}
 	}
 
-	CPPUNIT_ASSERT (ARDOUR::init (false, true, localedir));
+	CPPUNIT_ASSERT (ARDOUR::init (true, localedir));
+
+	Temporal::reset();
 
 	TestUI* test_ui = new TestUI();
 

@@ -1,29 +1,30 @@
 /*
-    Copyright (C) 2016 Paul Davis
+ * Copyright (C) 2016-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2016-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2018 Len Ovens <len@ovenwerks.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
-
-#ifndef __libardour_presentation_info_h__
-#define __libardour_presentation_info_h__
+#pragma once
 
 #include <iostream>
 #include <string>
 
-#include <stdint.h>
+#include <atomic>
+#include <cstdint>
 
 #include "pbd/signals.h"
 #include "pbd/stateful.h"
@@ -39,6 +40,7 @@ namespace Properties {
 	LIBARDOUR_API extern PBD::PropertyDescriptor<uint32_t> order;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<uint32_t> color;
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> selected;
+	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> trigger_track;
 	/* we use this; declared in region.cc */
 	LIBARDOUR_API extern PBD::PropertyDescriptor<bool> hidden;
 }
@@ -73,13 +75,12 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 	 * There are several pathways for the order being set:
 	 *
 	 *   - object created during session loading from XML
-	 *           - numeric order will be set during ::set_state(), based on
-	 *           - type will be set during ctor call
+	 *   - numeric order will be set during ::set_state(), based on
+	 *   - type will be set during ctor call
 	 *
 	 *   - object created in response to user request
-	 *		- numeric order will be set by Session, before adding
-	 *		     to container.
-	 *		- type set during ctor call
+	 *   - numeric order will be set by Session, before adding to container.
+	 *   - type set during ctor call
 	 *
 	 *
 	 * OBJECT IDENTITY
@@ -118,17 +119,44 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 		/* single bit indicates that the group order is set */
 		OrderSet = 0x400,
 
+#ifdef MIXBUS
+		MixbusEditorHidden = 0x800,
+		Mixbus = 0x1000,
+#endif
+		/* bus type for monitor mixes */
+		FoldbackBus = 0x2000,
+
+		/* has TriggerBox, show on TriggerUI page */
+		TriggerTrack = 0x4000,
+
+		/* bus is the surround master */
+		SurroundMaster = 0x8000,
+
 		/* special mask to delect out "state" bits */
-		StatusMask = (Hidden),
+#ifdef MIXBUS
+		StatusMask = (Hidden | MixbusEditorHidden | TriggerTrack),
+#else
+		StatusMask = (Hidden | TriggerTrack),
+#endif
+
+		/* dedicated [output] busses */
+		MainBus = (MasterOut|MonitorOut|FoldbackBus|SurroundMaster),
+
+		/* These can exist only once and require special attention to be removed */
+		Singleton = (MasterOut|MonitorOut|SurroundMaster),
+
 		/* special mask to delect select type bits */
-		TypeMask = (AudioBus|AudioTrack|MidiTrack|MidiBus|VCA|MasterOut|MonitorOut|Auditioner)
+		TypeMask = (AudioBus|AudioTrack|MidiTrack|MidiBus|VCA|MasterOut|MonitorOut|Auditioner|FoldbackBus|SurroundMaster)
 	};
 
 	static const Flag AllStripables; /* mask to use for any route or VCA (but not auditioner) */
+	static const Flag MixerStripables; /* mask to use for any route or VCA (but not auditioner or foldbackbus) */
 	static const Flag AllRoutes; /* mask to use for any route include master+monitor, but not auditioner */
+	static const Flag MixerRoutes; /* mask to use for any route include master+monitor, but not auditioner or foldbackbus*/
 	static const Flag Route;     /* mask for any route (bus or track */
 	static const Flag Track;     /* mask to use for any track */
 	static const Flag Bus;       /* mask to use for any bus */
+	static const Flag MidiIndicatingFlags; /* MidiTrack or MidiBus */
 
 	typedef uint32_t order_t;
 	typedef uint32_t color_t;
@@ -147,6 +175,7 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 
 	void set_color (color_t);
 	void set_hidden (bool yn);
+	void set_trigger_track (bool yn);
 	void set_flags (Flag f) { _flags = f; }
 
 	bool order_set() const { return _flags & OrderSet; }
@@ -154,7 +183,8 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 	int selection_cnt() const { return _selection_cnt; }
 
 	bool hidden() const { return _flags & Hidden; }
-	bool special(bool with_master = true) const { return _flags & ((with_master ? MasterOut : 0)|MonitorOut|Auditioner); }
+	bool trigger_track () const { return _flags & TriggerTrack; }
+	bool special(bool with_master = true) const { return _flags & ((with_master ? MasterOut : 0)|SurroundMaster|MonitorOut|Auditioner); }
 
 	bool flag_match (Flag f) const {
 		/* no flags, match all */
@@ -211,7 +241,7 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 	}
 
 	int set_state (XMLNode const&, int);
-	XMLNode& get_state ();
+	XMLNode& get_state () const;
 
 	bool operator==(PresentationInfo const& other) {
 		return (_order == other.order()) && (_flags == other.flags());
@@ -224,12 +254,13 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 	PresentationInfo& operator= (PresentationInfo const& other);
 
 	static Flag get_flags (XMLNode const& node);
+	static Flag get_flags2X3X (XMLNode const& node);
 	static std::string state_node_name;
 
 	/* for things concerned about *any* PresentationInfo.
 	 */
 
-	static PBD::Signal1<void,PBD::PropertyChange const &> Change;
+	static PBD::Signal<void(PBD::PropertyChange const &)> Change;
 	static void send_static_change (const PBD::PropertyChange&);
 
 	static void make_property_quarks ();
@@ -262,13 +293,14 @@ class LIBARDOUR_API PresentationInfo : public PBD::Stateful
 
 	static PBD::PropertyChange _pending_static_changes;
 	static Glib::Threads::Mutex static_signal_lock;
-	static int _change_signal_suspended;
+	static std::atomic<int>   _change_signal_suspended;
 
 	static int selection_counter;
 };
 
 }
 
+namespace std {
 std::ostream& operator<<(std::ostream& o, ARDOUR::PresentationInfo const& rid);
+}
 
-#endif /* __libardour_presentation_info_h__ */

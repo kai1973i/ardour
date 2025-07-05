@@ -1,22 +1,22 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Author: Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2013-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2013-2017 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2013 John Emmas <john@creativepost.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include "pbd/gstdio_compat.h"
 
@@ -40,9 +40,9 @@
 using namespace std;
 
 void
-Editor::set_video_timeline_height (const int h)
+Editor::set_video_timeline_height (const int h, bool force)
 {
-	if (videotl_bar_height == h) { return; }
+	if (videotl_bar_height == h && !force) { return; }
 	if (h < 2 || h > 8) { return; }
   videotl_bar_height = h;
 	videotl_label.set_size_request (-1, (int)timebar_height * videotl_bar_height);
@@ -53,8 +53,9 @@ Editor::set_video_timeline_height (const int h)
 void
 Editor::update_video_timeline (bool flush)
 {
-	// catch GUIIdle -> Editor::idle_visual_changer during quit/close
-	assert (ARDOUR_UI::instance()->video_timeline);
+	if (!ARDOUR_UI::instance()->video_timeline) {
+		return;
+	}
 
 	if (flush) {
 		ARDOUR_UI::instance()->video_timeline->flush_local_cache();
@@ -94,16 +95,21 @@ Editor::embed_audio_from_video (std::string path, samplepos_t n, bool lock_posit
 	ImportProgressWindow ipw (&import_status, _("Import"), _("Cancel Import"));
 	ipw.show ();
 
-	boost::shared_ptr<ARDOUR::Track> track;
-	bool ok = (import_sndfiles (paths, Editing::ImportDistinctFiles, Editing::ImportAsTrack, ARDOUR::SrcBest, n, 1, 1, track, false) == 0);
+	std::shared_ptr<ARDOUR::Track> track;
+	std::string const& gid = ARDOUR::Playlist::generate_pgroup_id ();
+	Temporal::timepos_t pos (n);
+
+	bool ok = import_sndfiles (paths, Editing::ImportDistinctFiles, Editing::ImportAsTrack, ARDOUR::SrcBest, pos, 1, 1, track, gid, false, false) == 0;
+	import_status.clear();
+
 	if (ok && track) {
 		if (lock_position_to_video) {
-			boost::shared_ptr<ARDOUR::Playlist> pl = track->playlist();
-			pl->find_next_region(n, ARDOUR::End, 0)->set_video_locked(true);
+			std::shared_ptr<ARDOUR::Playlist> pl = track->playlist();
+			pl->find_next_region (pos, ARDOUR::End, 0)->set_video_locked (true);
 		}
-		_session->save_state ("");
+		_session->save_state ("", true);
 	}
 
 	import_status.all_done = true;
-	::g_unlink(path.c_str());
+	::g_unlink (path.c_str());
 }

@@ -1,21 +1,24 @@
 /*
-    Copyright (C) 2000-2016 Paul Davis
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2006-2017 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2007-2012 David Robillard <d@drobilla.net>
+ * Copyright (C) 2009-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2015-2019 Robin Gareus <robin@gareus.org>
+ * Copyright (C) 2016 Tim Mayberry <mojofunk@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 
 #include <inttypes.h>
 
@@ -34,6 +37,7 @@
 #include "ardour/route.h"
 #include "ardour/route_group.h"
 #include "ardour/session.h"
+#include "ardour/surround_send.h"
 #include "ardour/vca.h"
 #include "ardour/vca_manager.h"
 
@@ -51,6 +55,7 @@ namespace ARDOUR {
 		PropertyDescriptor<bool> group_mute;
 		PropertyDescriptor<bool> group_solo;
 		PropertyDescriptor<bool> group_recenable;
+		PropertyDescriptor<bool> group_sursend_enable;
 		PropertyDescriptor<bool> group_select;
 		PropertyDescriptor<bool> group_route_active;
 		PropertyDescriptor<bool> group_color;
@@ -63,28 +68,30 @@ void
 RouteGroup::make_property_quarks ()
 {
 	Properties::active.property_id = g_quark_from_static_string (X_("active"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for active = %1\n",	Properties::active.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for active = %1\n", Properties::active.property_id));
 
-        Properties::group_relative.property_id = g_quark_from_static_string (X_("relative"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for relative = %1\n",	Properties::group_relative.property_id));
+	Properties::group_relative.property_id = g_quark_from_static_string (X_("relative"));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for relative = %1\n", Properties::group_relative.property_id));
 	Properties::group_gain.property_id = g_quark_from_static_string (X_("gain"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for gain = %1\n",	Properties::group_gain.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for gain = %1\n", Properties::group_gain.property_id));
 	Properties::group_mute.property_id = g_quark_from_static_string (X_("mute"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for mute = %1\n",	Properties::group_mute.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for mute = %1\n", Properties::group_mute.property_id));
 	Properties::group_solo.property_id = g_quark_from_static_string (X_("solo"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for solo = %1\n",	Properties::group_solo.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for solo = %1\n", Properties::group_solo.property_id));
 	Properties::group_recenable.property_id = g_quark_from_static_string (X_("recenable"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for recenable = %1\n",	Properties::group_recenable.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for recenable = %1\n", Properties::group_recenable.property_id));
+	Properties::group_sursend_enable.property_id = g_quark_from_static_string (X_("sursend_enable"));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for sursend_enable = %1\n", Properties::group_sursend_enable.property_id));
 	Properties::group_select.property_id = g_quark_from_static_string (X_("select"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for select = %1\n",	Properties::group_select.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for select = %1\n", Properties::group_select.property_id));
 	Properties::group_route_active.property_id = g_quark_from_static_string (X_("route-active"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for route-active = %1\n", Properties::group_route_active.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for route-active = %1\n", Properties::group_route_active.property_id));
 	Properties::group_color.property_id = g_quark_from_static_string (X_("color"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for color = %1\n", Properties::group_color.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for color = %1\n", Properties::group_color.property_id));
 	Properties::group_monitoring.property_id = g_quark_from_static_string (X_("monitoring"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for monitoring = %1\n", Properties::group_monitoring.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for monitoring = %1\n", Properties::group_monitoring.property_id));
 	Properties::group_master_number.property_id = g_quark_from_static_string (X_("group-master-number"));
-        DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for group-master-number = %1\n", Properties::group_master_number.property_id));
+	DEBUG_TRACE (DEBUG::Properties, string_compose ("quark for group-master-number = %1\n", Properties::group_master_number.property_id));
 }
 
 #define ROUTE_GROUP_DEFAULT_PROPERTIES  _relative (Properties::group_relative, true) \
@@ -94,6 +101,7 @@ RouteGroup::make_property_quarks ()
 	, _mute (Properties::group_mute, true) \
 	, _solo (Properties::group_solo, true) \
 	, _recenable (Properties::group_recenable, true) \
+	, _sursend_enable (Properties::group_sursend_enable, true) \
 	, _select (Properties::group_select, true) \
 	, _route_active (Properties::group_route_active, true) \
 	, _color (Properties::group_color, true) \
@@ -107,6 +115,7 @@ RouteGroup::RouteGroup (Session& s, const string &n)
 	, _solo_group (new ControlGroup (SoloAutomation))
 	, _mute_group (new ControlGroup (MuteAutomation))
 	, _rec_enable_group (new ControlGroup (RecEnableAutomation))
+	, _sursend_enable_group (new ControlGroup (BusSendEnable))
 	, _gain_group (new GainControlGroup ())
 	, _monitoring_group (new ControlGroup (MonitoringAutomation))
 	, _rgba (0)
@@ -121,11 +130,14 @@ RouteGroup::RouteGroup (Session& s, const string &n)
 	add_property (_mute);
 	add_property (_solo);
 	add_property (_recenable);
+	add_property (_sursend_enable);
 	add_property (_select);
 	add_property (_route_active);
 	add_property (_color);
 	add_property (_monitoring);
 	add_property (_group_master_number);
+
+	s.SurroundMasterAddedOrRemoved.connect_same_thread (*this, std::bind (&RouteGroup::update_surround_sends, this));
 }
 
 RouteGroup::~RouteGroup ()
@@ -134,9 +146,10 @@ RouteGroup::~RouteGroup ()
 	_mute_group->clear ();
 	_gain_group->clear ();
 	_rec_enable_group->clear ();
+	_sursend_enable_group->clear ();
 	_monitoring_group->clear ();
 
-	boost::shared_ptr<VCA> vca (group_master.lock());
+	std::shared_ptr<VCA> vca (group_master.lock());
 
 	for (RouteList::iterator i = routes->begin(); i != routes->end();) {
 		RouteList::iterator tmp = i;
@@ -156,7 +169,7 @@ RouteGroup::~RouteGroup ()
  *  @param r Route to add.
  */
 int
-RouteGroup::add (boost::shared_ptr<Route> r)
+RouteGroup::add (std::shared_ptr<Route> r)
 {
 	if (r->is_master()) {
 		return 0;
@@ -175,45 +188,69 @@ RouteGroup::add (boost::shared_ptr<Route> r)
 	_solo_group->add_control (r->solo_control());
 	_mute_group->add_control (r->mute_control());
 	_gain_group->add_control (r->gain_control());
-	boost::shared_ptr<Track> trk = boost::dynamic_pointer_cast<Track> (r);
+	std::shared_ptr<Track> trk = std::dynamic_pointer_cast<Track> (r);
 	if (trk) {
 		_rec_enable_group->add_control (trk->rec_enable_control());
 		_monitoring_group->add_control (trk->monitoring_control());
 	}
 
-	r->set_route_group (this);
-	r->DropReferences.connect_same_thread (*this, boost::bind (&RouteGroup::remove_when_going_away, this, boost::weak_ptr<Route> (r)));
+	if (r->surround_send ()) {
+		_sursend_enable_group->add_control (r->surround_send ()->send_enable_control ());
+	}
 
-	boost::shared_ptr<VCA> vca (group_master.lock());
+	r->set_route_group (this);
+	r->DropReferences.connect_same_thread (*this, std::bind (&RouteGroup::remove_when_going_away, this, std::weak_ptr<Route> (r)));
+
+	std::shared_ptr<VCA> vca (group_master.lock());
 
 	if (vca) {
 		r->assign (vca);
 	}
 
 	_session.set_dirty ();
-	RouteAdded (this, boost::weak_ptr<Route> (r)); /* EMIT SIGNAL */
+	RouteAdded (this, std::weak_ptr<Route> (r)); /* EMIT SIGNAL */
 	return 0;
 }
 
 void
-RouteGroup::remove_when_going_away (boost::weak_ptr<Route> wr)
+RouteGroup::remove_when_going_away (std::weak_ptr<Route> wr)
 {
-	boost::shared_ptr<Route> r (wr.lock());
+	std::shared_ptr<Route> r (wr.lock());
 
 	if (r) {
 		remove (r);
 	}
 }
 
+void
+RouteGroup::update_surround_sends ()
+{
+	for (auto const& r : *routes) {
+		if (r->surround_send ()) {
+			_sursend_enable_group->add_control (r->surround_send ()->send_enable_control ());
+		}
+		// Note: ctrl is removed via DropReferences
+	}
+}
+
+void
+RouteGroup::unset_subgroup_bus ()
+{
+	if (_session.deletion_in_progress()) {
+		return;
+	}
+	_subgroup_bus.reset ();
+}
+
 int
-RouteGroup::remove (boost::shared_ptr<Route> r)
+RouteGroup::remove (std::shared_ptr<Route> r)
 {
 	RouteList::iterator i;
 
 	if ((i = find (routes->begin(), routes->end(), r)) != routes->end()) {
 		r->set_route_group (0);
 
-		boost::shared_ptr<VCA> vca = group_master.lock();
+		std::shared_ptr<VCA> vca = group_master.lock();
 
 		if (vca) {
 			r->unassign (vca);
@@ -222,14 +259,17 @@ RouteGroup::remove (boost::shared_ptr<Route> r)
 		_solo_group->remove_control (r->solo_control());
 		_mute_group->remove_control (r->mute_control());
 		_gain_group->remove_control (r->gain_control());
-		boost::shared_ptr<Track> trk = boost::dynamic_pointer_cast<Track> (r);
+		std::shared_ptr<Track> trk = std::dynamic_pointer_cast<Track> (r);
 		if (trk) {
 			_rec_enable_group->remove_control (trk->rec_enable_control());
 			_monitoring_group->remove_control (trk->monitoring_control());
 		}
+		if (r->surround_send ()) {
+			_sursend_enable_group->remove_control (r->surround_send ()->send_enable_control ());
+		}
 		routes->erase (i);
 		_session.set_dirty ();
-		RouteRemoved (this, boost::weak_ptr<Route> (r)); /* EMIT SIGNAL */
+		RouteRemoved (this, std::weak_ptr<Route> (r)); /* EMIT SIGNAL */
 		return 0;
 	}
 
@@ -254,15 +294,15 @@ RouteGroup::set_rgba (uint32_t color) {
 }
 
 XMLNode&
-RouteGroup::get_state ()
+RouteGroup::get_state () const
 {
 	XMLNode *node = new XMLNode ("RouteGroup");
 
 	node->set_property ("id", id());
 	node->set_property ("rgba", _rgba);
 	node->set_property ("used-to-share-gain", _used_to_share_gain);
-	if (subgroup_bus) {
-		node->set_property ("subgroup-bus", subgroup_bus->id ());
+	if (_subgroup_bus) {
+		node->set_property ("subgroup-bus", _subgroup_bus->id ());
 	}
 
 	add_properties (*node);
@@ -300,7 +340,7 @@ RouteGroup::set_state (const XMLNode& node, int version)
 
 		for (vector<string>::iterator i = ids.begin(); i != ids.end(); ++i) {
 			PBD::ID id (*i);
-			boost::shared_ptr<Route> r = _session.route_by_id (id);
+			std::shared_ptr<Route> r = _session.route_by_id (id);
 
 			if (r) {
 				add (r);
@@ -310,14 +350,15 @@ RouteGroup::set_state (const XMLNode& node, int version)
 
 	PBD::ID subgroup_id (0);
 	if (node.get_property ("subgroup-bus", subgroup_id)) {
-		boost::shared_ptr<Route> r = _session.route_by_id (subgroup_id);
+		std::shared_ptr<Route> r = _session.route_by_id (subgroup_id);
 		if (r) {
-			subgroup_bus = r;
+			_subgroup_bus = r;
+			_subgroup_bus->DropReferences.connect_same_thread (*this, std::bind (&RouteGroup::unset_subgroup_bus, this));
 		}
 	}
 
 	if (_group_master_number.val() > 0) {
-		boost::shared_ptr<VCA> vca = _session.vca_manager().vca_by_number (_group_master_number.val());
+		std::shared_ptr<VCA> vca = _session.vca_manager().vca_by_number (_group_master_number.val());
 		if (vca) {
 			/* no need to do the assignment because slaves will
 			   handle that themselves. But we can set group_master
@@ -404,6 +445,17 @@ RouteGroup::set_recenable (bool yn)
 	_recenable = yn;
 	_rec_enable_group->set_active (yn);
 	send_change (PropertyChange (Properties::group_recenable));
+}
+
+void
+RouteGroup::set_sursend_enable (bool yn)
+{
+	if (is_sursend_enable() == yn) {
+		return;
+	}
+	_sursend_enable = yn;
+	_sursend_enable_group->set_active (yn);
+	send_change (PropertyChange (Properties::group_sursend_enable));
 }
 
 void
@@ -516,64 +568,142 @@ RouteGroup::set_hidden (bool yn, void* /*src*/)
 }
 
 void
-RouteGroup::audio_track_group (set<boost::shared_ptr<AudioTrack> >& ats)
+RouteGroup::audio_track_group (set<std::shared_ptr<AudioTrack> >& ats)
 {
 	for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-		boost::shared_ptr<AudioTrack> at = boost::dynamic_pointer_cast<AudioTrack>(*i);
+		std::shared_ptr<AudioTrack> at = std::dynamic_pointer_cast<AudioTrack>(*i);
 		if (at) {
 			ats.insert (at);
 		}
 	}
 }
 
+bool
+RouteGroup::check_subgroup (bool aux, Placement placement, DataType& dt, uint32_t& nin) const
+{
+	assert (routes->size () > 0);
+
+	if (has_subgroup ()) {
+		return false;
+	}
+
+	bool midi_only  = true; // no audio ports at all
+	bool audio_ok   = true; // all have at least 1 audio port
+	bool have_midi  = false; // at least 1 MIDI port
+	bool have_audio = false; // at least 1 Audio port
+
+	for (auto const& r : *routes) {
+#ifdef MIXBUS
+		if (r->mixbus ()) {
+			return false;
+		}
+#endif
+		ChanCount cc (r->output()->n_ports());
+		if (aux) {
+			std::shared_ptr<Processor> proc = (placement == PreFader) ? std::dynamic_pointer_cast <Processor> (r->amp ()) : std::dynamic_pointer_cast <Processor> (r->main_outs ());
+			if (proc) {
+				cc = proc->input_streams ();
+			}
+		}
+
+		if (cc.n_audio() == 0) {
+			audio_ok = false;
+		} else {
+			have_audio = true;
+			midi_only  = false;
+		}
+
+		if (cc.n_midi() == 0) {
+			midi_only = false;
+		} else {
+			have_midi = true;
+		}
+	}
+
+	/* if all tracks only have a MIDI output -> MIDI subgroup */
+	dt  = midi_only ? DataType::MIDI : DataType::AUDIO;
+	nin = 0;
+
+	/* for aux, all tracks need to have at least one of a given data-type */
+	if (aux) {
+		if (!(midi_only && have_midi) && !(audio_ok && have_audio)) {
+			return false;
+		}
+	}
+
+	bool have_one = false;
+
+	for (auto const& r : *routes) {
+		ChanCount cc (r->output()->n_ports());
+		if (aux) {
+			std::shared_ptr<Processor> proc = (placement == PreFader) ? std::dynamic_pointer_cast <Processor> (r->amp ()) : std::dynamic_pointer_cast <Processor> (r->main_outs ());
+			if (proc) {
+				cc = proc->input_streams ();
+			}
+		}
+		if (have_one && !aux && nin != cc.get (dt)) {
+			return false;
+		}
+		nin = max (nin, cc.get(dt));
+		have_one = true;
+	}
+
+	return have_one && nin > 0;
+}
+
+bool
+RouteGroup::can_subgroup (bool aux, Placement placement) const
+{
+	DataType dt (DataType::NIL);
+	uint32_t nin;
+	return check_subgroup (aux, placement, dt, nin);
+}
+
 void
 RouteGroup::make_subgroup (bool aux, Placement placement)
 {
+	DataType  dt (DataType::NIL);
+	uint32_t  nin;
 	RouteList rl;
-	uint32_t nin = 0;
 
-	/* since we don't do MIDI Busses yet, check quickly ... */
-
-	for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-		if ((*i)->output()->n_ports().n_midi() != 0) {
-			PBD::warning << _("You cannot subgroup MIDI tracks at this time") << endmsg;
-			return;
+	if (!check_subgroup (aux, placement, dt, nin)) {
+		if (has_subgroup ()) {
+			PBD::warning << _("So far only one subgroup per group is supported") << endmsg;
+		} else {
+			PBD::warning << _("You cannot subgroup tracks with different type or number of ports.") << endmsg;
 		}
-	}
-
-	for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
-		if (!aux && nin != 0 && nin != (*i)->output()->n_ports().n_audio()) {
-			PBD::warning << _("You cannot subgroup tracks with different number of outputs at this time.") << endmsg;
-			return;
-		}
-		nin = max (nin, (*i)->output()->n_ports().n_audio());
+		return;
 	}
 
 	try {
-		/* use master bus etc. to determine default nouts.
-		 *
-		 * (since tracks can't have fewer outs than ins,
-		 * "nin" currently defines the number of outpus if nin > 2)
-		 */
-		rl = _session.new_audio_route (nin, 2, 0, 1, string(), PresentationInfo::AudioBus, PresentationInfo::max_order);
+		if (dt == DataType::MIDI) {
+			rl = _session.new_midi_route (0, 1, string(), true, std::shared_ptr<PluginInfo>(), 0, PresentationInfo::MidiBus, PresentationInfo::max_order);
+		} else {
+			uint32_t nout = nin;
+			if (_session.master_out ()) {
+				nout = std::max (nout, _session.master_out ()->n_inputs ().n_audio ());
+			}
+			rl = _session.new_audio_route (nin, nout, 0, 1, string(), PresentationInfo::AudioBus, PresentationInfo::max_order);
+		}
 	} catch (...) {
 		return;
 	}
 
-	subgroup_bus = rl.front();
-	subgroup_bus->set_name (_name);
+	_subgroup_bus = rl.front();
+	_subgroup_bus->set_name (_name);
+	_subgroup_bus->DropReferences.connect_same_thread (*this, std::bind (&RouteGroup::unset_subgroup_bus, this));
 
 	if (aux) {
 
-		_session.add_internal_sends (subgroup_bus, placement, routes);
+		_session.add_internal_sends (_subgroup_bus, placement, routes);
 
 	} else {
 
-		boost::shared_ptr<Bundle> bundle = subgroup_bus->input()->bundle ();
+		std::shared_ptr<Bundle> bundle = _subgroup_bus->input()->bundle ();
 
 		for (RouteList::iterator i = routes->begin(); i != routes->end(); ++i) {
 			(*i)->output()->disconnect (this);
-			(*i)->output()->connect_ports_to_bundle (bundle, false, this);
+			(*i)->output()->connect_ports_to_bundle (bundle, false, true, this);
 		}
 	}
 }
@@ -581,7 +711,7 @@ RouteGroup::make_subgroup (bool aux, Placement placement)
 void
 RouteGroup::destroy_subgroup ()
 {
-	if (!subgroup_bus) {
+	if (!_subgroup_bus) {
 		return;
 	}
 
@@ -590,14 +720,14 @@ RouteGroup::destroy_subgroup ()
 		/* XXX find a new bundle to connect to */
 	}
 
-	_session.remove_route (subgroup_bus);
-	subgroup_bus.reset ();
+	_session.remove_route (_subgroup_bus);
+	_subgroup_bus.reset ();
 }
 
 bool
 RouteGroup::has_subgroup() const
 {
-	return subgroup_bus != 0;
+	return _subgroup_bus != 0;
 }
 
 bool
@@ -631,25 +761,26 @@ RouteGroup::push_to_groups ()
 		_solo_group->set_active (is_solo());
 		_mute_group->set_active (is_mute());
 		_rec_enable_group->set_active (is_recenable());
+		_sursend_enable_group->set_active (is_sursend_enable());
 		_monitoring_group->set_active (is_monitoring());
 	} else {
 		_gain_group->set_active (false);
 		_solo_group->set_active (false);
 		_mute_group->set_active (false);
-
 		_rec_enable_group->set_active (false);
+		_sursend_enable_group->set_active (false);
 		_monitoring_group->set_active (false);
 	}
 }
 
 void
-RouteGroup::assign_master (boost::shared_ptr<VCA> master)
+RouteGroup::assign_master (std::shared_ptr<VCA> master)
 {
 	if (!routes || routes->empty()) {
 		return;
 	}
 
-	boost::shared_ptr<Route> front = routes->front ();
+	std::shared_ptr<Route> front = routes->front ();
 
 	if (front->slaved_to (master)) {
 		return;
@@ -667,13 +798,13 @@ RouteGroup::assign_master (boost::shared_ptr<VCA> master)
 }
 
 void
-RouteGroup::unassign_master (boost::shared_ptr<VCA> master)
+RouteGroup::unassign_master (std::shared_ptr<VCA> master)
 {
 	if (!routes || routes->empty()) {
 		return;
 	}
 
-	boost::shared_ptr<Route> front = routes->front ();
+	std::shared_ptr<Route> front = routes->front ();
 
 	if (!front->slaved_to (master)) {
 		return;

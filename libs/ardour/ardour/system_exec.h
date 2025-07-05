@@ -1,51 +1,52 @@
 /*
-    Copyright (C) 2010 Paul Davis
-    Copyright (C) 2010-2014 Robin Gareus <robin@gareus.org>
-
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-*/
+ * Copyright (C) 2014-2019 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
 #ifndef _ardour_system_exec_h_
 #define _ardour_system_exec_h_
+
+#include <glibmm/threads.h>
 
 #include "ardour/libardour_visibility.h"
 #include "pbd/system_exec.h"
 
 namespace ARDOUR {
 
-class LIBARDOUR_API SystemExec
-	: public PBD::SystemExec
+class LIBARDOUR_API SystemExec : public PBD::SystemExec
 {
-
 public:
-	SystemExec (std::string c, std::string a = "");
-	SystemExec (std::string c, char ** a);
-	SystemExec (std::string c, const std::map<char, std::string> subs);
+	SystemExec (std::string cmd, std::string argv = "", bool supress_ld_env = false);
+	SystemExec (std::string cmd, char** argv, bool supress_ld_env = false);
+	SystemExec (std::string cmd, const std::map<char, std::string> subs, bool supress_ld_env = false);
 	~SystemExec ();
 
-	int start (int stderr_mode = 1) {
-		return PBD::SystemExec::start(stderr_mode, _vfork_exec_wrapper);
+	int start (StdErrMode stderr_mode = IgnoreAndClose)
+	{
+		return PBD::SystemExec::start (stderr_mode, _vfork_exec.c_str ());
 	}
 
 private:
-	static char * _vfork_exec_wrapper;
+	static void initialize ();
 
-}; /* end class */
+	static bool                 _initialized;
+	static Glib::Threads::Mutex _init_mutex;
+	static std::string          _vfork_exec;
 
-}; /* end namespace */
+};
+
+}; // namespace ARDOUR
 
 #endif /* _libpbd_system_exec_h_ */
-
-

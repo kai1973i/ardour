@@ -1,24 +1,36 @@
+/*
+ * Copyright (C) 2006-2010 Paul Davis <paul@linuxaudiosystems.com>
+ * Copyright (C) 2010-2011 Carl Hetherington <carl@carlh.net>
+ * Copyright (C) 2014-2016 John Emmas <john@creativepost.co.uk>
+ * Copyright (C) 2014-2021 Robin Gareus <robin@gareus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <windows.h>
 
 #define fst_error(...) fprintf(stderr, __VA_ARGS__)
 
-#ifdef PLATFORM_WINDOWS
+#ifndef PLATFORM_WINDOWS
+#error VSTWIN ONLY WORKS ON WINDOWS
+#endif
 
 #include <pthread.h>
 static UINT_PTR idle_timer_id   = 0;
-
-#else /* linux + wine */
-
-#include <linux/limits.h> // PATH_MAX
-#include <winnt.h>
-#include <wine/exception.h>
-#include <pthread.h>
-static int gui_quit = 0;
-static unsigned int idle_id = 0;
-
-#endif
 
 #ifndef COMPILER_MSVC
 extern char * strdup (const char *);
@@ -49,7 +61,6 @@ vstedit_wndproc (HWND w, UINT msg, WPARAM wp, LPARAM lp)
 			break;
 
 		case WM_SIZE:
-#ifdef PLATFORM_WINDOWS
 			{
 				LRESULT rv = DefWindowProcA (w, msg, wp, lp);
 				RECT rect;
@@ -67,7 +78,6 @@ vstedit_wndproc (HWND w, UINT msg, WPARAM wp, LPARAM lp)
 				}
 				return rv;
 			}
-#endif
 			break;
 		case WM_CLOSE:
 			/* we don't care about windows closing ...
@@ -116,31 +126,6 @@ idle_hands(
 		}
 
 		pthread_mutex_lock (&fst->lock);
-#ifndef PLATFORM_WINDOWS /* linux + wine */
-		/* Dispatch messages to send keypresses to the plugin */
-		int i;
-
-		for (i = 0; i < fst->n_pending_keys; ++i) {
-			MSG msg;
-			/* I'm not quite sure what is going on here; it seems
-			 * `special' keys must be delivered with WM_KEYDOWN,
-			 * but that alphanumerics etc. must use WM_CHAR or
-			 * they will be ignored.  Ours is not to reason why ...
-			 */
-			if (fst->pending_keys[i].special != 0) {
-				msg.message = WM_KEYDOWN;
-				msg.wParam = fst->pending_keys[i].special;
-			} else {
-				msg.message = WM_CHAR;
-				msg.wParam = fst->pending_keys[i].character;
-			}
-			msg.hwnd = GetFocus ();
-			msg.lParam = 0;
-			DispatchMessageA (&msg);
-		}
-
-		fst->n_pending_keys = 0;
-#endif
 
 		/* See comment for call below */
 		vststate_maybe_set_program (fst);
@@ -216,13 +201,8 @@ fst_new (void)
 	VSTState* fst = (VSTState*) calloc (1, sizeof (VSTState));
 	vststate_init (fst);
 
-#ifdef PLATFORM_WINDOWS
 	fst->voffset = 45;
 	fst->hoffset = 0;
-#else /* linux + wine */
-	fst->voffset = 24;
-	fst->hoffset = 6;
-#endif
 	return fst;
 }
 
@@ -242,22 +222,6 @@ fst_handle_new (void)
 	return fst;
 }
 
-#ifndef PLATFORM_WINDOWS /* linux + wine */
-static gboolean
-g_idle_call (gpointer ignored) {
-	if (gui_quit) return FALSE;
-	MSG msg;
-	if (PeekMessageA (&msg, NULL, 0, 0, 1)) {
-		TranslateMessage (&msg);
-		DispatchMessageA (&msg);
-	}
-	idle_hands(NULL, 0, 0, 0);
-	g_main_context_iteration(NULL, FALSE);
-	return gui_quit ? FALSE : TRUE;
-}
-#endif
-
-
 int
 fst_init (void* possible_hmodule)
 {
@@ -265,12 +229,8 @@ fst_init (void* possible_hmodule)
 	HMODULE hInst;
 
 	if (possible_hmodule) {
-#ifdef PLATFORM_WINDOWS
 		fst_error ("Error in fst_init(): (module handle is unnecessary for Win32 build)");
 		return -1;
-#else /* linux + wine */
-		hInst = (HMODULE) possible_hmodule;
-#endif
 	} else if ((hInst = GetModuleHandleA (NULL)) == NULL) {
 		fst_error ("can't get module handle");
 		return -1;
@@ -284,15 +244,9 @@ fst_init (void* possible_hmodule)
 	WNDCLASSEX wclass;
 
 	wclass.cbSize = sizeof(WNDCLASSEX);
-#ifdef PLATFORM_WINDOWS
 	wclass.style = (CS_HREDRAW | CS_VREDRAW);
 	wclass.hIcon = NULL;
 	wclass.hCursor = LoadCursor(0, IDC_ARROW);
-#else /* linux + wine */
-	wclass.style = 0;
-	wclass.hIcon = LoadIcon(hInst, "FST");
-	wclass.hCursor = LoadCursor(0, IDI_APPLICATION);
-#endif
 	wclass.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
 	wclass.lpfnWndProc = vstedit_wndproc;
 	wclass.cbClsExtra = 0;
@@ -313,30 +267,6 @@ fst_init (void* possible_hmodule)
 }
 
 void
-fst_start_threading(void)
-{
-#ifndef PLATFORM_WINDOWS /* linux + wine */
-	if (idle_id == 0) {
-		gui_quit = 0;
-		idle_id = g_idle_add (g_idle_call, NULL);
-	}
-#endif
-}
-
-void
-fst_stop_threading(void) {
-#ifndef PLATFORM_WINDOWS /* linux + wine */
-	if (idle_id != 0) {
-		gui_quit = 1;
-		PostQuitMessage (0);
-		g_main_context_iteration(NULL, FALSE);
-		//g_source_remove(idle_id);
-		idle_id = 0;
-	}
-#endif
-}
-
-void
 fst_exit (void)
 {
 	if (!host_initialized) return;
@@ -345,16 +275,9 @@ fst_exit (void)
 	while ((fst = fst_first))
 		fst_close (fst);
 
-#ifdef PLATFORM_WINDOWS
 	if (idle_timer_id != 0) {
 		KillTimer(NULL, idle_timer_id);
 	}
-#else /* linux + wine */
-	if (idle_id) {
-		gui_quit = 1;
-		PostQuitMessage (0);
-	}
-#endif
 
 	host_initialized = FALSE;
 	pthread_mutex_destroy (&plugin_mutex);
@@ -404,12 +327,6 @@ fst_run_editor (VSTState* fst, void* window_parent)
 			// of our plugin window.
 			SetParent((HWND)fst->windows_window, (HWND)window_parent);
 			fst->xid = 0;
-#ifndef PLATFORM_WINDOWS /* linux + wine */
-		} else {
-			SetWindowPos (fst->windows_window, 0, 9999, 9999, 2, 2, 0);
-			ShowWindow (fst->windows_window, SW_SHOWNA);
-			fst->xid = (int) GetPropA (fst->windows_window, "__wine_x11_whole_window");
-#endif
 		}
 
 		// This is the suggested order of calls.
@@ -427,12 +344,10 @@ fst_run_editor (VSTState* fst, void* window_parent)
 	}
 
 	if (fst->windows_window) {
-#ifdef PLATFORM_WINDOWS
 		if (idle_timer_id == 0) {
 			// Init the idle timer if needed, so that the main window calls us.
 			idle_timer_id = SetTimer(NULL, idle_timer_id, 50, (TIMERPROC) idle_hands);
 		}
-#endif
 
 		fst_idle_timer_add_plugin (fst);
 	}
@@ -461,15 +376,11 @@ void
 fst_move_window_into_view (VSTState* fst)
 {
 	if (fst->windows_window) {
-#ifdef PLATFORM_WINDOWS
 		SetWindowPos ((HWND)(fst->windows_window),
 				HWND_TOP /*0*/,
 				fst->hoffset, fst->voffset,
 				fst->width, fst->height,
 				SWP_NOACTIVATE|SWP_NOOWNERZORDER);
-#else /* linux + wine */
-		SetWindowPos ((HWND)(fst->windows_window), 0, 0, 0, fst->width + fst->hoffset, fst->height + fst->voffset, 0);
-#endif
 		ShowWindow ((HWND)(fst->windows_window), SW_SHOWNA);
 		UpdateWindow ((HWND)(fst->windows_window));
 	}
@@ -499,6 +410,7 @@ fst_load (const char *path)
 
 		// See if we can load the plugin DLL
 		if ((fhandle->dll = (HMODULE)fst_load_vst_library (path)) == NULL) {
+			fst_error ("fst_load(): Cannot open plugin dll\n");
 			fst_unload (&fhandle);
 			return NULL;
 		}
@@ -510,6 +422,7 @@ fst_load (const char *path)
 		}
 
 		if (fhandle->main_entry == 0) {
+			fst_error ("fst_load(): Missing entry method in VST2 plugin\n");
 			fst_unload (&fhandle);
 			return NULL;
 		}
